@@ -1,0 +1,678 @@
+# cqengine-duckdb
+
+A DuckDB-backed `Persistence` plugin for [CQEngine](https://github.com/npgall/cqengine).
+
+Your query code does not change. One line at construction moves a collection and its indexes out of
+the Java heap and into DuckDB, and CQEngine's queries are pushed down into SQL so that retrieval
+stays fast.
+
+## What you get
+
+**1. The collection stops costing you memory.** A million objects with three indexes:
+
+|  | process RSS | JVM heap |
+|---|---|---|
+| stock CQEngine, on-heap | 1,388 MB | 862 MB |
+| this plugin | **191 MB** | **3 MB** |
+
+A **7x smaller process and a 300x smaller heap** - the garbage collector no longer has a million
+objects to walk. On disk it is **6.3x smaller than CQEngine's own SQLite persistence** (36 MB
+against 225 MB).
+
+**2. Collections can be joined - which CQEngine cannot do.** CQEngine offers `existsIn()`, but
+evaluates it one foreign lookup per object; over any database that is unusable. Collections sharing
+a `DuckDBDatabase` are joined in a single SQL statement instead:
+
+```java
+// stock CQEngine syntax, now one SQL semi-join
+vehicles.retrieve(existsIn(people, Vehicle.OWNER_ID, Person.PERSON_ID, equal(Person.COUNTRY, "FR")));
+```
+
+| joining 200,000 vehicles to 50,000 people | time |
+|---|---|
+| CQEngine's own evaluation, over DuckDB | 129.2 s |
+| on-heap CQEngine | 0.373 s |
+| **this plugin, pushed into SQL** | **0.270 s** |
+
+And beyond what CQEngine can express at all - matched pairs, and aggregates across collections:
+
+```java
+database.join(vehicles, people).on(Vehicle.OWNER_ID, Person.PERSON_ID).stream();  // Stream<JoinPair>
+database.sql("SELECT p.country, count(*) FROM ... GROUP BY 1");                   // 0.209 s
+```
+
+**3. Bulk loading is as fast as the heap.** `DuckDBBulkWriter` streams objects in at 2.5 µs each,
+against 3.09 µs for `addAll` on an on-heap collection - with bounded memory and no need to hold the
+batch in a list.
+
+**4. Your data is readable by any SQL tool.** With a columnar layout the objects are real typed
+columns, so the database file can be opened in the DuckDB CLI, a notebook, or anything else that
+speaks SQL.
+
+## What you give up
+
+Be clear-eyed about this before adopting it:
+
+- **Every query costs a fixed ~0.5 ms**, because it becomes a database query rather than a pointer
+  chase. A point lookup goes from 6.7 µs on the heap to ~600 µs. Many small queries is the wrong
+  workload for this plugin.
+- **Never write one object at a time.** A single `add()` costs 3-5 ms. Batch with `addAll` or
+  `DuckDBBulkWriter` and it is 2.5 µs per object - a thousand times less.
+- **CQEngine's own SQLite persistence beats it at point lookups and single writes.** If that is your
+  workload, keep using it; see *Table 2* below for where each engine wins.
+
+## What it costs, measured
+
+1,000,000 objects of eight fields, indexes on three attributes, JDK 25 / Apple Silicon / 32 GB.
+Each configuration runs in its own forked JVM (`-Xmx6g`, DuckDB `memory_limit=256MB`), because
+resident memory is not comparable within one process. Reproduce with:
+
+```
+java -cp <classpath> com.duckcq.bench.Comparison 1000000 6g 256MB
+```
+
+Memory is reported as **process RSS**, not JVM heap: DuckDB and SQLite both keep their data in
+native memory that `Runtime.totalMemory()` cannot see, so heap alone would flatter them enormously.
+
+### Table 1 — in memory: stock CQEngine vs DuckDB
+
+| storage | process RSS | JVM heap | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CQEngine on-heap | 1,388 MB | 862 MB | 2.9 s | **6.7 µs** | **43 µs** | **2.0 µs** | **1.0 ms** | **203 ms** | **4.8 µs** | – |
+| CQEngine SQLite memory | 379 MB | 3 MB | 8.8 s | 96 µs | 679 µs | 6.4 ms | 90.1 ms | 842 ms | 183 µs | – |
+| DuckDB memory, BLOB | 231 MB | 3 MB | 5.8 s | 601 µs | 3.7 ms | 1.8 ms | 17.7 ms | 634 ms | 4.0 ms | 3.18 µs |
+| DuckDB memory, columnar | **191 MB** | 3 MB | 5.0 s | 698 µs | 4.8 ms | 1.8 ms | 49.7 ms | 2.0 s | 5.9 ms | 3.21 µs |
+
+### Table 2 — on disk: CQEngine's SQLite persistence vs DuckDB file persistence
+
+| storage | process RSS | on disk | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CQEngine SQLite file | **100 MB** | 225 MB | 12.9 s | 719 µs | **1.5 ms** | 7.6 ms | 100.8 ms | 769 ms | **1.2 ms** | – |
+| DuckDB file, BLOB | 135 MB | 51 MB | 6.1 s | **575 µs** | 5.2 ms | **957 µs** | **21.2 ms** | **665 ms** | 3.6 ms | 2.67 µs |
+| DuckDB file, columnar | 138 MB | **36 MB** | **5.4 s** | 682 µs | 3.3 ms | 983 µs | 46.5 ms | 2.0 s | 5.9 ms | **2.42 µs** |
+| DuckDB file, col + ART | 132 MB | 133 MB | 6.8 s | 675 µs | 3.5 ms | 1.1 ms | 47.2 ms | 2.0 s | 5.8 ms | 3.33 µs |
+
+### Reading them
+
+**Against on-heap CQEngine, this is a memory trade, not a speed one.** 1,388 MB of process memory
+becomes 191 MB, and 862 MB of Java heap becomes 3 MB - the garbage collector stops having a million
+objects to walk. Every individual query gets slower, most of them by two orders of magnitude in
+relative terms and by a fraction of a millisecond in absolute ones. Take it when memory is your
+constraint, not when latency is.
+
+**Against CQEngine's own SQLite persistence, it is a genuine mixed result, and which way it falls
+depends entirely on your queries:**
+
+| | winner | margin |
+|---|---|---|
+| disk footprint | **DuckDB columnar** | 36 MB vs 225 MB - **6.3x smaller** |
+| loading | **DuckDB** | 5.4 s vs 12.9 s |
+| counting, aggregating | **DuckDB** | 1.0 ms vs 7.6 ms - **7.6x** |
+| queries returning many objects | **DuckDB** | 21 ms vs 101 ms - **4.8x** |
+| iterating everything | **DuckDB** (BLOB) | 665 ms vs 769 ms |
+| bulk writing | **DuckDB** | 2.4 µs/object; SQLite has no equivalent |
+| single-object lookup by key | roughly level on disk | 575 µs vs 719 µs |
+| narrow range queries | **SQLite** | 1.5 ms vs 3.3 ms - **2.2x** |
+| single `add()` | **SQLite** | 1.2 ms vs 3.6 ms - **3x** |
+| resident memory, on disk | **SQLite** | 100 MB vs 135 MB |
+
+That split is the difference between the two engines, not an accident of this plugin: SQLite is a
+B-tree store built for finding one row, and DuckDB is a columnar engine built for reading many.
+**If your workload is mostly point lookups and single-row writes, CQEngine's existing SQLite
+persistence is the better tool and you should keep it.** If it is scans, counts, aggregates, or if
+the size of the database file matters, DuckDB wins by multiples.
+
+In memory the picture is starker: DuckDB uses **half the resident memory** of CQEngine's off-heap
+SQLite (191 MB vs 379 MB) and is 5x faster at materialising a result set, but SQLite answers a
+point lookup in 96 µs against DuckDB's 601 µs, and a single `add()` in 183 µs against 4.0 ms.
+
+**Two CQEngine limitations worth knowing**, both hit while producing these tables:
+
+- CQEngine 3.6.0 pins `sqlite-jdbc 3.27.2.1`, which ships **no native library for macOS on
+  aarch64** - its disk and off-heap persistence cannot start at all on Apple Silicon. This project
+  bumps the dependency so that both work.
+- CQEngine's SQLite indexes **cannot store an enum attribute** (`Type class ... not supported`).
+  This plugin stores enums as their ordinal, so they index normally. The enum attribute is left
+  unindexed in every configuration above, to keep the comparison like for like.
+
+For finer-grained latency numbers with proper error bars there is a JMH suite; see
+*Building and benchmarking*.
+
+## Joining across collections
+
+CQEngine cannot usefully join two `IndexedCollection`s. It offers `existsIn()`, but evaluates it by
+asking the foreign collection about **one object at a time** - fine on the heap, ruinous over a
+database, where each of those lookups is a query.
+
+Collections which share a `DuckDBDatabase` live in one DuckDB instance as separate tables, so this
+plugin translates the whole `existsIn` into a single SQL semi-join instead:
+
+```java
+DuckDBDatabase database = DuckDBDatabase.builder().memoryLimit("512MB").build();
+
+IndexedCollection<Vehicle> vehicles = database.collection(Vehicle.VEHICLE_ID)
+        .columnarLayout(ColumnarLayout.ofRecord(Vehicle.class))
+        .build();
+IndexedCollection<Person> people = database.collection(Person.PERSON_ID)
+        .columnarLayout(ColumnarLayout.ofRecord(Person.class))
+        .build();
+
+vehicles.addIndex(DuckDBIndex.onAttribute(Vehicle.OWNER_ID));
+people.addIndex(DuckDBIndex.onAttribute(Person.COUNTRY));
+
+// Every vehicle whose owner lives in France - one SQL statement.
+try (ResultSet<Vehicle> results = vehicles.retrieve(
+        existsIn(people, Vehicle.OWNER_ID, Person.PERSON_ID, equal(Person.COUNTRY, "FR")))) {
+    results.forEach(...);
+}
+```
+
+**This is stock CQEngine syntax.** `QueryFactory.existsIn(...)` is CQEngine's own API; code which
+already uses it needs no change at all.
+
+200,000 vehicles joined to 50,000 people, 20% of whom match the restriction:
+
+| | time | matched |
+|---|---|---|
+| CQEngine on-heap | 0.371 s | 40,000 |
+| **DuckDB, join pushed into SQL** | **0.265 s** | 40,000 |
+| DuckDB, without the push-down | 128.5 s | 4 |
+
+The join is **faster than on-heap CQEngine**, which never happens for a single-collection query -
+because a join is exactly the shape of work a database is built for.
+
+The last row is what CQEngine's own evaluation costs over DuckDB-backed collections: 200,000
+objects, one foreign lookup each, at DuckDB's ~640 µs per query. Note it is *slower* despite its
+restriction matching only 4 vehicles rather than 40,000 - the cost is in the number of lookups, not
+the number of results.
+
+### Getting the matched pairs
+
+`existsIn` answers "which of these objects have a match". For the join people usually mean - "give
+me the matches" - there is a typed join, which CQEngine has no way to express at all:
+
+```java
+try (Stream<JoinPair<Vehicle, Person>> pairs = database.join(vehicles, people)
+        .on(Vehicle.OWNER_ID, Person.PERSON_ID)
+        .whereRight(equal(Person.COUNTRY, "FR"))
+        .whereLeft(equal(Vehicle.MAKE, "Tesla"))
+        .stream()) {
+    pairs.forEach(pair -> System.out.println(pair.left() + " owned by " + pair.right()));
+}
+
+long matches = database.join(vehicles, people)
+        .on(Vehicle.OWNER_ID, Person.PERSON_ID).count();   // no objects materialised
+```
+
+The join attribute on each side must be either that collection's primary key or an indexed
+attribute; anything else is rejected with a message saying so. Restrictions are pushed into SQL
+when they translate and applied to the returned objects when they do not. An object whose join
+attribute holds several values appears once per match, as in SQL. **The stream holds a database
+connection and must be closed.**
+
+### Arbitrary SQL across collections
+
+For aggregates, `GROUP BY`, window functions - anything CQEngine has no vocabulary for:
+
+```java
+String sql = "SELECT p.country, count(*) AS vehicles, avg(v.price) AS avgPrice "
+           + "FROM " + database.tableName(vehicles) + " v "
+           + "JOIN " + database.tableName(people) + " p ON v.ownerId = p.personId "
+           + "GROUP BY 1 ORDER BY 2 DESC";
+
+try (Stream<SqlRow> rows = database.sql(sql)) {
+    rows.forEach(row -> System.out.println(row.getString("country") + ": " + row.getLong("vehicles")));
+}
+```
+
+`tableName(collection)` gives the table behind a collection, so nothing is hard-coded. Columns are
+the field names of your `ColumnarLayout` - a BLOB-stored collection only has a key and an opaque
+blob, so this is only useful with columnar storage. `SqlRow` is a view over the cursor: copy it
+with `toArray()` if you need a row after the iteration moves on.
+
+### What it costs
+
+200,000 vehicles, 50,000 people, 20% matching:
+
+| | time | |
+|---|---|---|
+| `existsIn`, on-heap CQEngine | 0.373 s | 40,000 matched |
+| **`existsIn`, pushed into SQL** | **0.270 s** | 40,000 matched |
+| `existsIn`, without the push-down | 129.2 s | 4 matched |
+| hand-written map join, on-heap | 0.038 s | 40,000 pairs |
+| `database.join(...)` returning pairs | 0.434 s | 40,000 pairs |
+| `database.sql(...)` grouping by country | 0.209 s | 5 groups |
+
+Two honest readings of that table:
+
+- **The push-down is what makes joins possible at all.** Without it CQEngine asks the foreign
+  collection about one object at a time, at DuckDB's ~640 µs per query: 129 seconds, and that is
+  for the *cheaper* restriction, matching 4 vehicles rather than 40,000.
+- **If your data fits comfortably on the heap, a hand-written map join is still faster** - 0.038 s
+  against 0.434 s, because `join()` rebuilds 80,000 objects out of columns while the hand-written
+  version just follows references that are already there. Use `join()` when the collections are too
+  large to hold on the heap, or when you want the query expressed in one line rather than fifteen.
+  Use `sql()` when you want the answer rather than the objects: aggregating the same join takes
+  0.209 s and materialises nothing.
+
+### What can be pushed down
+
+The restriction on the foreign collection is translated to SQL when every part of it can be:
+
+| foreign restriction | pushed down |
+|---|---|
+| none | yes |
+| `equal`, `in`, `lessThan`, `greaterThan`, `between`, `startsWith`, `has` on an **indexed** attribute | yes |
+| `and`, `or`, `not` of the above | yes - as `INTERSECT`, `UNION`, `EXCEPT` |
+| anything on an **unindexed** attribute | no |
+| a foreign collection in a different database, or on the heap | no |
+
+When it cannot be pushed down the query still returns the right answer - CQEngine evaluates it the
+way it always has - so a join never breaks, it only gets slow. The rule of thumb is simple:
+**index the attributes you join on and restrict by**, in both collections.
+
+Joins are verified against a pair of equivalent on-heap collections in `JoinTest`, case by case.
+
+## Does it scale?
+
+Latency was measured from 125,000 to 4,000,000 objects - 32x more data - to check whether the cost
+grows with the collection. It does not compound. Every operation is either constant or linear:
+
+| operation | 125k | 4M | growth over 32x data |
+|---|---|---|---|
+| point lookup by primary key | 538 µs | 671 µs | **1.25x** |
+| count matches | 835 µs | 2.2 ms | 2.6x |
+| narrow range | 1.7 ms | 25.2 ms | 15x |
+| equality → 2% of the collection | 10.3 ms | 89.5 ms | 8.7x |
+| iterate everything | 84.7 ms | 2.71 s | 32x |
+
+The cost of a query is **a fixed ~0.5 ms, plus a term linear in the rows scanned, plus a term
+linear in the objects materialised.** Nothing multiplies. The *relative* penalty against an on-heap
+collection actually shrinks as queries get larger, because the fixed cost amortises: iterating the
+whole collection is 4.4x slower than on-heap at 125,000 objects and 3.5x slower at 4,000,000.
+
+One operation does scale worse than CQEngine does, and it is worth knowing about: a **narrow range
+query** is O(log n) on an on-heap `NavigableIndex`, which descends a tree, but O(n) here, because
+DuckDB scans the index table. That gap widens with the collection - 68x slower at 125,000 objects,
+229x at 4,000,000. DuckDB ART indexes do not close it; they are not used for range scans.
+`optimize()` narrows it, and flattens counting entirely - see below.
+
+## Migrating existing code
+
+Only the construction of the collection changes.
+
+```java
+// Before: everything on the heap
+IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>();
+cars.addIndex(HashIndex.onAttribute(Car.MANUFACTURER));
+cars.addIndex(NavigableIndex.onAttribute(Car.PRICE));
+
+// After: everything in DuckDB, in memory but off the Java heap
+IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>(
+        DuckDBPersistence.onPrimaryKey(Car.CAR_ID));
+cars.addIndex(DuckDBIndex.onAttribute(Car.MANUFACTURER));
+cars.addIndex(DuckDBIndex.onAttribute(Car.PRICE));
+```
+
+**In memory is the default.** The collection lives in DuckDB's own memory, compressed, and
+disappears when the persistence is closed - the same lifecycle as an on-heap collection, which is
+what makes it a drop-in. Pass a file when you want it to survive a restart:
+
+```java
+DuckDBPersistence.onPrimaryKeyInFile(Car.CAR_ID, new File("cars.duckdb"));   // durable
+DuckDBPersistence.onPrimaryKeyInTempFile(Car.CAR_ID);                        // spills to a temp file
+```
+
+A file-backed database is also the *smaller* option in resident memory, because DuckDB can evict
+pages it can re-read from disk. In-memory has to keep everything.
+
+Everything after that line is unchanged - `add`, `addAll`, `remove`, `update`, `retrieve`,
+`orderBy`, `and`/`or`/`not`, `ResultSet.size()`, iteration, all of it.
+
+Two requirements come from CQEngine itself, not from this plugin:
+
+1. **A primary key attribute.** Persistence needs a `SimpleAttribute` which uniquely identifies
+   each object. Any non-heap CQEngine persistence requires this.
+2. **Close your `ResultSet`s.** A result set holds a database connection until closed. Use
+   try-with-resources, as you would with CQEngine's own disk or off-heap persistence.
+
+If you already use `DiskPersistence`, the mapping is one-to-one:
+
+| CQEngine | this plugin |
+|---|---|
+| `DiskPersistence.onPrimaryKey(pk)` | `DuckDBPersistence.onPrimaryKeyInTempFile(pk)` |
+| `DiskPersistence.onPrimaryKeyInFile(pk, file)` | `DuckDBPersistence.onPrimaryKeyInFile(pk, file)` |
+| `OffHeapPersistence.onPrimaryKey(pk)` | `DuckDBPersistence.onPrimaryKey(pk)` (the default) |
+| `DiskIndex.onAttribute(attr)` | `DuckDBIndex.onAttribute(attr)` |
+| `SQLiteIndexFlags.BULK_IMPORT` | `DuckDBFlags.BULK_IMPORT` (the same flag value) |
+
+You can also mix: on-heap indexes still work on a DuckDB-backed collection, which is a good way to
+keep one small, very hot index in memory while the data lives in DuckDB.
+
+## Two ways to store the objects
+
+### BLOB (the default) - works with any class
+
+```java
+DuckDBPersistence.onPrimaryKey(Car.CAR_ID)
+```
+
+Each object is serialized into one BLOB column, exactly as CQEngine's own disk persistence does.
+No mapping code, no restrictions on field types.
+
+### Columnar - smallest, and queryable with plain SQL
+
+```java
+DuckDBPersistence.builder(Car.CAR_ID)
+        .columnarLayout(ColumnarLayout.ofRecord(Car.class))   // a record
+        .build();                                             // in memory unless .file(...) is given
+```
+
+Each object is shredded into one typed column per field, so DuckDB's dictionary, run-length and
+FSST compression apply per column. That is where 42 MB becomes 28 MB - and much more than that
+for data with repetitive columns. It also means the database is readable with any SQL tool:
+
+```sql
+SELECT manufacturer, count(*), avg(price) FROM cq_objects GROUP BY 1;
+```
+
+Three ways to describe a layout:
+
+```java
+ColumnarLayout.ofRecord(Car.class);        // records: components + canonical constructor
+ColumnarLayout.reflective(Car.class);      // any class: all instance fields, read and written reflectively
+ColumnarLayout.builder(Car.class)          // explicit control
+        .column("carId", Integer.class, Car::carId)
+        .column("name", String.class, Car::name)
+        .rowFactory(values -> new Car((Integer) values[0], (String) values[1]))
+        .build();
+```
+
+Columnar layouts require every field to have a type DuckDB understands (see below). A class with a
+`List` or a nested object field must use BLOB storage - or an explicit layout which maps only the
+scalar fields, if you are willing to define the factory yourself.
+
+**Which to choose:** columnar if you want the smallest footprint, SQL access to your data, or you
+mostly filter and aggregate. BLOB if your objects have field types a column cannot hold, or your
+queries routinely materialise very large numbers of whole objects.
+
+## Supported attribute and column types
+
+`String`, `Character`, `Boolean`, `Byte`, `Short`, `Integer`, `Long`, `Float`, `Double`,
+`BigInteger`, `BigDecimal`, `UUID`, `byte[]`, enums, `java.util.Date`, `java.sql.Date/Time/Timestamp`,
+`LocalDate`, `LocalTime`, `LocalDateTime`, `Instant`, `OffsetDateTime`.
+
+Types are mapped to preserve Java's `Comparable` ordering, so a range query pushed into SQL returns
+exactly what an on-heap index would. Two consequences worth knowing:
+
+- **Enums are stored as their ordinal**, because Java orders enums by ordinal and not by name. The
+  stored data is therefore sensitive to reordering the constants in the enum declaration.
+- **`OffsetDateTime` keeps its instant, not its original offset** - a `TIMESTAMP WITH TIME ZONE`
+  column stores a point in time, so values come back in the JVM's zone.
+
+## Bulk loading
+
+DuckDB is at its best loading data in batches and at its worst one row at a time. There are three
+ways to write, in increasing order of speed:
+
+```java
+cars.add(car);                       // ~3-5 ms   per object
+cars.addAll(listOfCars);             // ~4 µs     per object
+try (var writer = persistence.bulkWriter()) {
+    writer.add(car);                 // ~2.5 µs   per object
+}
+```
+
+Any `addAll` of more than 1,024 objects (`appenderThreshold`) is automatically streamed through
+DuckDB's Appender rather than inserted row by row, in chunks of `stagingChunkRows` so that a large
+load does not need memory proportional to the batch. `BULK_IMPORT` tells it the objects are new so
+it can skip the delete-before-insert which makes re-adding idempotent:
+
+```java
+QueryOptions options = new QueryOptions();
+FlagsEnabled.forQueryOptions(options).add(DuckDBFlags.BULK_IMPORT);
+cars.update(Collections.emptyList(), millionsOfCars, options);
+```
+
+### Streaming: `DuckDBBulkWriter`
+
+`addAll` needs the whole batch in memory as a collection first. When the data is a stream - a file
+being parsed, a cursor, a queue - a bulk writer keeps one DuckDB Appender open per table and pushes
+rows straight into them:
+
+```java
+try (DuckDBBulkWriter<Car> writer = persistence.bulkWriter()) {
+    while (records.hasNext()) {
+        writer.add(toCar(records.next()));
+    }
+}   // flushed and closed here
+```
+
+Loading a million objects this way took **2.4 s** against 3.8 s for `addAll` with `BULK_IMPORT`,
+and produced a **30 MB** file against 36 MB - appending straight into the target tables compresses
+into better row groups than staging the rows and copying them. Memory stays bounded no matter how
+many objects pass through.
+
+It is a loading tool, not a general write path, and it trades away four things:
+
+- **The objects must be new.** Rows are appended, not merged, so an object whose primary key is
+  already stored fails the primary key constraint at the next flush. Use `collection.update(...)`
+  to replace existing objects.
+- **The collection is inconsistent until you flush.** DuckDB makes appended rows visible in batches
+  as its buffers fill, and each table flushes independently, so a query running during a session
+  can see an object that is not yet in every index. `flush()` and `close()` make it consistent, and
+  `flush()` is also where a duplicate key is reported.
+- **Add your indexes before opening the writer**, so that it writes them too. An index added
+  afterwards is still built correctly, but from the object table rather than by the writer.
+- **One thread.** A writer is not thread-safe and holds the persistence's write lock for its
+  lifetime, so other writers wait. Readers are never blocked.
+
+## Tuning
+
+```java
+DuckDBPersistence.builder(Car.CAR_ID)
+        .inMemory()                     // the default; .file(f) to persist instead
+        .columnarLayout(ColumnarLayout.ofRecord(Car.class))
+        .memoryLimit("512MB")           // cap DuckDB's buffer pool - see below
+        .objectCacheSize(50_000)        // bounded heap cache of hot objects; off by default
+        .appenderThreshold(1024)        // batch size above which the Appender is used
+        .stagingChunkRows(131_072)      // rows staged at a time during a bulk load
+        .maxPooledConnections(32)       // connections kept open for reuse between requests
+        .serializeWrites(true)          // serialise writers; readers are never blocked
+        .property("threads", "4")
+        .build();
+```
+
+### Set a memory limit
+
+This is the single most effective setting, and the one most likely to surprise you. DuckDB's
+default `memory_limit` is 80% of system RAM, and it will use a large share of that for its buffer
+pool regardless of how small your data is. In the benchmark above, the same million objects sat at
+**939 MB** resident with the default limit and **222 MB** with `memoryLimit("256MB")` - same data,
+same queries, same file.
+
+```java
+DuckDBPersistence.builder(Car.CAR_ID).memoryLimit("512MB").build();
+```
+
+A file-backed database honours the limit by evicting pages it can re-read from disk. An in-memory
+one spills to temporary files when it has to, so a low limit costs latency rather than correctness.
+Bulk loads stage `stagingChunkRows` rows at a time, so a tight limit does not break large
+`addAll` calls.
+
+### ART indexes are opt-in, on purpose
+
+`DuckDBIndex.onAttribute(...)` creates a two-column table and nothing else. DuckDB will scan those
+compressed columns, which for a million rows takes a couple of milliseconds. You can additionally
+ask for DuckDB ART indexes:
+
+```java
+cars.addIndex(DuckDBIndex.onAttributeWithArtIndex(Car.MANUFACTURER));
+```
+
+Measure before you do. In the benchmark above, ART indexes on three attributes grew the database
+from 28 MB to 128 MB - more than four times the size of the data itself - and made no measurable
+difference to any of those queries, because DuckDB was already scanning the compressed columns
+faster than it could traverse an index.
+
+Where they do help is a highly selective equality lookup into a large index table: on a million-row
+index over 50,000 distinct values, fetching the ~20 matching objects took 1.19 ms by scan and
+0.87 ms with an ART index. Worth it for a hot lookup path; not worth it by default.
+
+## Concurrency
+
+- **Reads** never block and never lock: DuckDB's MVCC gives each request a consistent snapshot.
+- **Writes** are serialised against each other by default, because two DuckDB transactions writing
+  the same table at once cause one to fail with a conflict error. Turn this off with
+  `.serializeWrites(false)` if your application coordinates its own writes.
+- One JVM process, one database file: DuckDB does not support several processes writing the same
+  file. All connections are duplicated from a single open database.
+
+## Storage management
+
+```java
+persistence.getBytesUsed();   // size of the database file, including its write-ahead log
+persistence.optimize();       // sort the index tables so DuckDB can skip blocks - see below
+persistence.compact();        // CHECKPOINT: flush and reclaim space from deleted rows
+persistence.analyze();        // refresh DuckDB's planner statistics
+persistence.close();          // close the database; call this when you are done
+```
+
+Note that DuckDB cannot checkpoint while any transaction is open, and every unclosed `ResultSet`
+holds one. `compact()` reports that as an error; `optimize()` and `getBytesUsed()` treat the
+checkpoint as housekeeping and carry on without it.
+
+### `optimize()` after a bulk load
+
+Index tables are written in the order objects arrive, so the values in any one block span most of
+the range and DuckDB cannot skip a single block: an equality or range query scans the whole index,
+and that cost grows with the collection. `optimize()` rewrites each index table ordered by value,
+which makes the per-block minima and maxima meaningful.
+
+Measured on a file-backed columnar collection:
+
+| operation | 500k | 1M | 2M | 4M |
+|---|---|---|---|---|
+| count matches | 933 µs | 1.1 ms | 1.4 ms | 2.3 ms |
+| count matches, after `optimize()` | 715 µs | 776 µs | 721 µs | **802 µs** |
+| narrow range | 2.2 ms | 3.6 ms | 6.4 ms | 10.8 ms |
+| narrow range, after `optimize()` | 2.0 ms | 3.1 ms | 4.7 ms | 7.1 ms |
+
+Counting stops growing with the collection altogether. A range query improves by about 1.5x but
+still grows, because most of its time goes on fetching the matched objects rather than on scanning
+the index - and queries which are *entirely* materialisation (`equal` returning 2% of the
+collection, iterating everything) gain nothing at all from it.
+
+It rewrites every index table, so it is a maintenance operation rather than something to call
+routinely: it needs room for a second copy of the largest index while it runs, and objects added
+afterwards land unsorted at the end, so the benefit decays as the collection is modified.
+
+`expand(long)` exists for source compatibility with CQEngine's SQLite persistence and does nothing:
+DuckDB grows its own file and offers no way to pre-allocate it.
+
+## Serialization note (BLOB mode)
+
+CQEngine 3.6.0 pins Kryo 5.0.0-RC1 and registers serializers that reflect into `java.util`
+internals. On Java 17+ that combination cannot serialize records at all, and throws
+`InaccessibleObjectException` for anything else unless you start the JVM with
+`--add-opens java.base/java.util=ALL-UNNAMED`.
+
+This plugin therefore depends on a current Kryo and uses its own `KryoPojoSerializer` by default,
+which needs no JVM flags and handles records. Annotating your class with
+`@PersistenceConfig(serializer = ...)` still selects your own serializer, as in stock CQEngine.
+
+Fields holding the JDK's internal collection wrappers (`Arrays.asList(...)`,
+`Collections.unmodifiableList(...)`) still cannot be serialized without `--add-opens`; use a plain
+`ArrayList`, or store those objects columnar.
+
+## What is stored where
+
+| table | contents |
+|---|---|
+| `cq_objects` | one row per object: `objectKey` (primary key) plus either a `value` BLOB or one column per field |
+| `cqtbl_<attribute>` | one row per indexed attribute value: `(objectKey, value)`; several rows per object for multi-valued attributes |
+
+Both are ordinary DuckDB tables. Point any SQL tool at the file and query them.
+
+## Building and benchmarking
+
+```
+mvn test          # 61 tests: query parity against an on-heap collection, types, concurrency
+```
+
+Requires Java 17+. There are three benchmark harnesses, all under `com.duckcq.bench`:
+
+```bash
+mvn test-compile
+CP="target/classes:target/test-classes:$(mvn -q dependency:build-classpath \
+      -Dmdep.outputFile=/dev/stdout -Dmdep.includeScope=test)"
+
+# 1. The whole comparison in one table: memory, storage, query latency and write speed,
+#    one forked JVM per configuration. Arguments: rows, -Xmx, DuckDB memory_limit.
+java -cp "$CP" com.duckcq.bench.Comparison 1000000 4g 256MB
+
+# 1b. Memory only, in more detail.
+java -cp "$CP" com.duckcq.bench.MemoryBenchmark 1000000 4g 256MB
+
+# 1c. How latency scales with collection size, and what optimize() changes.
+java -cp "$CP" com.duckcq.bench.ScalingBenchmark 12g 1GB 125000,500000,1000000,4000000
+java -cp "$CP" com.duckcq.bench.ScalingBenchmark --optimized 12g 1GB
+
+# 2. Latency and throughput, via JMH.
+java -cp "$CP" org.openjdk.jmh.Main                       # everything (~25 minutes)
+java -cp "$CP" org.openjdk.jmh.Main QueryBenchmark        # query latency only
+java -cp "$CP" org.openjdk.jmh.Main pointLookup -p storage=ON_HEAP,DUCKDB_COLUMNAR_MEMORY
+java -cp "$CP" org.openjdk.jmh.Main -rf json -rff out.json
+
+# 3. A quick single-process overview of storage size and query latency together.
+java -cp "$CP" com.duckcq.bench.StorageBenchmark 1000000
+
+# 4. What a cross-collection join costs, four ways.
+java -cp "$CP" com.duckcq.bench.JoinBenchmark 200000 50000
+```
+
+The JMH benchmarks are:
+
+| benchmark | what it measures |
+|---|---|
+| `QueryBenchmark.pointLookup` | fetch one object by primary key |
+| `QueryBenchmark.selectiveEqual` | equality on an indexed attribute, ~2% of the collection |
+| `QueryBenchmark.narrowRange` | range matching a few dozen objects |
+| `QueryBenchmark.compoundQuery` | two indexed attributes intersected |
+| `QueryBenchmark.countOnly` | count matching objects without materialising them |
+| `QueryBenchmark.collectionSize` | size of the whole collection |
+| `ScanBenchmark.materialiseIndexedSubset` | materialise ~20% of the collection |
+| `ScanBenchmark.iterateEverything` | iterate every object |
+| `ScanBenchmark.unindexedFilter` | full scan filtered on an unindexed attribute |
+| `WriteBenchmark.SingleAdd.addOne` | one `add()` per request |
+| `WriteBenchmark.BulkLoad.load` | a batch load, with and without `BULK_IMPORT` |
+| `WriteBenchmark.StreamingWrite.stream` | the same load through `DuckDBBulkWriter` |
+
+Each is parameterised by `storage`: `ON_HEAP`, `DUCKDB_BLOB_MEMORY`, `DUCKDB_COLUMNAR_MEMORY`,
+`DUCKDB_BLOB_FILE`, `DUCKDB_COLUMNAR_FILE`.
+
+## How it works, and why it is not just a port
+
+CQEngine already ships SQLite-backed persistence, so the obvious implementation is to point
+`SQLiteIndex` at DuckDB. That produces a correct and unusably slow plugin.
+
+CQEngine's SQLite indexes retrieve in two steps: ask the index table for the matching primary
+keys, then look up each object by key. SQLite answers a point query in a few microseconds, so this
+is fine. DuckDB spends a few hundred microseconds on *any* query, because it is built for scanning
+columns rather than for point lookups. Fetching 1000 objects one key at a time takes ~210 ms.
+
+This plugin instead pushes the key set into the object lookup, so a retrieval is a single
+statement:
+
+```sql
+SELECT o.* FROM cq_objects o
+WHERE o.objectKey IN (SELECT objectKey FROM cqtbl_manufacturer WHERE value = ?)
+```
+
+Measured on the same data, that is 2.8 ms instead of 213 ms - a 75x difference, and the reason this
+plugin is usable at all. Where a query genuinely cannot be expressed in SQL (CQEngine's
+`FilterQuery`, whose predicate is arbitrary Java), keys are streamed out, filtered on the heap, and
+the matching objects fetched 1024 at a time rather than one at a time.
+
+Results are streamed rather than materialised, so iterating a million-row result set uses a
+constant, small amount of heap.

@@ -1,0 +1,10 @@
+target/
+*.duckdb
+*.duckdb.wal
+
+# Extracted third-party sources, kept only for reading CQEngine's internals
+.research/
+
+# IDE state
+.idea/
+*.iml
