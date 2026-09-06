@@ -1,5 +1,6 @@
 package com.duckcq.persistence;
 
+import com.duckcq.internal.ColumnDef;
 import com.duckcq.internal.ConnectionPool;
 import com.duckcq.internal.JoinTarget;
 import com.duckcq.query.Join;
@@ -232,6 +233,9 @@ public final class DuckDBDatabase implements Closeable {
             com.googlecode.cqengine.IndexedCollection<O> collection =
                     new DuckDBIndexedCollection<>(persistence);
             database.byCollection.put(collection, persistence);
+            // The object table exists by now (the collection's construction created it), so the
+            // view can be pointed at it.
+            database.createViewFor(persistence);
             return collection;
         }
     }
@@ -241,6 +245,22 @@ public final class DuckDBDatabase implements Closeable {
         if (existing != null && existing != persistence) {
             throw new IllegalStateException("This database already holds a collection named '" + name
                     + "'. Give one of them a different name with .name(...).");
+        }
+    }
+
+    /**
+     * Creates a SQL view named after the collection, so that {@link #sql} can be written against
+     * {@code vehicle} rather than the internal {@code cq_vehicle}. Called once the collection's
+     * table exists.
+     */
+    void createViewFor(DuckDBPersistence<?, ?> persistence) {
+        try (Connection connection = newConnection()) {
+            Sql.execute(connection, "CREATE OR REPLACE VIEW " + Sql.quote(persistence.collectionName())
+                    + " AS SELECT * FROM " + Sql.quote(persistence.objectTableName()));
+        }
+        catch (SQLException e) {
+            throw new IllegalStateException("Failed to create the SQL view for collection '"
+                    + persistence.collectionName() + "'", e);
         }
     }
 
@@ -353,20 +373,101 @@ public final class DuckDBDatabase implements Closeable {
      * <p>The returned stream holds a connection and must be closed.</p>
      */
     public java.util.stream.Stream<SqlRow> sql(String sql, Object... parameters) {
-        return SqlQuery.stream(borrowConnection(true), sql, parameters);
+        try {
+            return SqlQuery.stream(borrowConnection(true), sql, parameters);
+        }
+        catch (RuntimeException e) {
+            // A wrong table or column name is the usual mistake here, and DuckDB's message alone
+            // does not say what the right ones would have been.
+            throw new IllegalStateException(e.getMessage() + "\n\n" + describe(), e);
+        }
     }
 
     /**
-     * The name of the table holding a collection's objects, for use in {@link #sql}.
+     * The name to use for a collection in {@link #sql} - the same name the collection was created
+     * with, which exists as a SQL view over its table.
+     *
+     * <p>Usually you can just write the name directly: a collection of {@code Vehicle} is
+     * {@code vehicle} unless you named it something else. This method is for when you would rather
+     * not hard-code it.</p>
      *
      * @throws IllegalArgumentException if the collection is not stored in this database
      */
+    public String table(com.googlecode.cqengine.IndexedCollection<?> collection) {
+        return requireTarget(collection, "given").collectionName();
+    }
+
+    /** @deprecated use {@link #table}, which returns the collection's view name. */
+    @Deprecated
     public String tableName(com.googlecode.cqengine.IndexedCollection<?> collection) {
-        JoinTarget<?> target = joinTargetFor(collection);
-        if (target == null) {
-            throw new IllegalArgumentException("That collection is not stored in this database");
+        return table(collection);
+    }
+
+    /**
+     * The SQL column holding the given attribute's value, checked against the collection's actual
+     * columns so that a mismatch is reported here rather than as a SQL error.
+     *
+     * @throws IllegalArgumentException if the collection has no such column - the message lists the
+     *                                  columns it does have
+     */
+    public String column(com.googlecode.cqengine.IndexedCollection<?> collection,
+                         com.googlecode.cqengine.attribute.Attribute<?, ?> attribute) {
+        JoinTarget<?> target = requireTarget(collection, "given");
+        String attributeName = attribute.getAttributeName();
+        for (ColumnDef column : target.objectTable().getColumns()) {
+            if (column.getName().equals(attributeName)) {
+                return column.getName();
+            }
         }
-        return target.objectTableName();
+        throw new IllegalArgumentException("Collection '" + target.collectionName() + "' has no column '"
+                + attributeName + "'. Its columns are " + columns(collection) + "."
+                + (target.objectTable().isColumnar()
+                        ? " Attribute names must match the names in its ColumnarLayout."
+                        : " It stores objects as BLOBs, so its fields are not columns; build it with"
+                          + " a ColumnarLayout to query them in SQL."));
+    }
+
+    /** The columns of a collection, as they appear in SQL. */
+    public List<String> columns(com.googlecode.cqengine.IndexedCollection<?> collection) {
+        JoinTarget<?> target = requireTarget(collection, "given");
+        List<String> names = new ArrayList<>();
+        for (ColumnDef column : target.objectTable().getColumns()) {
+            names.add(column.getName());
+        }
+        return names;
+    }
+
+    /**
+     * A readable listing of everything {@link #sql} can query: each collection, the name to use for
+     * it, and its columns. Print this when writing a query.
+     */
+    public String describe() {
+        StringBuilder description = new StringBuilder("DuckDB database ")
+                .append(file == null ? "(in memory)" : file).append(", queryable with sql():\n");
+        if (persistences.isEmpty()) {
+            return description.append("  (no collections yet)").toString();
+        }
+        for (DuckDBPersistence<?, ?> persistence : persistences.values()) {
+            description.append("  ").append(persistence.collectionName());
+            description.append("  [").append(persistence.getPrimaryKeyAttribute().getObjectType().getSimpleName());
+            description.append(persistence.objectTable().isColumnar() ? ", columnar]" : ", BLOB]");
+            description.append('\n');
+            if (persistence.objectTable().isColumnar()) {
+                description.append("      columns: ");
+                for (java.util.Iterator<ColumnDef> i = persistence.objectTable().getColumns().iterator();
+                     i.hasNext(); ) {
+                    ColumnDef column = i.next();
+                    description.append(column.getName()).append(' ').append(column.getSqlType());
+                    if (i.hasNext()) description.append(", ");
+                }
+            }
+            else {
+                description.append("      columns: objectKey, value (a serialized blob - not queryable;")
+                        .append(" build this collection with a ColumnarLayout to query its fields)");
+            }
+            description.append('\n');
+        }
+        return description.toString();
     }
 
     // ---------- Connections ----------

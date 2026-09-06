@@ -251,23 +251,61 @@ connection and must be closed.**
 
 ### Arbitrary SQL across collections
 
-For aggregates, `GROUP BY`, window functions - anything CQEngine has no vocabulary for:
+For aggregates, `GROUP BY`, window functions, or joining three or more collections at once -
+anything CQEngine has no vocabulary for:
 
 ```java
-String sql = "SELECT p.country, count(*) AS vehicles, avg(v.price) AS avgPrice "
-           + "FROM " + database.tableName(vehicles) + " v "
-           + "JOIN " + database.tableName(people) + " p ON v.ownerId = p.personId "
-           + "GROUP BY 1 ORDER BY 2 DESC";
-
-try (Stream<SqlRow> rows = database.sql(sql)) {
+try (Stream<SqlRow> rows = database.sql("""
+        SELECT p.country, count(*) AS vehicles, avg(v.price) AS avgPrice
+        FROM vehicle v
+        JOIN person p ON v.ownerId = p.personId
+        JOIN garage g ON g.vehicleId = v.vehicleId
+        GROUP BY 1 ORDER BY 2 DESC""")) {
     rows.forEach(row -> System.out.println(row.getString("country") + ": " + row.getLong("vehicles")));
 }
 ```
 
-`tableName(collection)` gives the table behind a collection, so nothing is hard-coded. Columns are
-the field names of your `ColumnarLayout` - a BLOB-stored collection only has a key and an opaque
-blob, so this is only useful with columnar storage. `SqlRow` is a view over the cursor: copy it
-with `toArray()` if you need a row after the iteration moves on.
+**Where do the table names come from?** Each collection is a SQL view named after itself. A
+collection of `Vehicle` is `vehicle`; one created with `.name("archivedCars")` is `archivedCars`.
+Columns are the field names of its `ColumnarLayout`, plus `objectKey` for the primary key. So in
+most cases you write the names directly, as above.
+
+Three things exist for when you would rather not hard-code them:
+
+```java
+database.describe();                          // everything queryable, with columns and types
+database.table(vehicles);                     // "vehicle"
+database.column(vehicles, Vehicle.OWNER_ID);  // "ownerId", checked against the real columns
+database.columns(vehicles);                   // [objectKey, vehicleId, make, ownerId, price]
+```
+
+`describe()` prints what you can query:
+
+```
+DuckDB database (in memory), queryable with sql():
+  vehicle  [Vehicle, columnar]
+      columns: objectKey INTEGER, vehicleId INTEGER, make VARCHAR, ownerId INTEGER, price DOUBLE
+  person   [Person, columnar]
+      columns: objectKey INTEGER, personId INTEGER, country VARCHAR, name VARCHAR
+```
+
+and the same listing is appended to the exception when a query names something that does not exist,
+so a typo tells you what the alternatives were rather than just failing.
+
+`column(collection, attribute)` matches a CQEngine attribute to its column by name and throws with
+the available columns if there is no match - which turns a silent SQL error into an explicit one.
+Note there is no compile-time link between the two: the column names come from your
+`ColumnarLayout`, and for `ColumnarLayout.ofRecord` they are the record's component names, which is
+why they usually coincide with your attribute names.
+
+**A collection stored as BLOBs has no queryable fields** - just a key and an opaque blob. It shows
+up in `describe()` saying so. Use a `ColumnarLayout` for any collection you intend to query in SQL.
+
+**Pass values as parameters**, not by concatenating them into the string:
+
+```java
+database.sql("SELECT count(*) FROM vehicle WHERE ownerId = ?", ownerId);
+```
 
 ### What it costs
 
@@ -671,7 +709,7 @@ Both are ordinary DuckDB tables. Point any SQL tool at the file and query them.
 ## Building and benchmarking
 
 ```
-mvn test          # 74 tests: query parity against an on-heap collection, types, concurrency
+mvn test          # 78 tests: query parity against an on-heap collection, types, concurrency
 ```
 
 Requires Java 17+. There are three benchmark harnesses, all under `com.duckcq.bench`:

@@ -223,13 +223,51 @@ public class JoinPairsAndSqlTest {
     // ---------- Raw SQL ----------
 
     @Test
+    public void collectionsAreQueryableByTheirOwnName() {
+        // No accessor needed: a collection of Vehicle is the view "vehicle".
+        try (Stream<SqlRow> rows = database.sql("SELECT count(*) FROM vehicle")) {
+            assertEquals(vehicleData.size(), rows.findFirst().orElseThrow().getLong(1));
+        }
+        try (Stream<SqlRow> rows = database.sql("SELECT count(*) FROM person")) {
+            assertEquals(personData.size(), rows.findFirst().orElseThrow().getLong(1));
+        }
+        assertEquals("vehicle", database.table(vehicles));
+        assertEquals("person", database.table(people));
+    }
+
+    @Test
+    public void describeListsEveryCollectionAndItsColumns() {
+        String description = database.describe();
+        assertTrue(description, description.contains("vehicle"));
+        assertTrue(description, description.contains("person"));
+        assertTrue(description, description.contains("ownerId"));
+        assertTrue(description, description.contains("country"));
+        assertTrue(description, description.contains("columnar"));
+    }
+
+    @Test
+    public void columnLookupIsCheckedAgainstTheRealColumns() {
+        assertEquals("ownerId", database.column(vehicles, Vehicle.OWNER_ID));
+        assertEquals("country", database.column(people, Person.COUNTRY));
+        assertEquals(List.of("objectKey", "personId", "country", "name"), database.columns(people));
+
+        try {
+            database.column(people, Vehicle.MAKE);
+            fail("expected an attribute which is not a column of that collection to be rejected");
+        }
+        catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("has no column 'make'"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("country"));
+        }
+    }
+
+    @Test
     public void rawSqlCanAggregateAcrossCollections() {
         Map<String, Long> expected = new HashMap<>();
         expectedPairs().forEach(pair -> expected.merge(pair.right().country(), 1L, Long::sum));
 
         String sql = "SELECT p.country AS country, count(*) AS vehicles "
-                + "FROM " + database.tableName(vehicles) + " v "
-                + "JOIN " + database.tableName(people) + " p ON v.ownerId = p.personId "
+                + "FROM vehicle v JOIN person p ON v.ownerId = p.personId "
                 + "GROUP BY 1 ORDER BY 1";
         Map<String, Long> actual = new HashMap<>();
         try (Stream<SqlRow> rows = database.sql(sql)) {
@@ -243,8 +281,7 @@ public class JoinPairsAndSqlTest {
         long expected = expectedPairs().stream()
                 .filter(pair -> pair.right().country().equals("DE"))
                 .count();
-        String sql = "SELECT count(*) FROM " + database.tableName(vehicles) + " v "
-                + "JOIN " + database.tableName(people) + " p ON v.ownerId = p.personId "
+        String sql = "SELECT count(*) FROM vehicle v JOIN person p ON v.ownerId = p.personId "
                 + "WHERE p.country = ?";
         try (Stream<SqlRow> rows = database.sql(sql, "DE")) {
             assertEquals(expected, rows.findFirst().orElseThrow().getLong(1));
@@ -252,8 +289,22 @@ public class JoinPairsAndSqlTest {
     }
 
     @Test
+    public void aWrongNameIsReportedWithTheSchema() {
+        try {
+            database.sql("SELECT * FROM vehicles").close();
+            fail("expected an unknown table to be rejected");
+        }
+        catch (IllegalStateException expected) {
+            // DuckDB says what went wrong; the plugin says what was available instead.
+            assertTrue(expected.getMessage(), expected.getMessage().contains("vehicle"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("queryable with sql()"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("ownerId"));
+        }
+    }
+
+    @Test
     public void rawSqlRowsCanBeCopiedOutOfTheStream() {
-        String sql = "SELECT vehicleId, make FROM " + database.tableName(vehicles) + " ORDER BY vehicleId LIMIT 3";
+        String sql = "SELECT vehicleId, make FROM vehicle ORDER BY vehicleId LIMIT 3";
         List<Object[]> copied;
         try (Stream<SqlRow> rows = database.sql(sql)) {
             copied = rows.map(SqlRow::toArray).toList();

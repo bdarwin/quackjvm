@@ -9,6 +9,9 @@ import com.googlecode.cqengine.attribute.SimpleAttribute;
  */
 public interface JoinTarget<O> {
 
+    /** The name this collection is known by - its view name in SQL. */
+    String collectionName();
+
     /** The table holding this collection's objects. */
     String objectTableName();
 

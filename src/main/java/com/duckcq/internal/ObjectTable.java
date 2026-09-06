@@ -88,6 +88,16 @@ public final class ObjectTable<O, K> {
         return columns.size();
     }
 
+    /** The table's columns, key first - the names usable in raw SQL. */
+    public List<ColumnDef> getColumns() {
+        return columns;
+    }
+
+    /** True when objects are shredded into typed columns rather than stored as one blob. */
+    public boolean isColumnar() {
+        return !(codec instanceof BlobRowCodec);
+    }
+
     /** The fully qualified key column, e.g. {@code "o"."objectKey"}. */
     public static String keyColumn(String alias) {
         return Sql.quote(alias) + "." + Sql.quote(KEY_COLUMN);

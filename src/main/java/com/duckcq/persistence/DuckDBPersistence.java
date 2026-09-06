@@ -313,6 +313,11 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
     // ---------- JoinTarget: what a cross-collection join needs to know ----------
 
     @Override
+    public String collectionName() {
+        return collectionName;
+    }
+
+    @Override
     public String objectTableName() {
         return objectTable.getTableName();
     }
