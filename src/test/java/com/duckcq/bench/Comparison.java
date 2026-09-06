@@ -93,7 +93,10 @@ public class Comparison {
         System.out.println();
         System.out.println("  All configurations index the same 3 attributes. CQEngine's SQLite indexes");
         System.out.println("  cannot store an enum, so the enum attribute is left unindexed everywhere.");
-        System.out.println("  CQEngine on-heap appears in both tables as the baseline being replaced.");
+        System.out.println("  CQEngine on-heap appears in both tables as the baseline being replaced:");
+        System.out.println("  it is stock CQEngine, new ConcurrentIndexedCollection<>(), with objects and");
+        System.out.println("  indexes held as Java objects in the JVM heap. The SQLite rows are CQEngine's");
+        System.out.println("  own OffHeapPersistence and DiskPersistence.");
     }
 
     private static List<Map<String, String>> select(List<Map<String, String>> results, String... labels) {
@@ -294,7 +297,7 @@ public class Comparison {
 
     private static String label(Storage storage) {
         return switch (storage) {
-            case ON_HEAP -> "CQEngine on-heap";
+            case ON_HEAP -> "CQEngine on-heap";   // stock CQEngine, objects in the JVM heap
             case DUCKDB_BLOB_MEMORY -> "DuckDB memory, BLOB";
             case DUCKDB_COLUMNAR_MEMORY -> "DuckDB memory, columnar";
             case DUCKDB_BLOB_FILE -> "DuckDB file, BLOB";

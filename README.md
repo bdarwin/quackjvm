@@ -8,11 +8,13 @@ stays fast.
 
 ## What you get
 
-**1. The collection stops costing you memory.** A million objects with three indexes:
+**1. The collection stops costing you memory.** A million objects with three indexes. "On-heap"
+here means stock CQEngine used the normal way - `new ConcurrentIndexedCollection<>()`, with the
+objects and indexes living in the JVM heap:
 
 |  | process RSS | JVM heap |
 |---|---|---|
-| stock CQEngine, on-heap | 1,388 MB | 862 MB |
+| CQEngine on-heap (`new ConcurrentIndexedCollection<>()`) | 1,388 MB | 862 MB |
 | this plugin | **191 MB** | **3 MB** |
 
 A **7x smaller process and a 300x smaller heap** - the garbage collector no longer has a million
@@ -77,6 +79,19 @@ java -cp <classpath> com.duckcq.bench.Comparison 1000000 6g 256MB
 Memory is reported as **process RSS**, not JVM heap: DuckDB and SQLite both keep their data in
 native memory that `Runtime.totalMemory()` cannot see, so heap alone would flatter them enormously.
 
+### What each row is
+
+CQEngine has three storage modes of its own, and all three appear below. "On-heap" is the default -
+if you use CQEngine without configuring persistence, that is what you have, and it is what this
+plugin replaces.
+
+| row | what it is | how you build it |
+|---|---|---|
+| **CQEngine on-heap** | stock CQEngine. Objects and indexes are ordinary Java objects, in the JVM heap - the memory `-Xmx` sizes and the garbage collector walks | `new ConcurrentIndexedCollection<>()` |
+| CQEngine SQLite memory | CQEngine's `OffHeapPersistence`: a SQLite database held in native memory | `OffHeapPersistence.onPrimaryKey(pk)` |
+| CQEngine SQLite file | CQEngine's `DiskPersistence`: a SQLite database in a file | `DiskPersistence.onPrimaryKeyInFile(pk, file)` |
+| DuckDB memory / file | this plugin, storing objects as BLOBs or as typed columns | `DuckDBPersistence.onPrimaryKey(pk)` |
+
 ### Table 1 — in memory: stock CQEngine vs DuckDB
 
 | storage | process RSS | JVM heap | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
@@ -109,7 +124,8 @@ relative terms and by a fraction of a millisecond in absolute ones. Take it when
 constraint, not when latency is.
 
 **All three side by side.** The same million objects, the same three indexes, the same queries -
-on-heap CQEngine, CQEngine's SQLite disk persistence, and this plugin:
+stock CQEngine in the heap, CQEngine's own SQLite disk persistence, and this plugin. All three are
+CQEngine; only the storage differs:
 
 | | CQEngine on-heap | CQEngine SQLite | DuckDB (columnar) |
 |---|---|---|---|
