@@ -76,6 +76,15 @@ public record Car(int carId, String manufacturer, String model, Car.Color color,
                 }
             };
 
+    /** Deliberately left unindexed in tests, to exercise the fall-back paths. */
+    public static final Attribute<Car, String> DESCRIPTION =
+            new SimpleAttribute<>(Car.class, String.class, "description") {
+                @Override
+                public String getValue(Car car, QueryOptions queryOptions) {
+                    return car.description();
+                }
+            };
+
     /** Multi-valued: one index row per word of the description. */
     public static final Attribute<Car, String> FEATURES =
             new MultiValueAttribute<>(Car.class, String.class, "features") {

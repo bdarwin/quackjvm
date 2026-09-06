@@ -92,6 +92,8 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
     private final int appenderThreshold;
     private final int stagingChunkRows;
 
+    /** The identity index over the object table, remembered when the object store is created. */
+    private volatile DuckDBIdentityIndex<A, O> identityIndex;
     /** Index tables registered by the DuckDBIndexes using this persistence, for bulk writing. */
     private final Map<String, IndexBulkTarget<O>> indexTables = new ConcurrentHashMap<>();
     private volatile boolean closed;
@@ -155,7 +157,18 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
 
     @Override
     public DuckDBIdentityIndex<A, O> createIdentityIndex() {
-        return new DuckDBIdentityIndex<>(primaryKeyAttribute, objectTable, database::joinTargetFor);
+        DuckDBIdentityIndex<A, O> index = new DuckDBIdentityIndex<>(primaryKeyAttribute, objectTable,
+                database::joinTargetFor);
+        this.identityIndex = index;
+        return index;
+    }
+
+    /**
+     * The index over the object table, which is also what a whole-query push-down asks for a
+     * connection with: CQEngine's connection manager resolves a persistence from the index using it.
+     */
+    public DuckDBIdentityIndex<A, O> getIdentityIndex() {
+        return identityIndex;
     }
 
     /** @return true if the given index stores its data in this DuckDB database. */

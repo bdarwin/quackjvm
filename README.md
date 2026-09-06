@@ -21,7 +21,12 @@ A **7x smaller process and a 300x smaller heap** - the garbage collector no long
 objects to walk. On disk it is **6.3x smaller than CQEngine's own SQLite persistence** (36 MB
 against 225 MB).
 
-**2. Collections can be joined - which CQEngine cannot do.** CQEngine offers `existsIn()`, but
+**2. Compound queries become one SQL statement.** CQEngine intersects `and` branches in Java,
+which over a database means materialising thousands of objects only to discard them. Pushed into
+SQL, a three-condition query goes from 91 ms to 17 ms - and adding conditions stops making a query
+slower.
+
+**3. Collections can be joined - which CQEngine cannot do.** CQEngine offers `existsIn()`, but
 evaluates it one foreign lookup per object; over any database that is unusable. Collections sharing
 a `DuckDBDatabase` are joined in a single SQL statement instead:
 
@@ -43,11 +48,11 @@ database.join(vehicles, people).on(Vehicle.OWNER_ID, Person.PERSON_ID).stream();
 database.sql("SELECT p.country, count(*) FROM ... GROUP BY 1");                   // 0.209 s
 ```
 
-**3. Bulk loading is as fast as the heap.** `DuckDBBulkWriter` streams objects in at 2.5 µs each,
+**4. Bulk loading is as fast as the heap.** `DuckDBBulkWriter` streams objects in at 2.5 µs each,
 against 3.09 µs for `addAll` on an on-heap collection - with bounded memory and no need to hold the
 batch in a list.
 
-**4. Your data is readable by any SQL tool.** With a columnar layout the objects are real typed
+**5. Your data is readable by any SQL tool.** With a columnar layout the objects are real typed
 columns, so the database file can be opened in the DuckDB CLI, a notebook, or anything else that
 speaks SQL.
 
@@ -306,6 +311,39 @@ way it always has - so a join never breaks, it only gets slow. The rule of thumb
 **index the attributes you join on and restrict by**, in both collections.
 
 Joins are verified against a pair of equivalent on-heap collections in `JoinTest`, case by case.
+
+## Compound queries run as one statement
+
+CQEngine evaluates `and(a, b)` by retrieving both sides and intersecting them in Java. On the heap
+that is cheap - the objects are already there. With the data in a database it is not: the cheaper
+branch has to be fully materialised, object by object, before most of those objects are thrown away.
+
+A collection built with `database.collection(...)` translates the whole expression into one
+statement instead, so DuckDB intersects two columns of keys and returns only the objects which
+actually match. 200,000 cars:
+
+| query | matches | CQEngine on-heap | DuckDB, CQEngine's planner | DuckDB, whole query in SQL |
+|---|---|---|---|---|
+| `and(COLOR, PRICE)` | 4,041 | 3.0 ms | 48.7 ms | **15.0 ms** |
+| `and(COLOR, PRICE, MANUFACTURER)` | 4,071 | 7.9 ms | 90.6 ms | **17.2 ms** |
+
+3.2x and 5.3x. The more interesting number is the second row against the first: adding a third
+condition took CQEngine's planner from 49 ms to 91 ms, because it had another result set to
+materialise and intersect - while in SQL it went from 15 ms to 17 ms, because a narrower query
+returns *fewer* objects to rebuild. **Conditions stop making a query more expensive.**
+
+It applies to `and`, `or` and `not`, nested to any depth, and to `existsIn` joins nested inside
+them - so `and(equal(MAKE, "Tesla"), existsIn(people, ...))` is also a single statement. Every part
+must be indexed; if any part is not, or the query is ordered with `orderBy`, the whole thing is
+handed back to CQEngine unchanged. Simple single-attribute queries are left alone, since one index
+already answers those in one statement.
+
+This needs no change to your queries, but it does need the collection to come from
+`database.collection(...)` rather than `new ConcurrentIndexedCollection<>(persistence)` - that is
+where the push-down lives.
+
+It does not close the gap to on-heap CQEngine: 15 ms against 3 ms. Materialising 4,000 objects out
+of columns is what remains, and it is irreducible.
 
 ## Does it scale?
 
@@ -633,7 +671,7 @@ Both are ordinary DuckDB tables. Point any SQL tool at the file and query them.
 ## Building and benchmarking
 
 ```
-mvn test          # 61 tests: query parity against an on-heap collection, types, concurrency
+mvn test          # 74 tests: query parity against an on-heap collection, types, concurrency
 ```
 
 Requires Java 17+. There are three benchmark harnesses, all under `com.duckcq.bench`:

@@ -6,6 +6,7 @@ import com.googlecode.cqengine.query.logical.And;
 import com.googlecode.cqengine.query.logical.Not;
 import com.googlecode.cqengine.query.logical.Or;
 import com.googlecode.cqengine.query.simple.All;
+import com.googlecode.cqengine.query.simple.ExistsIn;
 import com.googlecode.cqengine.query.simple.None;
 import com.googlecode.cqengine.query.simple.SimpleQuery;
 
@@ -34,6 +35,14 @@ public final class ForeignQueryTranslator {
      * or null if the query cannot be translated
      */
     public static <F> SqlFragment keysMatching(JoinTarget<F> target, Query<F> query) {
+        return keysMatching(target, query, null);
+    }
+
+    /**
+     * @param resolver resolves a foreign collection referenced by an {@code existsIn} inside the
+     *                 query, so joins nested in an {@code and}/{@code or} translate too. May be null.
+     */
+    public static <F> SqlFragment keysMatching(JoinTarget<F> target, Query<F> query, JoinResolver resolver) {
         if (query == null || query instanceof All) {
             return new SqlFragment("SELECT " + Sql.quote(ObjectTable.KEY_COLUMN)
                     + " FROM " + Sql.quote(target.objectTableName()), List.of());
@@ -43,13 +52,13 @@ public final class ForeignQueryTranslator {
                     + " FROM " + Sql.quote(target.objectTableName()) + " WHERE 1 = 0", List.of());
         }
         if (query instanceof And) {
-            return combine(target, ((And<F>) query).getChildQueries(), " INTERSECT ");
+            return combine(target, ((And<F>) query).getChildQueries(), " INTERSECT ", resolver);
         }
         if (query instanceof Or) {
-            return combine(target, ((Or<F>) query).getChildQueries(), " UNION ");
+            return combine(target, ((Or<F>) query).getChildQueries(), " UNION ", resolver);
         }
         if (query instanceof Not) {
-            SqlFragment negated = keysMatching(target, ((Not<F>) query).getNegatedQuery());
+            SqlFragment negated = keysMatching(target, ((Not<F>) query).getNegatedQuery(), resolver);
             if (negated == null) {
                 return null;
             }
@@ -57,16 +66,64 @@ public final class ForeignQueryTranslator {
                     + " FROM " + Sql.quote(target.objectTableName())
                     + " EXCEPT " + negated.getSql(), negated.getParameters());
         }
+        if (query instanceof ExistsIn) {
+            return keysMatchingJoin(target, query, resolver);
+        }
         if (query instanceof SimpleQuery) {
             return keysMatchingSimpleQuery(target, (SimpleQuery<F, ?>) query);
         }
         return null;
     }
 
-    private static <F> SqlFragment combine(JoinTarget<F> target, Iterable<Query<F>> children, String operator) {
+    /** Looks up the DuckDB tables behind another CQEngine collection. */
+    public interface JoinResolver {
+        <T> JoinTarget<T> targetFor(com.googlecode.cqengine.IndexedCollection<T> collection);
+    }
+
+    /**
+     * Translates an {@code existsIn} into the keys of local objects whose join attribute matches
+     * something in the foreign collection - so a join nested inside an {@code and} or {@code or}
+     * becomes part of the same statement.
+     */
+    private static <F> SqlFragment keysMatchingJoin(JoinTarget<F> target, Query<F> query, JoinResolver resolver) {
+        if (resolver == null) {
+            return null;
+        }
+        ExistsInQuery<F, Object, Object> existsIn = ExistsInQuery.of(query);
+        if (existsIn == null) {
+            return null;
+        }
+        JoinTarget<Object> foreign = resolver.targetFor(existsIn.getForeignCollection());
+        if (foreign == null) {
+            return null;
+        }
+        SqlFragment foreignValues = foreignKeyValues(foreign, existsIn.getForeignKeyAttribute(),
+                existsIn.getForeignRestrictions(), resolver);
+        if (foreignValues == null) {
+            return null;
+        }
+        Attribute<F, ?> localKeyAttribute = existsIn.getLocalKeyAttribute();
+        if (localKeyAttribute.equals(target.primaryKeyAttribute())) {
+            return new SqlFragment("SELECT " + Sql.quote(ObjectTable.KEY_COLUMN)
+                    + " FROM " + Sql.quote(target.objectTableName())
+                    + " WHERE " + Sql.quote(ObjectTable.KEY_COLUMN) + " IN (" + foreignValues.getSql() + ")",
+                    foreignValues.getParameters());
+        }
+        String indexTable = target.indexTableFor(localKeyAttribute);
+        if (indexTable == null) {
+            return null;
+        }
+        return new SqlFragment("SELECT " + Sql.quote(ObjectTable.KEY_COLUMN)
+                + " FROM " + Sql.quote(indexTable)
+                + " WHERE " + Sql.quote(IndexTable.VALUE_COLUMN) + " IN (" + foreignValues.getSql() + ")",
+                foreignValues.getParameters());
+    }
+
+    private static <F> SqlFragment combine(JoinTarget<F> target, Iterable<Query<F>> children, String operator,
+                                           JoinResolver resolver) {
         List<SqlFragment> fragments = new ArrayList<>();
         for (Query<F> child : children) {
-            SqlFragment fragment = keysMatching(target, child);
+            SqlFragment fragment = keysMatching(target, child, resolver);
             if (fragment == null) {
                 return null;
             }
@@ -116,7 +173,12 @@ public final class ForeignQueryTranslator {
      */
     public static <F> SqlFragment foreignKeyValues(JoinTarget<F> target, Attribute<F, ?> foreignKeyAttribute,
                                                    Query<F> restriction) {
-        SqlFragment keys = keysMatching(target, restriction);
+        return foreignKeyValues(target, foreignKeyAttribute, restriction, null);
+    }
+
+    public static <F> SqlFragment foreignKeyValues(JoinTarget<F> target, Attribute<F, ?> foreignKeyAttribute,
+                                                   Query<F> restriction, JoinResolver resolver) {
+        SqlFragment keys = keysMatching(target, restriction, resolver);
         if (keys == null) {
             return null;
         }

@@ -221,11 +221,16 @@ public final class DuckDBDatabase implements Closeable {
         /**
          * Creates the persistence and an {@code IndexedCollection} using it, registering the pair so
          * that joins from other collections in this database can find it.
+         *
+         * <p>The collection returned sends whole {@code and}/{@code or}/{@code not} queries to
+         * DuckDB in one statement rather than letting CQEngine intersect them in Java; see
+         * {@link DuckDBIndexedCollection}. It is an ordinary {@code IndexedCollection} in every
+         * other respect.</p>
          */
         public com.googlecode.cqengine.IndexedCollection<O> build() {
             DuckDBPersistence<O, A> persistence = buildPersistence();
             com.googlecode.cqengine.IndexedCollection<O> collection =
-                    new com.googlecode.cqengine.ConcurrentIndexedCollection<>(persistence);
+                    new DuckDBIndexedCollection<>(persistence);
             database.byCollection.put(collection, persistence);
             return collection;
         }
@@ -253,6 +258,9 @@ public final class DuckDBDatabase implements Closeable {
      */
     @SuppressWarnings("unchecked")
     public <F> JoinTarget<F> joinTargetFor(com.googlecode.cqengine.IndexedCollection<F> collection) {
+        if (collection == null) {
+            return null;
+        }
         DuckDBPersistence<?, ?> persistence = byCollection.get(collection);
         if (persistence == null) {
             persistence = persistenceByReflection(collection);
