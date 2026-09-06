@@ -73,7 +73,9 @@ public class Comparison {
 
         System.out.println();
         System.out.println("TABLE 2 - ON DISK: CQEngine's SQLite persistence vs DuckDB file persistence");
-        printTable(select(results, "CQEngine SQLite file",
+        // On-heap CQEngine leads both tables: it is the baseline being replaced, and the one
+        // number every other row should be read against.
+        printTable(select(results, "CQEngine on-heap", "CQEngine SQLite file",
                 "DuckDB file, BLOB", "DuckDB file, columnar", "DuckDB file, col + ART"), columns);
 
         System.out.println();
@@ -91,6 +93,7 @@ public class Comparison {
         System.out.println();
         System.out.println("  All configurations index the same 3 attributes. CQEngine's SQLite indexes");
         System.out.println("  cannot store an enum, so the enum attribute is left unindexed everywhere.");
+        System.out.println("  CQEngine on-heap appears in both tables as the baseline being replaced.");
     }
 
     private static List<Map<String, String>> select(List<Map<String, String>> results, String... labels) {

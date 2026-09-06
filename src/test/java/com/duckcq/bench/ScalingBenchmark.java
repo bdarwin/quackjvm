@@ -124,6 +124,18 @@ public class ScalingBenchmark {
 
         // rows keyed by "<label>|<optimized>", each holding size -> operation -> value
         Map<String, Map<Integer, Map<String, String>>> measured = new LinkedHashMap<>();
+
+        // The baseline being replaced, so every row below can be read against it.
+        Map<Integer, Map<String, String>> heap = new LinkedHashMap<>();
+        for (int size : sizes) {
+            System.out.printf("  measuring %s at %,d ... ", Storage.ON_HEAP, size);
+            System.out.flush();
+            Map<String, String> result = fork(Storage.ON_HEAP, size, maxHeap, memoryLimit, false);
+            System.out.println(result.isEmpty() ? "FAILED" : "done");
+            heap.put(size, result);
+        }
+        measured.put(label(Storage.ON_HEAP), heap);
+
         for (Storage storage : storages) {
             for (boolean optimized : new boolean[]{false, true}) {
                 String rowKey = label(storage) + (optimized ? " + optimize()" : "");

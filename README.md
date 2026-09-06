@@ -58,8 +58,11 @@ Be clear-eyed about this before adopting it:
   workload for this plugin.
 - **Never write one object at a time.** A single `add()` costs 3-5 ms. Batch with `addAll` or
   `DuckDBBulkWriter` and it is 2.5 µs per object - a thousand times less.
-- **CQEngine's own SQLite persistence beats it at point lookups and single writes.** If that is your
-  workload, keep using it; see *Table 2* below for where each engine wins.
+- **Compare against on-heap CQEngine first.** That is what you are replacing, and it is faster at
+  every single-collection query - the question is only whether the memory and the joins are worth
+  it. Both tables below carry the on-heap row for exactly that reason.
+- **CQEngine's own SQLite persistence beats it at point lookups and single writes.** If you were
+  going to move off the heap anyway and that is your workload, keep using SQLite; see *Table 2*.
 
 ## What it costs, measured
 
@@ -87,10 +90,15 @@ native memory that `Runtime.totalMemory()` cannot see, so heap alone would flatt
 
 | storage | process RSS | on disk | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
 |---|---|---|---|---|---|---|---|---|---|---|
+| _CQEngine on-heap (baseline)_ | _1,388 MB_ | _–_ | _2.9 s_ | _6.7 µs_ | _43 µs_ | _2.0 µs_ | _1.0 ms_ | _203 ms_ | _4.8 µs_ | _–_ |
 | CQEngine SQLite file | **100 MB** | 225 MB | 12.9 s | 719 µs | **1.5 ms** | 7.6 ms | 100.8 ms | 769 ms | **1.2 ms** | – |
 | DuckDB file, BLOB | 135 MB | 51 MB | 6.1 s | **575 µs** | 5.2 ms | **957 µs** | **21.2 ms** | **665 ms** | 3.6 ms | 2.67 µs |
 | DuckDB file, columnar | 138 MB | **36 MB** | **5.4 s** | 682 µs | 3.3 ms | 983 µs | 46.5 ms | 2.0 s | 5.9 ms | **2.42 µs** |
 | DuckDB file, col + ART | 132 MB | 133 MB | 6.8 s | 675 µs | 3.5 ms | 1.1 ms | 47.2 ms | 2.0 s | 5.8 ms | 3.33 µs |
+
+On-heap CQEngine is repeated in both tables in italics. It is the thing being replaced, so it is
+the row every other row should be read against - the SQLite comparison only says which *database*
+is the better one, not whether moving off the heap is worth it at all.
 
 ### Reading them
 
@@ -100,31 +108,41 @@ objects to walk. Every individual query gets slower, most of them by two orders 
 relative terms and by a fraction of a millisecond in absolute ones. Take it when memory is your
 constraint, not when latency is.
 
-**Against CQEngine's own SQLite persistence, it is a genuine mixed result, and which way it falls
-depends entirely on your queries:**
+**All three side by side.** The same million objects, the same three indexes, the same queries -
+on-heap CQEngine, CQEngine's SQLite disk persistence, and this plugin:
 
-| | winner | margin |
-|---|---|---|
-| disk footprint | **DuckDB columnar** | 36 MB vs 225 MB - **6.3x smaller** |
-| loading | **DuckDB** | 5.4 s vs 12.9 s |
-| counting, aggregating | **DuckDB** | 1.0 ms vs 7.6 ms - **7.6x** |
-| queries returning many objects | **DuckDB** | 21 ms vs 101 ms - **4.8x** |
-| iterating everything | **DuckDB** (BLOB) | 665 ms vs 769 ms |
-| bulk writing | **DuckDB** | 2.4 µs/object; SQLite has no equivalent |
-| single-object lookup by key | roughly level on disk | 575 µs vs 719 µs |
-| narrow range queries | **SQLite** | 1.5 ms vs 3.3 ms - **2.2x** |
-| single `add()` | **SQLite** | 1.2 ms vs 3.6 ms - **3x** |
-| resident memory, on disk | **SQLite** | 100 MB vs 135 MB |
+| | CQEngine on-heap | CQEngine SQLite | DuckDB (columnar) |
+|---|---|---|---|
+| process memory | 1,388 MB | **100 MB** | 138 MB |
+| Java heap | 862 MB | **3 MB** | **3 MB** |
+| on disk | – | 225 MB | **36 MB** |
+| loading 1M objects | **2.9 s** | 12.9 s | 5.4 s |
+| point lookup by key | **6.7 µs** | 719 µs | 682 µs |
+| narrow range | **43 µs** | 1.5 ms | 3.3 ms |
+| count matches | **2.0 µs** | 7.6 ms | 983 µs |
+| query returning 2% | **1.0 ms** | 100.8 ms | 46.5 ms |
+| iterate everything | **203 ms** | 769 ms | 2.0 s |
+| single `add()` | **4.8 µs** | 1.2 ms | 5.9 ms |
+| bulk write per object | 3.1 µs | – | **2.4 µs** |
+| join 200k to 50k | 0.373 s | – | **0.270 s** |
 
-That split is the difference between the two engines, not an accident of this plugin: SQLite is a
-B-tree store built for finding one row, and DuckDB is a columnar engine built for reading many.
-**If your workload is mostly point lookups and single-row writes, CQEngine's existing SQLite
-persistence is the better tool and you should keep it.** If it is scans, counts, aggregates, or if
-the size of the database file matters, DuckDB wins by multiples.
+Three things that table says:
 
-In memory the picture is starker: DuckDB uses **half the resident memory** of CQEngine's off-heap
-SQLite (191 MB vs 379 MB) and is 5x faster at materialising a result set, but SQLite answers a
-point lookup in 96 µs against DuckDB's 601 µs, and a single `add()` in 183 µs against 4.0 ms.
+1. **On-heap CQEngine wins every single-collection query, and it is not close.** Between 100x and
+   3000x on the small ones. Nothing here changes that, and no amount of tuning will: a pointer
+   dereference beats a database query. You are buying memory and joins, and paying in latency.
+2. **Two of the rows go the other way**, and they are the reason this plugin exists: bulk writing
+   is faster than the heap, and a join across collections is faster than the heap - the only query
+   shape where a database beats pointer-chasing, because it is what a database is built for.
+3. **Between the two databases, the split is B-tree versus columnar.** SQLite wins point lookups,
+   narrow ranges and single writes; DuckDB wins counts (7.7x), large result sets (2.2x), disk
+   footprint (6.3x) and loading (2.4x). If you were moving off the heap anyway and your workload is
+   mostly point lookups, CQEngine's existing SQLite persistence is the better tool - it just cannot
+   join, and its file is six times larger.
+
+In memory the same split holds against CQEngine's off-heap SQLite: DuckDB uses **half the resident
+memory** (191 MB vs 379 MB) and is 5x faster at materialising a result set, while SQLite answers a
+point lookup in 96 µs against DuckDB's 601 µs.
 
 **Two CQEngine limitations worth knowing**, both hit while producing these tables:
 
@@ -553,8 +571,10 @@ Measured on a file-backed columnar collection:
 
 | operation | 500k | 1M | 2M | 4M |
 |---|---|---|---|---|
+| _count matches, CQEngine on-heap_ | _4.3 µs_ | _4.1 µs_ | _3.8 µs_ | _4.2 µs_ |
 | count matches | 933 µs | 1.1 ms | 1.4 ms | 2.3 ms |
 | count matches, after `optimize()` | 715 µs | 776 µs | 721 µs | **802 µs** |
+| _narrow range, CQEngine on-heap_ | _35 µs_ | _48 µs_ | _153 µs_ | _110 µs_ |
 | narrow range | 2.2 ms | 3.6 ms | 6.4 ms | 10.8 ms |
 | narrow range, after `optimize()` | 2.0 ms | 3.1 ms | 4.7 ms | 7.1 ms |
 
