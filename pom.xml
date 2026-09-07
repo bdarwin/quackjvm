@@ -12,6 +12,20 @@
     <name>CQEngine DuckDB Persistence</name>
     <description>A DuckDB-backed Persistence plugin for CQEngine: columnar, compressed storage
         for large collections with query push-down to keep retrieval fast.</description>
+    <url>https://github.com/bdarwin/cqengine-duckdb</url>
+
+    <licenses>
+        <license>
+            <name>The Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <url>https://github.com/bdarwin/cqengine-duckdb</url>
+        <connection>scm:git:https://github.com/bdarwin/cqengine-duckdb.git</connection>
+    </scm>
 
     <properties>
         <maven.compiler.release>17</maven.compiler.release>

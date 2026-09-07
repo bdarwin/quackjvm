@@ -1,10 +1,20 @@
 # cqengine-duckdb
 
-A DuckDB-backed `Persistence` plugin for [CQEngine](https://github.com/npgall/cqengine).
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
+[![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen.svg)](#building-and-benchmarking)
+
+**A DuckDB-backed `Persistence` plugin for [CQEngine](https://github.com/npgall/cqengine).** Keeps a
+large `IndexedCollection` off the Java heap, and lets you **join across collections** - which
+CQEngine cannot do.
 
 Your query code does not change. One line at construction moves a collection and its indexes out of
 the Java heap and into DuckDB, and CQEngine's queries are pushed down into SQL so that retrieval
 stays fast.
+
+> Java in-memory database · off-heap collections · columnar storage · embedded OLAP · SQL joins over
+> Java objects · CQEngine persistence · DuckDB JDBC · reduce JVM heap usage · query millions of
+> objects without the garbage collector
 
 ## What you get
 
@@ -705,6 +715,15 @@ Fields holding the JDK's internal collection wrappers (`Arrays.asList(...)`,
 | `cqtbl_<attribute>` | one row per indexed attribute value: `(objectKey, value)`; several rows per object for multi-valued attributes |
 
 Both are ordinary DuckDB tables. Point any SQL tool at the file and query them.
+
+## Licence
+
+Apache License 2.0 - see [LICENSE](LICENSE). Use it, fork it, ship it, sell it; no attribution
+required beyond keeping the notice. The same licence CQEngine itself uses, so there is no
+compatibility question if you embed both.
+
+Depends on [CQEngine](https://github.com/npgall/cqengine) (Apache 2.0) and
+[DuckDB](https://duckdb.org/) (MIT), both permissive.
 
 ## Building and benchmarking
 
