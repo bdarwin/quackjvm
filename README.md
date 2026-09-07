@@ -1,12 +1,23 @@
-# cqengine-duckdb
+# quackjvm
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen.svg)](#building-and-benchmarking)
 
-**A DuckDB-backed `Persistence` plugin for [CQEngine](https://github.com/npgall/cqengine).** Keeps a
-large `IndexedCollection` off the Java heap, and lets you **join across collections** - which
-CQEngine cannot do.
+**Making [DuckDB](https://duckdb.org/)'s capabilities available to the JVM, efficiently.**
+
+Today that means one thing you can use now: **`quackjvm-cqengine`, a DuckDB-backed `Persistence`
+plugin for [CQEngine](https://github.com/npgall/cqengine)** which keeps a large `IndexedCollection`
+off the Java heap and lets you **join across collections** - something CQEngine cannot do.
+
+| module | what it is | status |
+|---|---|---|
+| `quackjvm-core` | DuckDB for the JVM: type mapping, columnar object layouts, bulk loading, connection pooling, SQL access. No query framework required. | the general layer, currently thin |
+| `quackjvm-cqengine` | The CQEngine persistence plugin. Everything measured below. | working, 78 tests |
+
+The long-term aim is the core: DuckDB's JDBC driver forces you to treat an embedded columnar engine
+as a remote database, and much of what DuckDB can do is unreachable or slow from Java. CQEngine is
+the first consumer of the core, not the destination - see *Where this is going*.
 
 Your query code does not change. One line at construction moves a collection and its indexes out of
 the Java heap and into DuckDB, and CQEngine's queries are pushed down into SQL so that retrieval
@@ -88,7 +99,7 @@ Each configuration runs in its own forked JVM (`-Xmx6g`, DuckDB `memory_limit=25
 resident memory is not comparable within one process. Reproduce with:
 
 ```
-java -cp <classpath> com.duckcq.bench.Comparison 1000000 6g 256MB
+java -cp <classpath> io.quackjvm.cqengine.bench.Comparison 1000000 6g 256MB
 ```
 
 Memory is reported as **process RSS**, not JVM heap: DuckDB and SQLite both keep their data in
@@ -716,6 +727,29 @@ Fields holding the JDK's internal collection wrappers (`Arrays.asList(...)`,
 
 Both are ordinary DuckDB tables. Point any SQL tool at the file and query them.
 
+## Where this is going
+
+DuckDB's JDBC driver is the bottleneck, and specifically:
+
+| capability | state in `duckdb_jdbc` 1.4.1 |
+|---|---|
+| columnar / vectorised reads | the chunk is already in the JVM, but `DuckDBVector` is package-private, so you read it one boxed value at a time - about 250 ns per value |
+| Arrow export and import | exposed, both directions, and 17x faster than row-by-row JDBC (measured: 1M rows x 4 columns, 602 ms -> 36 ms) |
+| LIST / STRUCT / MAP / ARRAY reads | work |
+| LIST / STRUCT / MAP / ARRAY writes | **absent** - the appender's native entry points are scalars only |
+| Java UDFs | **absent** |
+| table functions / replacement scans | only through `registerArrowStream` |
+
+So the roadmap for `quackjvm-core`, roughly in order of leverage:
+
+1. **Arrow-backed reads.** Replaces per-value `getObject` calls with columnar batches. Fixes the
+   largest remaining cost in the CQEngine plugin - rebuilding objects from columns - and is the
+   foundation for everything else.
+2. **Java collections as DuckDB tables**, via `registerArrowStream`: query and join a `List` against
+   stored data with no load step.
+3. **Nested types**, read and write. The write path needs Arrow regardless, since the appender
+   cannot express them.
+
 ## Licence
 
 Apache License 2.0 - see [LICENSE](LICENSE). Use it, fork it, ship it, sell it; no attribution
@@ -725,29 +759,33 @@ compatibility question if you embed both.
 Depends on [CQEngine](https://github.com/npgall/cqengine) (Apache 2.0) and
 [DuckDB](https://duckdb.org/) (MIT), both permissive.
 
+Not affiliated with the DuckDB project.
+
 ## Building and benchmarking
 
 ```
-mvn test          # 78 tests: query parity against an on-heap collection, types, concurrency
+mvn test                        # 78 tests, across both modules
+mvn -pl quackjvm-cqengine test  # just the CQEngine plugin
 ```
 
-Requires Java 17+. There are three benchmark harnesses, all under `com.duckcq.bench`:
+Requires Java 17+. There are three benchmark harnesses, all under `io.quackjvm.cqengine.bench`:
 
 ```bash
 mvn test-compile
+cd quackjvm-cqengine
 CP="target/classes:target/test-classes:$(mvn -q dependency:build-classpath \
       -Dmdep.outputFile=/dev/stdout -Dmdep.includeScope=test)"
 
 # 1. The whole comparison in one table: memory, storage, query latency and write speed,
 #    one forked JVM per configuration. Arguments: rows, -Xmx, DuckDB memory_limit.
-java -cp "$CP" com.duckcq.bench.Comparison 1000000 4g 256MB
+java -cp "$CP" io.quackjvm.cqengine.bench.Comparison 1000000 4g 256MB
 
 # 1b. Memory only, in more detail.
-java -cp "$CP" com.duckcq.bench.MemoryBenchmark 1000000 4g 256MB
+java -cp "$CP" io.quackjvm.cqengine.bench.MemoryBenchmark 1000000 4g 256MB
 
 # 1c. How latency scales with collection size, and what optimize() changes.
-java -cp "$CP" com.duckcq.bench.ScalingBenchmark 12g 1GB 125000,500000,1000000,4000000
-java -cp "$CP" com.duckcq.bench.ScalingBenchmark --optimized 12g 1GB
+java -cp "$CP" io.quackjvm.cqengine.bench.ScalingBenchmark 12g 1GB 125000,500000,1000000,4000000
+java -cp "$CP" io.quackjvm.cqengine.bench.ScalingBenchmark --optimized 12g 1GB
 
 # 2. Latency and throughput, via JMH.
 java -cp "$CP" org.openjdk.jmh.Main                       # everything (~25 minutes)
@@ -756,10 +794,10 @@ java -cp "$CP" org.openjdk.jmh.Main pointLookup -p storage=ON_HEAP,DUCKDB_COLUMN
 java -cp "$CP" org.openjdk.jmh.Main -rf json -rff out.json
 
 # 3. A quick single-process overview of storage size and query latency together.
-java -cp "$CP" com.duckcq.bench.StorageBenchmark 1000000
+java -cp "$CP" io.quackjvm.cqengine.bench.StorageBenchmark 1000000
 
 # 4. What a cross-collection join costs, four ways.
-java -cp "$CP" com.duckcq.bench.JoinBenchmark 200000 50000
+java -cp "$CP" io.quackjvm.cqengine.bench.JoinBenchmark 200000 50000
 ```
 
 The JMH benchmarks are:
