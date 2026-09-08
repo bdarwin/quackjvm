@@ -4,93 +4,78 @@
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen.svg)](#building-and-benchmarking)
 
-**Making [DuckDB](https://duckdb.org/)'s capabilities available to the JVM, efficiently.**
+**Making [DuckDB](https://duckdb.org/) usable from the JVM as an embedded columnar engine, rather
+than as a remote database behind JDBC.**
 
-Today that means one thing you can use now: **`quackjvm-cqengine`, a DuckDB-backed `Persistence`
-plugin for [CQEngine](https://github.com/npgall/cqengine)** which keeps a large `IndexedCollection`
-off the Java heap and lets you **join across collections** - something CQEngine cannot do.
-
-| module | what it is | status |
-|---|---|---|
-| `quackjvm-core` | DuckDB for the JVM: type mapping, columnar object layouts, bulk loading, connection pooling, SQL access. No query framework required. | the general layer, currently thin |
-| `quackjvm-cqengine` | The CQEngine persistence plugin. Everything measured below. | working, 78 tests |
-
-The long-term aim is the core: DuckDB's JDBC driver forces you to treat an embedded columnar engine
-as a remote database, and much of what DuckDB can do is unreachable or slow from Java. CQEngine is
-the first consumer of the core, not the destination - see *Where this is going*.
-
-Your query code does not change. One line at construction moves a collection and its indexes out of
-the Java heap and into DuckDB, and CQEngine's queries are pushed down into SQL so that retrieval
-stays fast.
-
-> Java in-memory database · off-heap collections · columnar storage · embedded OLAP · SQL joins over
-> Java objects · CQEngine persistence · DuckDB JDBC · reduce JVM heap usage · query millions of
-> objects without the garbage collector
-
-## What you get
-
-**1. The collection stops costing you memory.** A million objects with three indexes. "On-heap"
-here means stock CQEngine used the normal way - `new ConcurrentIndexedCollection<>()`, with the
-objects and indexes living in the JVM heap:
-
-|  | process RSS | JVM heap |
-|---|---|---|
-| CQEngine on-heap (`new ConcurrentIndexedCollection<>()`) | 1,388 MB | 862 MB |
-| this plugin | **191 MB** | **3 MB** |
-
-A **7x smaller process and a 300x smaller heap** - the garbage collector no longer has a million
-objects to walk. On disk it is **6.3x smaller than CQEngine's own SQLite persistence** (36 MB
-against 225 MB).
-
-**2. Compound queries become one SQL statement.** CQEngine intersects `and` branches in Java,
-which over a database means materialising thousands of objects only to discard them. Pushed into
-SQL, a three-condition query goes from 91 ms to 17 ms - and adding conditions stops making a query
-slower.
-
-**3. Collections can be joined - which CQEngine cannot do.** CQEngine offers `existsIn()`, but
-evaluates it one foreign lookup per object; over any database that is unusable. Collections sharing
-a `DuckDBDatabase` are joined in a single SQL statement instead:
+DuckDB is an in-process analytical engine, but its JDBC driver makes you talk to it as though it
+were across a network: results arrive one boxed value at a time, its columnar chunks are
+package-private, half its type system has no write path, and its extension points are not reachable
+from Java at all. quackjvm closes that gap.
 
 ```java
-// stock CQEngine syntax, now one SQL semi-join
-vehicles.retrieve(existsIn(people, Vehicle.OWNER_ID, Person.PERSON_ID, equal(Person.COUNTRY, "FR")));
+// Java objects in, columns out - and back again
+DuckDBDatabase database = DuckDBDatabase.inMemory();
+IndexedCollection<Vehicle> vehicles = database.collection(Vehicle.ID)
+        .columnarLayout(ColumnarLayout.ofRecord(Vehicle.class))
+        .build();
+
+vehicles.addAll(millionsOfVehicles);
+
+// query them as objects, or as SQL, or join them to another collection
+database.sql("SELECT make, count(*), avg(price) FROM vehicle GROUP BY 1");
 ```
 
-| joining 200,000 vehicles to 50,000 people | time |
+## Modules
+
+| module | what it is |
 |---|---|
-| CQEngine's own evaluation, over DuckDB | 129.2 s |
-| on-heap CQEngine | 0.373 s |
-| **this plugin, pushed into SQL** | **0.270 s** |
+| **`quackjvm-core`** | DuckDB for the JVM. Java-object-to-column mapping, an Arrow columnar read path that is 10x faster than reading rows through JDBC, bulk loading, connection pooling, typed SQL access. Depends on nothing but DuckDB. |
+| **`quackjvm-cqengine`** | One plugin built on the core: a `Persistence` implementation for [CQEngine](https://github.com/npgall/cqengine). Drop it in where you would use CQEngine's on-heap, off-heap or SQLite persistence. |
 
-And beyond what CQEngine can express at all - matched pairs, and aggregates across collections:
-
-```java
-database.join(vehicles, people).on(Vehicle.OWNER_ID, Person.PERSON_ID).stream();  // Stream<JoinPair>
-database.sql("SELECT p.country, count(*) FROM ... GROUP BY 1");                   // 0.209 s
+```xml
+<dependency>
+    <groupId>io.github.bdarwin</groupId>
+    <artifactId>quackjvm-core</artifactId>
+    <version>1.0.0</version>
+</dependency>
 ```
 
-**4. Bulk loading is as fast as the heap.** `DuckDBBulkWriter` streams objects in at 2.5 µs each,
-against 3.09 µs for `addAll` on an on-heap collection - with bounded memory and no need to hold the
-batch in a list.
+Add `quackjvm-cqengine` as well if you use CQEngine. Arrow is optional: with
+`org.apache.arrow:arrow-vector`, `arrow-c-data` and `arrow-memory-unsafe` on the classpath, reads go
+through the columnar path; without them everything falls back to JDBC rows automatically. Arrow also
+needs `--add-opens=java.base/java.nio=ALL-UNNAMED` on Java 17 and later.
 
-**5. Your data is readable by any SQL tool.** With a columnar layout the objects are real typed
-columns, so the database file can be opened in the DuckDB CLI, a notebook, or anything else that
-speaks SQL.
+## What the JDBC driver does not give you
 
-## What you give up
+Measured against `duckdb_jdbc` 1.4.1, and the reason this project exists:
 
-Be clear-eyed about this before adopting it:
+| capability | JDBC driver | quackjvm |
+|---|---|---|
+| reading results | one boxed value per call; `DuckDBVector` is package-private so the columnar chunk already in your JVM is unreachable | Arrow columnar batches - **1M rows x 4 columns: 602 ms to 60 ms** |
+| storing Java objects | write your own row mapping | `ColumnarLayout` maps records, beans or explicit accessors to typed columns |
+| bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
+| LIST / STRUCT / MAP / ARRAY | readable, **no write path at all** | planned, via Arrow |
+| Java UDFs | absent | planned |
+| Java collections as tables | only via raw `registerArrowStream` | planned |
 
-- **Every query costs a fixed ~0.5 ms**, because it becomes a database query rather than a pointer
-  chase. A point lookup goes from 6.7 µs on the heap to ~600 µs. Many small queries is the wrong
-  workload for this plugin.
-- **Never write one object at a time.** A single `add()` costs 3-5 ms. Batch with `addAll` or
-  `DuckDBBulkWriter` and it is 2.5 µs per object - a thousand times less.
-- **Compare against on-heap CQEngine first.** That is what you are replacing, and it is faster at
-  every single-collection query - the question is only whether the memory and the joins are worth
-  it. Both tables below carry the on-heap row for exactly that reason.
-- **CQEngine's own SQLite persistence beats it at point lookups and single writes.** If you were
-  going to move off the heap anyway and that is your workload, keep using SQLite; see *Table 2*.
+## The CQEngine plugin
+
+`quackjvm-cqengine` is the first consumer of the core and the part that is finished. If you use
+CQEngine, it replaces your persistence with one line and gives you two things CQEngine cannot do
+itself: a collection that costs almost no heap, and **joins across collections**.
+
+```java
+// before
+IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>();
+
+// after - same queries, 7x smaller process, 300x smaller heap
+IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>(
+        DuckDBPersistence.onPrimaryKey(Car.CAR_ID));
+```
+
+It is an alternative to CQEngine's own `OffHeapPersistence` and `DiskPersistence` (both SQLite),
+and the trade is a real one in both directions - the tables below give every number, including
+where SQLite and the plain heap win.
 
 ## What it costs, measured
 
@@ -760,6 +745,29 @@ Depends on [CQEngine](https://github.com/npgall/cqengine) (Apache 2.0) and
 [DuckDB](https://duckdb.org/) (MIT), both permissive.
 
 Not affiliated with the DuckDB project.
+
+## Examples
+
+Runnable, self-contained examples live in [`examples/`](examples/) - each is a single file with the
+command to run it in its header and its real output at the bottom.
+
+| example | what it shows |
+|---|---|
+| `CoreColumnarRecords` | core only: Java records to typed DuckDB columns and back, queried with SQL |
+| `CoreBulkLoad` | core only: a million rows loaded in 0.62 s into a 9.8 MB file |
+| `CqEngineSwap` | the one-line swap from an on-heap collection, and the memory difference |
+| `CqEngineIndexes` | indexes, equality, ranges and compound queries |
+| `CqEngineJoins` | two collections in one database: `existsIn`, joined pairs, SQL aggregation |
+| `CqEngineBulkWriter` | streaming half a million objects in |
+
+```bash
+cd examples
+mvn compile
+./run-all.sh
+```
+
+There is also a [getting-started guide](docs/getting-started.md) and an
+[API overview](docs/api-overview.md).
 
 ## Building and benchmarking
 

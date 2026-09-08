@@ -124,6 +124,14 @@ public final class TableWriter {
     }
 
     public void createTable(Connection connection, boolean primaryKeyOnKeyColumn) {
+        if (orReplace && !primaryKeyOnKeyColumn) {
+            // INSERT OR REPLACE needs a unique constraint to replace against; without one DuckDB
+            // fails deep inside the insert with "There are no UNIQUE/PRIMARY KEY constraints that
+            // refer to this table", which says nothing about the cause.
+            throw new IllegalStateException("Table '" + tableName + "' was built with orReplace=true, "
+                    + "which requires a primary key on its key column. Either create it with "
+                    + "createTable(connection, true), or construct the TableWriter with orReplace=false.");
+        }
         StringBuilder ddl = new StringBuilder("CREATE TABLE IF NOT EXISTS ").append(Sql.quote(tableName)).append(" (");
         for (int i = 0; i < columns.size(); i++) {
             if (i > 0) ddl.append(", ");

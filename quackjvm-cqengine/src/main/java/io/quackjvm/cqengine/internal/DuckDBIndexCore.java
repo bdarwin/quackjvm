@@ -21,6 +21,7 @@ import com.googlecode.cqengine.index.support.LazyCloseableIterator;
 import com.googlecode.cqengine.query.Query;
 import com.googlecode.cqengine.query.option.QueryOptions;
 import com.googlecode.cqengine.query.simple.FilterQuery;
+import com.googlecode.cqengine.query.simple.Equal;
 import com.googlecode.cqengine.query.simple.In;
 import com.googlecode.cqengine.resultset.ResultSet;
 
@@ -248,7 +249,11 @@ public final class DuckDBIndexCore<A extends Comparable<A>, O, K> {
         @Override
         public Iterator<O> iterator() {
             Connection connection = connection(connectionManager, queryOptions);
-            return objectIterator(connection, objectSelectSql(predicate), predicate.getParameters(), resources);
+            // An equality on the primary key returns a single object; exporting one row through
+            // Arrow costs more than reading it, so that case stays on the JDBC path.
+            boolean manyRowsExpected = !(identity && query instanceof Equal);
+            return objectIterator(connection, objectSelectSql(predicate), predicate.getParameters(),
+                    resources, manyRowsExpected);
         }
 
         @Override
@@ -662,9 +667,27 @@ public final class DuckDBIndexCore<A extends Comparable<A>, O, K> {
 
     // ---------- Streaming helpers ----------
 
-    /** Streams whole objects out of DuckDB without materialising the result set on the heap. */
+    /**
+     * Streams whole objects out of DuckDB without materialising the result set on the heap.
+     *
+     * <p>Uses the Arrow columnar path when the collection is stored as columns and Arrow is
+     * available, which reads roughly ten times faster than pulling values through JDBC one at a
+     * time; otherwise reads rows.</p>
+     */
     public Iterator<O> objectIterator(Connection connection, String sql, List<Object> parameters,
                                       CloseableResourceGroup resources) {
+        return objectIterator(connection, sql, parameters, resources, true);
+    }
+
+    /**
+     * @param manyRowsExpected false for a query known to return about one object, which should not
+     *                         pay for setting up a columnar export
+     */
+    public Iterator<O> objectIterator(Connection connection, String sql, List<Object> parameters,
+                                      CloseableResourceGroup resources, boolean manyRowsExpected) {
+        if (manyRowsExpected && objectTable.canReadThroughArrow()) {
+            return objectTable.arrowObjectIterator(connection, sql, parameters, resources);
+        }
         java.sql.ResultSet resultSet = openQuery(connection, sql, parameters, resources);
         return new LazyIterator<O>() {
             @Override

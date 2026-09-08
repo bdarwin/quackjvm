@@ -151,6 +151,8 @@ public class Comparison {
                 // CQEngine's own Kryo serializer reflects into java.util internals, so its SQLite
                 // persistence cannot serialize anything on Java 17+ without this.
                 "--add-opens", "java.base/java.util=ALL-UNNAMED",
+                // Arrow allocates through java.nio internals, which Java 17+ does not open by default.
+                "--add-opens", "java.base/java.nio=ALL-UNNAMED",
                 "-cp", System.getProperty("java.class.path"),
                 Comparison.class.getName(), "--probe", storage.name(), String.valueOf(rowCount),
                 memoryLimit == null ? "-" : memoryLimit);

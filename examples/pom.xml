@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- A standalone project, deliberately not a module of the quackjvm build: it depends on the
+         published artifacts exactly as your own project would. Install them first with
+         `mvn -pl quackjvm-core,quackjvm-cqengine install -DskipTests` in the parent directory. -->
+    <groupId>io.github.bdarwin</groupId>
+    <artifactId>quackjvm-examples</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+
+    <name>quackjvm-examples</name>
+    <description>Runnable examples for quackjvm-core and quackjvm-cqengine.</description>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <quackjvm.version>1.0.0-SNAPSHOT</quackjvm.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.bdarwin</groupId>
+            <artifactId>quackjvm-core</artifactId>
+            <version>${quackjvm.version}</version>
+        </dependency>
+
+        <!-- Only the CQEngine examples need this; the core examples run on quackjvm-core alone. -->
+        <dependency>
+            <groupId>io.github.bdarwin</groupId>
+            <artifactId>quackjvm-cqengine</artifactId>
+            <version>${quackjvm.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Writes the runtime classpath to target/classpath.txt, which is what the
+                 `java Example.java` command in each example's header comment reads. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>write-classpath</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>build-classpath</goal>
+                        </goals>
+                        <configuration>
+                            <outputFile>${project.build.directory}/classpath.txt</outputFile>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

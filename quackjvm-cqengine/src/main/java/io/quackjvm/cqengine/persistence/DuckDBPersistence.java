@@ -60,6 +60,21 @@ import static com.googlecode.cqengine.query.option.FlagsEnabled.isFlagEnabled;
  *         DuckDBPersistence.onPrimaryKeyInFile(Car.CAR_ID, new File("cars.duckdb")));
  * </pre>
  *
+ * <p><b>Prefer building collections through {@link DuckDBDatabase}</b>, which additionally sends
+ * whole {@code and}/{@code or}/{@code not} queries to DuckDB in one statement rather than letting
+ * CQEngine intersect them in Java - several times faster on compound queries - and lets collections
+ * be joined:</p>
+ *
+ * <pre>
+ * DuckDBDatabase database = DuckDBDatabase.inMemory();
+ * IndexedCollection&lt;Car&gt; cars = database.collection(Car.CAR_ID)
+ *         .columnarLayout(ColumnarLayout.ofRecord(Car.class))
+ *         .build();
+ * </pre>
+ *
+ * <p>Constructing a {@code ConcurrentIndexedCollection} directly, as above, works and is a valid
+ * drop-in - it simply gives up the compound-query push-down.</p>
+ *
  * <p><b>In-memory databases hold their data in native memory, not the Java heap</b>, so they are
  * limited by {@code memory_limit} (DuckDB's default is 80% of system RAM) rather than by
  * {@code -Xmx}. When that limit is reached DuckDB spills to temporary files rather than failing.</p>
@@ -206,12 +221,9 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
     // ---------- Storage management ----------
 
     /**
-     * @return the size of the DuckDB database file, or for an in-memory database the number of
-     * bytes DuckDB is currently using to hold it.
-     */
-    /**
-     * @return the size of the whole DuckDB database. When several collections share a database this
-     * is their combined size, not this collection's share of it.
+     * @return the size of the DuckDB database file, or for an in-memory database the bytes DuckDB
+     * is currently using to hold it. When several collections share a database this is their
+     * combined size, not this collection's share of it.
      */
     @Override
     public long getBytesUsed() {

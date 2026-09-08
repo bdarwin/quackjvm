@@ -41,13 +41,34 @@
             <version>${kryo.version}</version>
         </dependency>
 
-        <!-- CQEngine pins sqlite-jdbc 3.27.2.1, which ships no native library for macOS on
-             aarch64, so CQEngine's own SQLite persistence cannot start there. This plugin does not
-             use SQLite; the version is bumped so the benchmarks can compare against it. -->
+        <!-- Test scope on purpose. This plugin never touches SQLite; the dependency exists only
+             so the benchmarks can compare against CQEngine's own SQLite-backed persistence, and
+             CQEngine declares it optional so it does not reach consumers by itself. Shipping it at
+             compile scope would push a native SQLite library onto every user of this library.
+             The version is newer than CQEngine's pin, which has no macOS aarch64 native. -->
         <dependency>
             <groupId>org.xerial</groupId>
             <artifactId>sqlite-jdbc</artifactId>
             <version>${sqlite.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Arrow is optional in core, so it is pulled in explicitly for the tests and
+             benchmarks which exercise the columnar read path. -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-c-data</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-unsafe</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <dependency>
@@ -88,7 +109,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>-Xmx1g --enable-native-access=ALL-UNNAMED</argLine>
+                    <argLine>-Xmx1g --enable-native-access=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
                     <excludes>
                         <exclude>**/bench/**</exclude>
                     </excludes>

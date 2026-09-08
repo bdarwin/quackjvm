@@ -1,5 +1,9 @@
 package io.quackjvm.cqengine.internal;
 
+import io.quackjvm.core.arrow.ArrowBatch;
+import io.quackjvm.core.arrow.ArrowObjectReader;
+import io.quackjvm.core.arrow.ArrowResult;
+import io.quackjvm.core.arrow.ArrowSupport;
 import io.quackjvm.core.duckdb.ColumnDef;
 import io.quackjvm.core.duckdb.DuckDBTypes;
 import io.quackjvm.core.duckdb.ObjectCache;
@@ -7,6 +11,8 @@ import io.quackjvm.core.duckdb.Sql;
 import io.quackjvm.core.duckdb.TableWriter;
 
 import com.googlecode.cqengine.attribute.SimpleAttribute;
+import com.googlecode.cqengine.index.support.CloseableRequestResources;
+import io.quackjvm.core.layout.ColumnarLayout;
 import com.googlecode.cqengine.query.option.QueryOptions;
 
 import java.sql.Connection;
@@ -102,6 +108,64 @@ public final class ObjectTable<O, K> {
     /** True when objects are shredded into typed columns rather than stored as one blob. */
     public boolean isColumnar() {
         return !(codec instanceof BlobRowCodec);
+    }
+
+    /**
+     * Whether this table's objects can be materialised through Arrow rather than value by value
+     * through JDBC. Needs a columnar layout - a blob column has nothing to read column-wise - and
+     * Arrow on the classpath.
+     */
+    public boolean canReadThroughArrow() {
+        return codec instanceof ColumnarRowCodec && ArrowSupport.isAvailable();
+    }
+
+    /**
+     * Streams objects for a query through Arrow columnar batches.
+     *
+     * <p>Roughly an order of magnitude faster than reading the same rows through JDBC, because the
+     * values are handed over as whole columns rather than one boxed value per call. Only valid when
+     * {@link #canReadThroughArrow()}; the caller falls back otherwise.</p>
+     *
+     * @param resources the request's resource group, which takes ownership of the Arrow result
+     */
+    public Iterator<O> arrowObjectIterator(Connection connection, String sql, List<Object> parameters,
+                                           CloseableRequestResources.CloseableResourceGroup resources) {
+        ColumnarLayout<O> layout = ((ColumnarRowCodec<O>) codec).getLayout();
+        ArrowObjectReader<O> reader = new ArrowObjectReader<>(layout, 1);   // column 0 is the key
+        PreparedStatement statement = null;
+        try {
+            statement = connection.prepareStatement(sql);
+            Sql.bindAll(statement, parameters, 1);
+            ArrowResult result = ArrowResult.of(statement, ArrowResult.DEFAULT_BATCH_SIZE);
+            resources.add(result::close);
+            Iterator<ArrowBatch> batches = result.iterator();
+            return new Iterator<>() {
+                private Iterator<O> current = java.util.Collections.emptyIterator();
+
+                @Override
+                public boolean hasNext() {
+                    while (!current.hasNext()) {
+                        if (!batches.hasNext()) {
+                            return false;
+                        }
+                        current = reader.readBatch(batches.next()).iterator();
+                    }
+                    return true;
+                }
+
+                @Override
+                public O next() {
+                    if (!hasNext()) {
+                        throw new java.util.NoSuchElementException();
+                    }
+                    return current.next();
+                }
+            };
+        }
+        catch (SQLException e) {
+            Sql.closeQuietly(statement);
+            throw new IllegalStateException("Failed to run: " + sql, e);
+        }
     }
 
     /** The fully qualified key column, e.g. {@code "o"."objectKey"}. */

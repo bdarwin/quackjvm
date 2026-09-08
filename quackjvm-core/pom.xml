@@ -24,5 +24,23 @@
             <groupId>org.objenesis</groupId>
             <artifactId>objenesis</artifactId>
         </dependency>
+
+        <!-- Optional. With Arrow on the classpath, results are read as columnar batches rather
+             than value by value through JDBC; without it, quackjvm falls back automatically. -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-c-data</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-unsafe</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 </project>

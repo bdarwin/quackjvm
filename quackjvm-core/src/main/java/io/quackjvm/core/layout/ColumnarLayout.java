@@ -102,6 +102,24 @@ public final class ColumnarLayout<O> {
         return rowFactory.create(values);
     }
 
+    /** The layout's columns as table column definitions, ready to create a table with. */
+    public java.util.List<io.quackjvm.core.duckdb.ColumnDef> toColumnDefs() {
+        java.util.List<io.quackjvm.core.duckdb.ColumnDef> definitions = new ArrayList<>(columns.size());
+        for (Column<O, ?> column : columns) {
+            definitions.add(new io.quackjvm.core.duckdb.ColumnDef(column.getName(), column.getType()));
+        }
+        return definitions;
+    }
+
+    /** Reads an object's fields into a row, in column order. */
+    public Object[] toRow(O object) {
+        Object[] row = new Object[columns.size()];
+        for (int i = 0; i < columns.size(); i++) {
+            row[i] = columns.get(i).getValue(object);
+        }
+        return row;
+    }
+
     // ---------- Factory methods ----------
 
     public static <O> Builder<O> builder(Class<O> objectType) {

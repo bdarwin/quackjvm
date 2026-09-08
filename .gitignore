@@ -8,3 +8,6 @@ target/
 # IDE state
 .idea/
 *.iml
+
+# Examples build output
+examples/target/

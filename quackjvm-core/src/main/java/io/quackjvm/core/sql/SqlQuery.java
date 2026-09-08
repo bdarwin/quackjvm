@@ -16,7 +16,13 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 /**
- * Runs raw SQL and streams the rows back, closing the statement and connection with the stream.
+ * Runs raw SQL and streams the rows back.
+ *
+ * <p><b>The stream takes ownership of the connection</b> and closes it along with the statement and
+ * result set. Do not hand it a connection you intend to use again - running two queries on one
+ * connection this way fails on the second with "Connection was closed". Pass a fresh connection each
+ * time; {@code DuckDBConnection.duplicate()} is cheap, and
+ * {@code DuckDBDatabase.sql(...)} does this for you.</p>
  */
 public final class SqlQuery {
 

@@ -209,7 +209,7 @@ public final class DuckDBTypes {
 
     /** Converts a value as returned by the DuckDB driver back into the declared Java type. */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    static Object fromSqlValue(Object value, Class<?> type) {
+    public static Object fromSqlValue(Object value, Class<?> type) {
         if (value == null) {
             return null;
         }

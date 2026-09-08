@@ -104,6 +104,10 @@ public final class PushedDownQuery {
 
         @Override
         public Iterator<O> iterator() {
+            if (objectTable.canReadThroughArrow()) {
+                return objectTable.arrowObjectIterator(
+                        connection(), selectObjects(), keys.getParameters(), resources);
+            }
             java.sql.ResultSet resultSet = DuckDBIndexCore.openQuery(
                     connection(), selectObjects(), keys.getParameters(), resources);
             return new LazyIterator<O>() {
