@@ -107,20 +107,20 @@ plugin replaces.
 
 | storage | process RSS | JVM heap | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
 |---|---|---|---|---|---|---|---|---|---|---|
-| CQEngine on-heap | 1,388 MB | 862 MB | 2.9 s | **6.7 µs** | **43 µs** | **2.0 µs** | **1.0 ms** | **203 ms** | **4.8 µs** | – |
-| CQEngine SQLite memory | 379 MB | 3 MB | 8.8 s | 96 µs | 679 µs | 6.4 ms | 90.1 ms | 842 ms | 183 µs | – |
-| DuckDB memory, BLOB | 231 MB | 3 MB | 5.8 s | 601 µs | 3.7 ms | 1.8 ms | 17.7 ms | 634 ms | 4.0 ms | 3.18 µs |
-| DuckDB memory, columnar | **191 MB** | 3 MB | 5.0 s | 698 µs | 4.8 ms | 1.8 ms | 49.7 ms | 2.0 s | 5.9 ms | 3.21 µs |
+| CQEngine on-heap | 1,361 MB | 861 MB | 2.7 s | **12 µs** | **40 µs** | **3.4 µs** | **1.2 ms** | **186 ms** | **4.1 µs** | – |
+| CQEngine SQLite memory | 372 MB | 3 MB | 8.7 s | 92 µs | 793 µs | 6.3 ms | 82.4 ms | 744 ms | 183 µs | – |
+| DuckDB memory, BLOB | **186 MB** | 3 MB | 5.9 s | 625 µs | 3.0 ms | 1.8 ms | 21.6 ms | 632 ms | 4.1 ms | 3.18 µs |
+| DuckDB memory, columnar | 213 MB | 3 MB | 4.9 s | 728 µs | 5.4 ms | 1.8 ms | **15.9 ms** | **353 ms** | 6.2 ms | 3.02 µs |
 
 ### Table 2 — on disk: CQEngine's SQLite persistence vs DuckDB file persistence
 
 | storage | process RSS | on disk | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
 |---|---|---|---|---|---|---|---|---|---|---|
-| _CQEngine on-heap (baseline)_ | _1,388 MB_ | _–_ | _2.9 s_ | _6.7 µs_ | _43 µs_ | _2.0 µs_ | _1.0 ms_ | _203 ms_ | _4.8 µs_ | _–_ |
-| CQEngine SQLite file | **100 MB** | 225 MB | 12.9 s | 719 µs | **1.5 ms** | 7.6 ms | 100.8 ms | 769 ms | **1.2 ms** | – |
-| DuckDB file, BLOB | 135 MB | 51 MB | 6.1 s | **575 µs** | 5.2 ms | **957 µs** | **21.2 ms** | **665 ms** | 3.6 ms | 2.67 µs |
-| DuckDB file, columnar | 138 MB | **36 MB** | **5.4 s** | 682 µs | 3.3 ms | 983 µs | 46.5 ms | 2.0 s | 5.9 ms | **2.42 µs** |
-| DuckDB file, col + ART | 132 MB | 133 MB | 6.8 s | 675 µs | 3.5 ms | 1.1 ms | 47.2 ms | 2.0 s | 5.8 ms | 3.33 µs |
+| _CQEngine on-heap (baseline)_ | _1,361 MB_ | _–_ | _2.7 s_ | _12 µs_ | _40 µs_ | _3.4 µs_ | _1.2 ms_ | _186 ms_ | _4.1 µs_ | _–_ |
+| CQEngine SQLite file | **87 MB** | 225 MB | 12.2 s | **564 µs** | **1.9 ms** | 7.7 ms | 98.2 ms | 757 ms | **1.1 ms** | – |
+| DuckDB file, BLOB | 134 MB | 51 MB | 6.4 s | 580 µs | 4.9 ms | **1.0 ms** | 21.5 ms | 658 ms | 3.6 ms | 2.61 µs |
+| DuckDB file, columnar | 132 MB | **36 MB** | **5.3 s** | 668 µs | 4.3 ms | 1.3 ms | **12.6 ms** | **333 ms** | 5.8 ms | **2.37 µs** |
+| DuckDB file, col + ART | 130 MB | 133 MB | 6.7 s | 669 µs | 3.8 ms | 1.1 ms | 12.4 ms | 337 ms | 5.8 ms | 3.18 µs |
 
 On-heap CQEngine is repeated in both tables in italics. It is the thing being replaced, so it is
 the row every other row should be read against - the SQLite comparison only says which *database*
@@ -140,16 +140,16 @@ CQEngine; only the storage differs:
 
 | | CQEngine on-heap | CQEngine SQLite | DuckDB (columnar) |
 |---|---|---|---|
-| process memory | 1,388 MB | **100 MB** | 138 MB |
-| Java heap | 862 MB | **3 MB** | **3 MB** |
+| process memory | 1,361 MB | **87 MB** | 132 MB |
+| Java heap | 861 MB | **3 MB** | **3 MB** |
 | on disk | – | 225 MB | **36 MB** |
-| loading 1M objects | **2.9 s** | 12.9 s | 5.4 s |
-| point lookup by key | **6.7 µs** | 719 µs | 682 µs |
-| narrow range | **43 µs** | 1.5 ms | 3.3 ms |
-| count matches | **2.0 µs** | 7.6 ms | 983 µs |
-| query returning 2% | **1.0 ms** | 100.8 ms | 46.5 ms |
-| iterate everything | **203 ms** | 769 ms | 2.0 s |
-| single `add()` | **4.8 µs** | 1.2 ms | 5.9 ms |
+| loading 1M objects | **2.7 s** | 12.2 s | 5.3 s |
+| point lookup by key | **12 µs** | **564 µs** | 668 µs |
+| narrow range | **40 µs** | **1.9 ms** | 4.3 ms |
+| count matches | **3.4 µs** | 7.7 ms | 1.3 ms |
+| query returning 2% | **1.2 ms** | 98.2 ms | 12.6 ms |
+| iterate everything | **186 ms** | 757 ms | 333 ms |
+| single `add()` | **4.1 µs** | 1.1 ms | 5.8 ms |
 | bulk write per object | 3.1 µs | – | **2.4 µs** |
 | join 200k to 50k | 0.373 s | – | **0.270 s** |
 
