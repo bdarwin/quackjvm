@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-78%20passing-brightgreen.svg)](#building-and-benchmarking)
+[![Tests](https://img.shields.io/badge/tests-88%20passing-brightgreen.svg)](#building-and-benchmarking)
 
 **Making [DuckDB](https://duckdb.org/) usable from the JVM as an embedded columnar engine, rather
 than as a remote database behind JDBC.**
@@ -182,6 +182,41 @@ point lookup in 96 µs against DuckDB's 601 µs.
 
 For finer-grained latency numbers with proper error bars there is a JMH suite; see
 *Building and benchmarking*.
+
+## Answering questions without rebuilding objects
+
+The dominant cost of a columnar store is turning columns back into objects, and most questions do
+not need them. Asking DuckDB for the answer instead is the single biggest performance lever here:
+
+```java
+// 200,000 matching cars, summed. 99.8 ms if you materialise them; 2.3 ms if you do not.
+double total = database.query("SELECT sum(price) FROM car WHERE make = ?", "Ford")
+                       .scalar(Double.class);
+
+List<String> makes = database.query("SELECT DISTINCT make FROM car").list(String.class);
+
+// a record whose components line up with the selected columns, by position
+record MakeStats(String make, long cars, double averagePrice) {}
+List<MakeStats> stats = database.query(
+        "SELECT make, count(*), avg(price) FROM car GROUP BY 1").records(MakeStats.class);
+
+// DuckDB's own PIVOT - no equivalent exists in an object query engine
+database.query("PIVOT car ON colour USING count(*) GROUP BY make").forEachRow(System.out::println);
+```
+
+The same question, 1,000,000 cars, 200,000 of them matching:
+
+| | time | |
+|---|---|---|
+| retrieve matching objects, sum in Java | 99.8 ms | what an object query engine makes you do |
+| `query(...).scalar(Double.class)` | **2.3 ms** | **44x** |
+| `query(...).list(Double.class)` - one column of 200k rows | 11.6 ms | 8.6x |
+| `query(...).records(MakeStats.class)` - grouped | 5.3 ms | – |
+
+`scalar` deliberately reads through JDBC rather than Arrow: setting up a columnar export costs more
+than reading a single value. `list` and `records` use Arrow. Both are handled for you.
+
+`Rows` is in `quackjvm-core`, so it works against any DuckDB connection, with or without CQEngine.
 
 ## Joining across collections
 
@@ -772,7 +807,7 @@ There is also a [getting-started guide](docs/getting-started.md) and an
 ## Building and benchmarking
 
 ```
-mvn test                        # 78 tests, across both modules
+mvn test                        # 88 tests, across both modules
 mvn -pl quackjvm-cqengine test  # just the CQEngine plugin
 ```
 

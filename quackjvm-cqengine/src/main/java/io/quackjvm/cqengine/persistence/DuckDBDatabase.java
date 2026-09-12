@@ -6,6 +6,7 @@ import io.quackjvm.core.duckdb.ColumnDef;
 import io.quackjvm.core.duckdb.ConnectionPool;
 import io.quackjvm.cqengine.internal.JoinTarget;
 import io.quackjvm.cqengine.query.Join;
+import io.quackjvm.core.sql.Rows;
 import io.quackjvm.core.sql.SqlQuery;
 import io.quackjvm.core.sql.SqlRow;
 import io.quackjvm.core.duckdb.Connections;
@@ -374,6 +375,28 @@ public final class DuckDBDatabase implements Closeable {
      *
      * <p>The returned stream holds a connection and must be closed.</p>
      */
+    /**
+     * Runs a query and reads its result without rebuilding any objects - the fastest way to ask a
+     * question of a collection.
+     *
+     * <pre>
+     * double total = database.query("SELECT sum(price) FROM car WHERE make = ?", "Ford")
+     *                        .scalar(Double.class);
+     * List&lt;String&gt; makes = database.query("SELECT DISTINCT make FROM car").list(String.class);
+     * List&lt;MakeStats&gt; stats = database.query(
+     *         "SELECT make, count(*), avg(price) FROM car GROUP BY 1").records(MakeStats.class);
+     * </pre>
+     *
+     * <p>See {@link Rows} for what can be done with the result, and {@link #describe()} for the
+     * names to use.</p>
+     */
+    public Rows query(String sql, Object... parameters) {
+        if (closed) {
+            throw new IllegalStateException("This DuckDBDatabase has been closed: " + this);
+        }
+        return Rows.of(borrowConnection(true), sql, parameters);
+    }
+
     public java.util.stream.Stream<SqlRow> sql(String sql, Object... parameters) {
         try {
             return SqlQuery.stream(borrowConnection(true), sql, parameters);
