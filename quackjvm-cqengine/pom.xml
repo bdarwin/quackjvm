@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.bdarwin</groupId>
         <artifactId>quackjvm</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
+        <version>1.0.0</version>
     </parent>
 
     <artifactId>quackjvm-cqengine</artifactId>

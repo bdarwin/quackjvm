@@ -6,7 +6,7 @@
 
     <groupId>io.github.bdarwin</groupId>
     <artifactId>quackjvm</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0</version>
     <packaging>pom</packaging>
 
     <name>quackjvm</name>
@@ -22,9 +22,19 @@
         </license>
     </licenses>
 
+    <developers>
+        <developer>
+            <id>bdarwin</id>
+            <name>Darwin Baisa</name>
+            <url>https://github.com/bdarwin</url>
+        </developer>
+    </developers>
+
     <scm>
         <url>https://github.com/bdarwin/quackjvm</url>
         <connection>scm:git:https://github.com/bdarwin/quackjvm.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/bdarwin/quackjvm.git</developerConnection>
+        <tag>HEAD</tag>
     </scm>
 
     <modules>
@@ -101,4 +111,80 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <profiles>
+        <!-- Only active for a release: an ordinary build skips javadoc, signing and any network
+             call, so mvn test stays as fast as it is. -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.4.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.12.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <doclint>none</doclint>
+                            <quiet>true</quiet>
+                        </configuration>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <configuration>
+                            <bestPractices>true</bestPractices>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.11.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <deploymentName>quackjvm ${project.version}</deploymentName>
+                            <!-- Upload and validate, then stop with the deployment awaiting a
+                                 manual Publish in the Portal. Safe default for early releases. -->
+                            <autoPublish>false</autoPublish>
+                            <waitUntil>validated</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
