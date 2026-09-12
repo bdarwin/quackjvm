@@ -65,6 +65,8 @@ nav:
   - Troubleshooting: troubleshooting.md
   - Migrating: migrating.md
   - API reference: api-overview.md
+  - Proposals:
+      - Write buffer: proposals/write-buffer.md
 
 markdown_extensions:
   - abbr

@@ -128,6 +128,11 @@ nothing to walk.
 
 </div>
 
+!!! note "Design notes"
+
+    [Write buffer](proposals/write-buffer.md) — where the remaining write latency goes, and what it
+    would take to remove it. Proposed, not implemented.
+
 ## What the JDBC driver does not give you
 
 Measured against `duckdb_jdbc` 1.4.1, and the reason this project exists:
