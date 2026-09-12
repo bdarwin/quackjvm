@@ -770,6 +770,44 @@ So the roadmap for `quackjvm-core`, roughly in order of leverage:
 3. **Nested types**, read and write. The write path needs Arrow regardless, since the appender
    cannot express them.
 
+## Java version, and why not native
+
+**quackjvm targets Java 17**, because 17 and 21 are the LTS releases enterprises actually run.
+Everything works on 17 with no JVM flags beyond the ones DuckDB's own driver needs; Arrow adds
+`--add-opens=java.base/java.nio=ALL-UNNAMED` and is optional.
+
+Going below JDBC was measured rather than assumed. DuckDB's C API is genuinely reachable - the
+library bundled inside `duckdb_jdbc` exports 409 `duckdb_*` symbols, including `duckdb_fetch_chunk`
+and `duckdb_create_scalar_function` - and reading its vectors directly is the fastest path there is.
+Reading 1,000,000 rows of three numeric columns, doing identical work:
+
+| path | time | Java | native binaries to ship |
+|---|---|---|---|
+| JDBC, row by row | ~450 ms | 8+ | no |
+| Arrow, boxed values | 40 ms | 17+ | no |
+| **Arrow, primitive accessors** | **21 ms** | **17+** | **no - this is what ships** |
+| JNA, zero-copy buffers | 20 ms | 8+ | no |
+| JNI, hand written | 9-13 ms | 8+ | yes, one per platform |
+| Foreign Function and Memory API | 7 ms | 22+ | no |
+
+Three conclusions came out of that, and two of them were surprises:
+
+1. **JDBC is not the latency bottleneck.** A prepared point lookup is 211 microseconds through JDBC
+   and 201 through the C API directly. That ~200 microseconds is DuckDB planning and executing the
+   query. Going native makes bulk reads faster; it does not make small queries faster.
+2. **JNI and FFM are equivalent in speed**, and both are two to three times faster than Arrow for
+   bulk primitive reads. JNA is slower than either, because ~4,000 native calls are needed to read a
+   million rows and libffi dispatch costs microseconds where JNI costs nanoseconds - the memory
+   access is identical in both, a direct `ByteBuffer`.
+3. **The cost of native is distribution, not engineering.** JNI would mean building, signing and
+   shipping a binary for five platforms, and a jar carrying native objects is harder to get through
+   enterprise review than a pure-Java one. That works against the reason Java 17 is the floor.
+
+So the shipped path is pure Java. FFM is worth adding as an optional module for Java 22+ when
+adoption of a newer LTS makes it worthwhile, since it costs nothing to distribute. JNI is worth
+revisiting only for what no pure-Java path can reach at any Java version: **Java UDFs and writing
+nested types**, both of which need the C API.
+
 ## Licence
 
 Apache License 2.0 - see [LICENSE](LICENSE). Use it, fork it, ship it, sell it; no attribution
