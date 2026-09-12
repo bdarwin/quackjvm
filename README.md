@@ -742,8 +742,11 @@ Fields holding the JDK's internal collection wrappers (`Arrays.asList(...)`,
 
 | table | contents |
 |---|---|
-| `cq_objects` | one row per object: `objectKey` (primary key) plus either a `value` BLOB or one column per field |
-| `cqtbl_<attribute>` | one row per indexed attribute value: `(objectKey, value)`; several rows per object for multi-valued attributes |
+| `cq_<collection>` | one row per object: `objectKey` (primary key) plus either a `value` BLOB or one column per field |
+| `cqidx_<collection>_<attribute>` | one row per indexed attribute value: `(objectKey, value)`; several rows per object for multi-valued attributes |
+
+A collection is also exposed as a view under its bare name (`car`), which is what `database.table(cars)`
+returns and what you should use in SQL.
 
 Both are ordinary DuckDB tables. Point any SQL tool at the file and query them.
 
@@ -839,8 +842,22 @@ mvn compile
 ./run-all.sh
 ```
 
-There is also a [getting-started guide](docs/getting-started.md) and an
-[API overview](docs/api-overview.md).
+## Documentation
+
+Full documentation is in [`docs/`](docs/README.md):
+
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install it, store your first objects, run your first query. |
+| [Storing objects](docs/storing-objects.md) | BLOB or columnar, what each costs, which types are supported. |
+| [Querying](docs/querying.md) | Every query form, and what is pushed into SQL. |
+| [Joins across collections](docs/joins.md) | `existsIn`, matched pairs, and arbitrary SQL. |
+| [Aggregates and projections](docs/aggregates.md) | Answering questions without rebuilding objects. |
+| [Writing data](docs/writing.md) | `add`, `addAll`, `BULK_IMPORT`, and the streaming bulk writer. |
+| [Tuning](docs/tuning.md) | Memory limits, `optimize()`, ART indexes, Arrow, concurrency. |
+| [Troubleshooting](docs/troubleshooting.md) | Every error message you are likely to see. |
+| [Migrating](docs/migrating.md) | From on-heap CQEngine, or from its SQLite persistence. |
+| [API reference](docs/api-overview.md) | Class by class. |
 
 ## Building and benchmarking
 

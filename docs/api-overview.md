@@ -85,6 +85,47 @@ a view over the cursor, so a row kept beyond the iteration must be copied with `
 
 `JoinPair<L, R>` is a record of `left()` and `right()`.
 
+### `io.quackjvm.core.sql.Rows`
+
+Typed results without writing a `ResultSet` loop. `Rows.of(connection, sql, parameters...)` builds
+one; nothing runs until you ask for a shape, and the shape decides how the result is read.
+
+| method | notes |
+|---|---|
+| `<T> T scalar(Class<T>)` | One value from one row. Throws if the query returns no row. |
+| `<T> Optional<T> scalarOptional(Class<T>)` | The same, when no row is a legitimate answer. |
+| `<T> List<T> list(Class<T>)` | The first column of every row. |
+| `<T> void forEachValue(Class<T>, Consumer<T>)` | The streaming form of `list`. |
+| `<T> List<T> records(Class<T>)` | A record per row; components are matched to the selected columns **by position**, not by name. |
+| `<T> void forEachRecord(Class<T>, Consumer<T>)` | The streaming form of `records`. |
+| `long count()` | Wraps the query in a `count(*)` rather than reading and discarding rows. |
+| `void forEachRow(Consumer<SqlRow>)` | Raw rows, for a dynamic shape such as a `PIVOT`. |
+| `Stream<SqlRow> stream()` | **Holds a connection; must be closed.** |
+
+Every method except `stream()` closes the connection, statement and result set itself.
+
+`scalar` and `scalarOptional` deliberately read through JDBC: setting up a columnar export costs
+more than reading one value. `list`, `records` and the `forEach` forms use Arrow when it is
+available. This is decided per call, not configured.
+
+`Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
+`DuckDBDatabase.query(...)` handles that for you and is the usual way in.
+
+### `io.quackjvm.core.arrow.ArrowSupport`
+
+Whether the Arrow read path is usable, and why not if it is not.
+
+- `boolean isAvailable()` — Arrow classes on the classpath and the JVM flag set.
+- `String getUnavailableReason()` — which of those is missing.
+- `String getRequiredJvmFlag()` — `--add-opens=java.base/java.nio=ALL-UNNAMED`.
+
+Arrow is optional: with `org.apache.arrow:arrow-vector`, `arrow-c-data` and `arrow-memory-unsafe`
+present, reads go through columnar batches (about 10x faster on wide results); without them
+everything falls back to JDBC rows automatically.
+
+`ArrowResult.of(PreparedStatement, batchSize)` and `ArrowObjectReader<O>` are the lower-level entry
+points, for reading batches or rebuilding objects from them directly.
+
 ### `io.quackjvm.core.duckdb.ConnectionPool` and `Connections`
 
 `ConnectionPool(DuckDBConnection root, int maxIdle)` hands out connections duplicated from one root
@@ -156,7 +197,9 @@ One DuckDB database shared by any number of collections, which is what makes joi
   persistence alone, for your own `IndexedCollection`). Give two collections of the same type
   different names; the default name is the object type's simple name in lower case.
 - `<L, R> Join<L, R> join(left, right)` - see below.
-- `Stream<SqlRow> sql(String, Object...)` - arbitrary SQL over the collections. The stream holds a
+- `Rows query(String, Object...)` - arbitrary SQL over the collections, returned as typed values.
+  The usual way in; see `Rows` above and [Aggregates](aggregates.md).
+- `Stream<SqlRow> sql(String, Object...)` - the same SQL as a raw row stream. The stream holds a
   connection and must be closed.
 - `String table(collection)`, `String column(collection, attribute)`, `List<String> columns(collection)`
   - the names to use in `sql(...)`, checked rather than guessed.
@@ -220,11 +263,20 @@ What it asks of you:
 
 ### `io.quackjvm.cqengine.DuckDBFlags`
 
+`BULK_IMPORT` tells a bulk write that every object is new, so the delete-before-insert which makes
+`addAll` idempotent can be skipped. It has the same flag value as CQEngine's
+`SQLiteIndexFlags.BULK_IMPORT`, so existing code using that flag already gets this behaviour.
+
 ```java
 QueryOptions options = new QueryOptions();
-FlagsEnabled.enableFlags(options, DuckDBFlags.BULK_IMPORT);
-collection.addAll(manyObjects, options);
+FlagsEnabled.forQueryOptions(options).add(DuckDBFlags.BULK_IMPORT);
+collection.update(Collections.emptyList(), manyObjects, options);
 ```
+
+`DuckDBFlags.isBulkImport(QueryOptions)` reports whether it is set.
+
+If a primary key is in fact already present the write fails on the primary key constraint rather
+than replacing silently: the flag is an assertion, not a hint.
 
 ### `io.quackjvm.cqengine.serialization.KryoPojoSerializer`
 

@@ -10,8 +10,8 @@ import com.googlecode.cqengine.query.option.QueryOptions;
  *
  * <pre>
  * QueryOptions options = new QueryOptions();
- * FlagsEnabled.enableFlags(options, DuckDBFlags.BULK_IMPORT);
- * collection.addAll(millionsOfObjects, options);
+ * FlagsEnabled.forQueryOptions(options).add(DuckDBFlags.BULK_IMPORT);
+ * collection.update(Collections.emptyList(), millionsOfObjects, options);
  * </pre>
  */
 public final class DuckDBFlags {

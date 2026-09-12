@@ -22,16 +22,18 @@ quackjvm is two Maven artifacts. Take only the one you need.
 <dependency>
     <groupId>io.github.bdarwin</groupId>
     <artifactId>quackjvm-core</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
 Add `quackjvm-cqengine` instead if you want the CQEngine plugin; it brings the core with it.
 
-While the artifacts are unpublished, build them into your local repository first:
+Gradle:
 
-```
-mvn -pl quackjvm-core,quackjvm-cqengine install -DskipTests
+```groovy
+implementation 'io.github.bdarwin:quackjvm-core:1.0.0'
+// or
+implementation 'io.github.bdarwin:quackjvm-cqengine:1.0.0'
 ```
 
 ## Core: objects as columns, queried with SQL
@@ -154,5 +156,13 @@ Working code: [`examples/src/main/java/CqEngineJoins.java`](../examples/src/main
 
 ## Next
 
-- [API overview](api-overview.md)
-- [examples/README.md](../examples/README.md) - every example, and how to run them
+- [Storing objects](storing-objects.md) — BLOB or columnar, and which types are supported
+- [Querying](querying.md) — what is pushed into SQL and what is not
+- [Joins across collections](joins.md) — `existsIn`, matched pairs, and arbitrary SQL
+- [Aggregates and projections](aggregates.md) — the biggest performance lever here
+- [Writing data](writing.md) — batching, `BULK_IMPORT`, and the streaming bulk writer
+- [Tuning](tuning.md) — start with `memoryLimit` and `optimize()`
+- [Troubleshooting](troubleshooting.md) — every error you are likely to see
+- [Migrating](migrating.md) — from on-heap CQEngine, or from its SQLite persistence
+- [API overview](api-overview.md) — class by class
+- [examples/README.md](../examples/README.md) — every example, and how to run them
