@@ -5,6 +5,8 @@ import org.duckdb.DuckDBConnection;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Deque;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -22,6 +24,8 @@ public final class ConnectionPool {
     private final int maxIdle;
     private final Deque<Connection> idle = new ConcurrentLinkedDeque<>();
     private final AtomicInteger idleCount = new AtomicInteger();
+    /** One statement cache per pooled connection, kept across borrows - that is the point of it. */
+    private final Map<Connection, StatementCache> statementCaches = new ConcurrentHashMap<>();
 
     public ConnectionPool(DuckDBConnection rootConnection, int maxIdle) {
         this.rootConnection = rootConnection;
@@ -43,11 +47,20 @@ public final class ConnectionPool {
         }
     }
 
+    /** The prepared-statement cache of a connection this pool handed out. */
+    StatementCache statementCacheFor(Connection connection) {
+        return statementCaches.computeIfAbsent(connection, StatementCache::new);
+    }
+
     /**
      * Returns a connection to the pool, rolling back anything the caller left uncommitted.
      * The connection is closed rather than pooled if the pool is full or the connection is broken.
      */
     public void release(Connection connection) {
+        StatementCache cache = statementCaches.get(connection);
+        if (cache != null) {
+            cache.releaseAll();
+        }
         try {
             if (connection.isClosed()) {
                 return;
@@ -64,18 +77,30 @@ public final class ConnectionPool {
             }
         }
         catch (SQLException e) {
-            Sql.closeQuietly(connection);
+            discard(connection);
             return;
+        }
+        discard(connection);
+    }
+
+    private void discard(Connection connection) {
+        StatementCache cache = statementCaches.remove(connection);
+        if (cache != null) {
+            cache.clear();
         }
         Sql.closeQuietly(connection);
     }
 
-    /** Closes every pooled connection. */
+    /** Closes every pooled connection, and the statements cached against them. */
     public void close() {
         Connection connection;
         while ((connection = idle.pollFirst()) != null) {
             idleCount.decrementAndGet();
-            Sql.closeQuietly(connection);
+            discard(connection);
         }
+        for (StatementCache cache : statementCaches.values()) {
+            cache.clear();
+        }
+        statementCaches.clear();
     }
 }

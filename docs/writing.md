@@ -1,14 +1,14 @@
 # Writing data
 
 There are four ways to get objects in, and the difference between the slowest and the fastest is
-about 1,400x per object. Picking the right one matters more here than anywhere else in quackjvm.
+about 750x per object. Picking the right one matters more here than anywhere else in quackjvm.
 
 | | per object | use when |
 |---|---|---|
-| `add(one)` | ~3.5 ms | genuinely one object at a time |
-| `addAll(batch)` | ~3.8 µs | you have a collection in hand |
+| `add(one)` | ~1.9 ms | genuinely one object at a time |
+| `addAll(batch)` | ~4.0 µs | you have a collection in hand |
 | `addAll` with `BULK_IMPORT` | ~3.0 µs | the objects are all new |
-| `DuckDBBulkWriter` | **~2.4 µs** | objects arrive as a stream |
+| `DuckDBBulkWriter` | **~2.5 µs** | objects arrive as a stream |
 
 ## `add` — one object
 
@@ -16,9 +16,11 @@ about 1,400x per object. Picking the right one matters more here than anywhere e
 cars.add(new Car(1, "Ford", "Focus", BLUE, 15_000.0));
 ```
 
-This works, and it is the slowest thing in the library: around **3.5 ms**, against 0.9 µs for an
-on-heap collection. Every single-object write is a transaction against a columnar store, which is
-the workload columnar stores are worst at.
+This works, and it is the slowest thing in the library: around **1.9 ms**, against 4.8 µs for an
+on-heap collection. Every single-object write is its own statement and its own commit against a
+columnar store, which is the workload columnar stores are worst at. Most of what remains is DuckDB
+itself: the single `INSERT OR IGNORE` that keeps `add` idempotent costs about 550 µs on its own,
+five times what a plain `INSERT` costs, because of the primary-key conflict check.
 
 If your application adds objects one at a time in a hot loop, batch them yourself — even batches of
 a hundred change the picture completely.
@@ -87,7 +89,7 @@ try (DuckDBPersistence<Event, Long> persistence = DuckDBPersistence.builder(Even
 }
 ```
 
-Loading a million objects this way took **2.4 s**, against 3.8 s for `addAll` with `BULK_IMPORT`,
+Loading a million objects this way took **2.5 s**, against 4.0 s for `addAll` with `BULK_IMPORT`,
 and produced a **30 MB** file against 36 MB — appending straight into the target tables compresses
 into better row groups than staging rows and copying them. Memory stays bounded no matter how many
 objects pass through.

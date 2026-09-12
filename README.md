@@ -70,7 +70,7 @@ itself: a collection that costs almost no heap, and **joins across collections**
 // before
 IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>();
 
-// after - same queries, 7x smaller process, 300x smaller heap
+// after - same queries, 9x smaller process, 300x smaller heap
 IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>(
         DuckDBPersistence.onPrimaryKey(Car.CAR_ID));
 ```
@@ -109,20 +109,20 @@ plugin replaces.
 
 | storage | process RSS | JVM heap | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
 |---|---|---|---|---|---|---|---|---|---|---|
-| CQEngine on-heap | 1,361 MB | 861 MB | 2.7 s | **12 µs** | **40 µs** | **3.4 µs** | **1.2 ms** | **186 ms** | **4.1 µs** | – |
-| CQEngine SQLite memory | 372 MB | 3 MB | 8.7 s | 92 µs | 793 µs | 6.3 ms | 82.4 ms | 744 ms | 183 µs | – |
-| DuckDB memory, BLOB | **186 MB** | 3 MB | 5.9 s | 625 µs | 3.0 ms | 1.8 ms | 21.6 ms | 632 ms | 4.1 ms | 3.18 µs |
-| DuckDB memory, columnar | 213 MB | 3 MB | 4.9 s | 728 µs | 5.4 ms | 1.8 ms | **15.9 ms** | **353 ms** | 6.2 ms | 3.02 µs |
+| CQEngine on-heap | 1,350 MB | 861 MB | **2.7 s** | **7.0 µs** | **39 µs** | **1.6 µs** | **1.0 ms** | 195 ms | **4.8 µs** | – |
+| CQEngine SQLite memory | 379 MB | 3 MB | 8.7 s | 88 µs | 791 µs | 6.2 ms | 85.4 ms | 741 ms | 165 µs | – |
+| DuckDB memory, BLOB | **208 MB** | 3 MB | 4.2 s | 609 µs | 3.1 ms | 1.8 ms | 17.6 ms | 614 ms | 1.7 ms | 3.05 µs |
+| DuckDB memory, columnar | 217 MB | 3 MB | 3.6 s | 707 µs | 4.8 ms | 1.8 ms | 18.1 ms | **352 ms** | 2.4 ms | 3.07 µs |
 
 ### Table 2 — on disk: CQEngine's SQLite persistence vs DuckDB file persistence
 
 | storage | process RSS | on disk | load | pk lookup | narrow range | count only | equal ~2% | iterate all | `add()` | bulkWriter |
 |---|---|---|---|---|---|---|---|---|---|---|
-| _CQEngine on-heap (baseline)_ | _1,361 MB_ | _–_ | _2.7 s_ | _12 µs_ | _40 µs_ | _3.4 µs_ | _1.2 ms_ | _186 ms_ | _4.1 µs_ | _–_ |
-| CQEngine SQLite file | **87 MB** | 225 MB | 12.2 s | **564 µs** | **1.9 ms** | 7.7 ms | 98.2 ms | 757 ms | **1.1 ms** | – |
-| DuckDB file, BLOB | 134 MB | 51 MB | 6.4 s | 580 µs | 4.9 ms | **1.0 ms** | 21.5 ms | 658 ms | 3.6 ms | 2.61 µs |
-| DuckDB file, columnar | 132 MB | **36 MB** | **5.3 s** | 668 µs | 4.3 ms | 1.3 ms | **12.6 ms** | **333 ms** | 5.8 ms | **2.37 µs** |
-| DuckDB file, col + ART | 130 MB | 133 MB | 6.7 s | 669 µs | 3.8 ms | 1.1 ms | 12.4 ms | 337 ms | 5.8 ms | 3.18 µs |
+| _CQEngine on-heap (baseline)_ | _1,350 MB_ | _–_ | _2.7 s_ | _7.0 µs_ | _39 µs_ | _1.6 µs_ | _1.0 ms_ | _195 ms_ | _4.8 µs_ | _–_ |
+| CQEngine SQLite file | 102 MB | 225 MB | 11.5 s | **535 µs** | **1.3 ms** | 7.1 ms | 98.6 ms | 768 ms | **1.1 ms** | – |
+| DuckDB file, BLOB | 138 MB | 51 MB | 4.7 s | 631 µs | 4.9 ms | 1.1 ms | 20.9 ms | 653 ms | 1.3 ms | 2.63 µs |
+| DuckDB file, columnar | 145 MB | **36 MB** | **4.0 s** | 692 µs | 3.8 ms | **1.0 ms** | **13.8 ms** | 343 ms | 1.9 ms | **2.52 µs** |
+| DuckDB file, col + ART | **127 MB** | 133 MB | 5.4 s | 704 µs | 3.8 ms | 1.2 ms | 15.2 ms | **338 ms** | 2.4 ms | 3.29 µs |
 
 On-heap CQEngine is repeated in both tables in italics. It is the thing being replaced, so it is
 the row every other row should be read against - the SQLite comparison only says which *database*
@@ -130,8 +130,8 @@ is the better one, not whether moving off the heap is worth it at all.
 
 ### Reading them
 
-**Against on-heap CQEngine, this is a memory trade, not a speed one.** 1,388 MB of process memory
-becomes 191 MB, and 862 MB of Java heap becomes 3 MB - the garbage collector stops having a million
+**Against on-heap CQEngine, this is a memory trade, not a speed one.** 1,350 MB of process memory
+becomes 145 MB, and 861 MB of Java heap becomes 3 MB - the garbage collector stops having a million
 objects to walk. Every individual query gets slower, most of them by two orders of magnitude in
 relative terms and by a fraction of a millisecond in absolute ones. Take it when memory is your
 constraint, not when latency is.
@@ -142,17 +142,17 @@ CQEngine; only the storage differs:
 
 | | CQEngine on-heap | CQEngine SQLite | DuckDB (columnar) |
 |---|---|---|---|
-| process memory | 1,361 MB | **87 MB** | 132 MB |
+| process memory | 1,350 MB | **102 MB** | 145 MB |
 | Java heap | 861 MB | **3 MB** | **3 MB** |
 | on disk | – | 225 MB | **36 MB** |
-| loading 1M objects | **2.7 s** | 12.2 s | 5.3 s |
-| point lookup by key | **12 µs** | **564 µs** | 668 µs |
-| narrow range | **40 µs** | **1.9 ms** | 4.3 ms |
-| count matches | **3.4 µs** | 7.7 ms | 1.3 ms |
-| query returning 2% | **1.2 ms** | 98.2 ms | 12.6 ms |
-| iterate everything | **186 ms** | 757 ms | 333 ms |
-| single `add()` | **4.1 µs** | 1.1 ms | 5.8 ms |
-| bulk write per object | 3.1 µs | – | **2.4 µs** |
+| loading 1M objects | **2.7 s** | 11.5 s | 4.0 s |
+| point lookup by key | **7.0 µs** | **535 µs** | 692 µs |
+| narrow range | **39 µs** | **1.3 ms** | 3.8 ms |
+| count matches | **1.6 µs** | 7.1 ms | 1.0 ms |
+| query returning 2% | **1.0 ms** | 98.6 ms | 13.8 ms |
+| iterate everything | **195 ms** | 768 ms | 343 ms |
+| single `add()` | **4.8 µs** | **1.1 ms** | 1.9 ms |
+| bulk write per object | 3.1 µs | – | **2.5 µs** |
 | join 200k to 50k | 0.373 s | – | **0.270 s** |
 
 Three things that table says:
@@ -163,15 +163,15 @@ Three things that table says:
 2. **Two of the rows go the other way**, and they are the reason this plugin exists: bulk writing
    is faster than the heap, and a join across collections is faster than the heap - the only query
    shape where a database beats pointer-chasing, because it is what a database is built for.
-3. **Between the two databases, the split is B-tree versus columnar.** SQLite wins point lookups,
-   narrow ranges and single writes; DuckDB wins counts (7.7x), large result sets (2.2x), disk
-   footprint (6.3x) and loading (2.4x). If you were moving off the heap anyway and your workload is
-   mostly point lookups, CQEngine's existing SQLite persistence is the better tool - it just cannot
-   join, and its file is six times larger.
+3. **Between the two databases, the split is B-tree versus columnar.** SQLite wins narrow ranges
+   and is level on point lookups and single writes; DuckDB wins counts (7.1x), large result sets
+   (7.1x), disk footprint (6.3x) and loading (2.9x). If you were moving off the heap anyway and
+   your workload is mostly narrow range scans, CQEngine's existing SQLite persistence is the better
+   tool - it just cannot join, and its file is six times larger.
 
 In memory the same split holds against CQEngine's off-heap SQLite: DuckDB uses **half the resident
-memory** (191 MB vs 379 MB) and is 5x faster at materialising a result set, while SQLite answers a
-point lookup in 96 µs against DuckDB's 601 µs.
+memory** (208 MB vs 379 MB) and is 4.8x faster at materialising a result set, while SQLite answers
+a point lookup in 88 µs against DuckDB's 609 µs.
 
 **Two CQEngine limitations worth knowing**, both hit while producing these tables:
 

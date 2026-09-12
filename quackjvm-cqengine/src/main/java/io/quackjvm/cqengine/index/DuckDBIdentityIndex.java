@@ -197,6 +197,13 @@ public class DuckDBIdentityIndex<A extends Comparable<A>, O> extends SQLiteIdent
     @Override
     public boolean addAll(ObjectSet<O> objectSet, QueryOptions queryOptions) {
         try {
+            // The object store has already written these objects through this index; the index
+            // engine is now fanning the same objects out over every index and has reached this one.
+            // Repeating the write would cost two more statements and change nothing.
+            Boolean alreadyWritten = WriteHints.consumeObjectTableWritten(queryOptions);
+            if (alreadyWritten != null) {
+                return alreadyWritten;
+            }
             ConnectionManager connectionManager = connectionManager(queryOptions);
             if (!connectionManager.isApplyUpdateForIndexEnabled(this)) {
                 return false;
@@ -217,6 +224,12 @@ public class DuckDBIdentityIndex<A extends Comparable<A>, O> extends SQLiteIdent
     @Override
     public boolean removeAll(ObjectSet<O> objectSet, QueryOptions queryOptions) {
         try {
+            // As in addAll: the object store has already deleted these keys through this index.
+            Boolean alreadyDeleted = WriteHints.consumeObjectTableDeleted(queryOptions);
+            if (alreadyDeleted != null) {
+                WriteHints.clear(queryOptions);
+                return alreadyDeleted;
+            }
             ConnectionManager connectionManager = connectionManager(queryOptions);
             if (!connectionManager.isApplyUpdateForIndexEnabled(this)) {
                 return false;

@@ -81,7 +81,19 @@ public final class Connections {
             if (method.getDeclaringClass() == Unwrappable.class) {
                 return target;
             }
-            boolean isClose = "close".equals(method.getName()) && (args == null || args.length == 0);
+            String name = method.getName();
+            if ("prepareStatement".equals(name) && args != null && args.length == 1
+                    && args[0] instanceof String sql) {
+                // Served from the connection's cache, so that a statement repeated across requests
+                // is prepared once. Closing the returned statement returns it to that cache.
+                return pool.statementCacheFor(target).prepare(sql);
+            }
+            if ("createStatement".equals(name)) {
+                // Every DDL statement goes through here, and DuckDB binds a prepared statement to
+                // the catalog as it was when prepared, so the cached statements are now suspect.
+                pool.statementCacheFor(target).clear();
+            }
+            boolean isClose = "close".equals(name) && (args == null || args.length == 0);
             if (isClose) {
                 if (!released) {
                     released = true;

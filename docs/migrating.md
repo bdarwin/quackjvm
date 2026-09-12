@@ -33,17 +33,17 @@ Be clear-eyed about this. On a million objects:
 
 | | CQEngine on-heap | DuckDB (columnar file) |
 |---|---|---|
-| process memory | 1,361 MB | **132 MB** |
+| process memory | 1,350 MB | **145 MB** |
 | Java heap | 861 MB | **3 MB** |
 | on disk | – | **36 MB** |
-| loading 1M objects | **2.7 s** | 5.3 s |
-| point lookup by key | **12 µs** | 668 µs |
-| narrow range | **40 µs** | 4.3 ms |
-| count matches | **3.4 µs** | 1.3 ms |
-| query returning 2% | **1.2 ms** | 12.6 ms |
-| iterate everything | **186 ms** | 333 ms |
-| single `add()` | **4.1 µs** | 5.8 ms |
-| bulk write per object | 3.1 µs | **2.4 µs** |
+| loading 1M objects | **2.7 s** | 4.0 s |
+| point lookup by key | **7.0 µs** | 692 µs |
+| narrow range | **39 µs** | 3.8 ms |
+| count matches | **1.6 µs** | 1.0 ms |
+| query returning 2% | **1.0 ms** | 13.8 ms |
+| iterate everything | **195 ms** | 343 ms |
+| single `add()` | **4.8 µs** | 1.9 ms |
+| bulk write per object | 3.1 µs | **2.5 µs** |
 | join 200k to 50k | 0.373 s | **0.270 s** |
 
 **On-heap CQEngine wins every single-collection query, and it is not close** — between 100x and
@@ -99,22 +99,23 @@ your result sets. The mapping is one-to-one:
 
 | | CQEngine SQLite (file) | DuckDB (columnar file) |
 |---|---|---|
-| process memory | **87 MB** | 132 MB |
+| process memory | **102 MB** | 145 MB |
 | on disk | 225 MB | **36 MB** |
-| loading 1M objects | 12.2 s | **5.3 s** |
-| point lookup by key | **564 µs** | 668 µs |
-| narrow range | **1.9 ms** | 4.3 ms |
-| count matches | 7.7 ms | **1.3 ms** |
-| query returning 2% | 98.2 ms | **12.6 ms** |
-| iterate everything | 757 ms | **333 ms** |
-| single `add()` | **1.1 ms** | 5.8 ms |
+| loading 1M objects | 11.5 s | **4.0 s** |
+| point lookup by key | **535 µs** | 692 µs |
+| narrow range | **1.3 ms** | 3.8 ms |
+| count matches | 7.1 ms | **1.0 ms** |
+| query returning 2% | 98.6 ms | **13.8 ms** |
+| iterate everything | 768 ms | **343 ms** |
+| single `add()` | **1.1 ms** | 1.9 ms |
 | joins across collections | not possible | **yes** |
 
-The split is B-tree versus columnar. SQLite wins point lookups, narrow ranges and single writes;
-DuckDB wins counts (7.7x), large result sets (2.2x), disk footprint (6.3x) and loading (2.4x).
+The split is B-tree versus columnar. SQLite wins narrow ranges and is level on point lookups and
+single writes; DuckDB wins counts (7.1x), large result sets (7.1x), disk footprint (6.3x) and
+loading (2.9x).
 
-**If your workload is mostly point lookups and you do not need joins, CQEngine's SQLite persistence
-is the better tool.** It just cannot join, and its file is six times larger.
+**If your workload is mostly narrow range scans and you do not need joins, CQEngine's SQLite
+persistence is the better tool.** It just cannot join, and its file is six times larger.
 
 ### Two CQEngine bugs you stop having
 

@@ -17,7 +17,7 @@ collection that cost you a gigabyte of heap costs three megabytes.
 
 <div class="stats" markdown>
 <div class="stat"><span class="n">861&nbsp;MB&nbsp;→&nbsp;3&nbsp;MB</span><span class="l">Java heap, 1M objects</span></div>
-<div class="stat"><span class="n">1,361&nbsp;MB&nbsp;→&nbsp;132&nbsp;MB</span><span class="l">process memory</span></div>
+<div class="stat"><span class="n">1,350&nbsp;MB&nbsp;→&nbsp;145&nbsp;MB</span><span class="l">process memory</span></div>
 <div class="stat"><span class="n">129&nbsp;s&nbsp;→&nbsp;0.27&nbsp;s</span><span class="l">join across collections</span></div>
 <div class="stat"><span class="n">44×</span><span class="l">aggregate vs. rebuilding objects</span></div>
 </div>
@@ -154,17 +154,17 @@ is process RSS, because DuckDB and SQLite both keep their data in native memory 
 
 | | CQEngine on-heap | CQEngine SQLite | quackjvm (columnar) |
 |---|---|---|---|
-| process memory | 1,361 MB | **87 MB** | 132 MB |
+| process memory | 1,350 MB | **102 MB** | 145 MB |
 | Java heap | 861 MB | **3 MB** | **3 MB** |
 | on disk | – | 225 MB | **36 MB** |
-| loading 1M objects | **2.7 s** | 12.2 s | 5.3 s |
-| point lookup by key | **12 µs** | **564 µs** | 668 µs |
-| narrow range | **40 µs** | **1.9 ms** | 4.3 ms |
-| count matches | **3.4 µs** | 7.7 ms | 1.3 ms |
-| query returning 2% | **1.2 ms** | 98.2 ms | 12.6 ms |
-| iterate everything | **186 ms** | 757 ms | 333 ms |
-| single `add()` | **4.1 µs** | 1.1 ms | 5.8 ms |
-| bulk write per object | 3.1 µs | – | **2.4 µs** |
+| loading 1M objects | **2.7 s** | 11.5 s | 4.0 s |
+| point lookup by key | **7.0 µs** | **535 µs** | 692 µs |
+| narrow range | **39 µs** | **1.3 ms** | 3.8 ms |
+| count matches | **1.6 µs** | 7.1 ms | 1.0 ms |
+| query returning 2% | **1.0 ms** | 98.6 ms | 13.8 ms |
+| iterate everything | **195 ms** | 768 ms | 343 ms |
+| single `add()` | **4.8 µs** | **1.1 ms** | 1.9 ms |
+| bulk write per object | 3.1 µs | – | **2.5 µs** |
 | join 200k to 50k | 0.373 s | – | **0.270 s** |
 
 Two rows go the other way, and they are why this exists: **bulk writing is faster than the heap,

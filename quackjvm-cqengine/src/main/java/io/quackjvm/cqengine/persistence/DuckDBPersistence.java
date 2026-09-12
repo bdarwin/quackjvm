@@ -167,7 +167,7 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
 
     @Override
     public ObjectStore<O> createObjectStore() {
-        return new SQLiteObjectStore<>(this);
+        return new DuckDBObjectStore<>(this);
     }
 
     @Override
@@ -210,7 +210,7 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
 
     @Override
     public Connection getConnection(Index<?> index, QueryOptions queryOptions) {
-        return database.borrowConnection(isFlagEnabled(queryOptions, READ_REQUEST));
+        return io.quackjvm.core.duckdb.SqlTrace.wrap(database.borrowConnection(isFlagEnabled(queryOptions, READ_REQUEST)));
     }
 
     /** An unmanaged connection for maintenance operations, which the caller must close. */

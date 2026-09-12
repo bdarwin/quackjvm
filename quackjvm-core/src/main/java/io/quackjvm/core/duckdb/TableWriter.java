@@ -199,17 +199,7 @@ public final class TableWriter {
         sql.append("INTO ").append(Sql.quote(tableName)).append(' ').append(columnList)
                 .append(" VALUES ").append(Sql.placeholders(columns.size()));
         try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
-            for (Object[] row : rows) {
-                for (int i = 0; i < row.length; i++) {
-                    DuckDBTypes.bind(statement, i + 1, row[i]);
-                }
-                statement.addBatch();
-            }
-            long written = 0;
-            for (int updateCount : statement.executeBatch()) {
-                written += Math.max(updateCount, 0);
-            }
-            return new WriteResult(written, replaced);
+            return new WriteResult(bindAndExecute(statement, rows), replaced);
         }
         catch (SQLException e) {
             throw new IllegalStateException("Failed to insert " + rows.size() + " rows into " + tableName, e);
@@ -235,21 +225,39 @@ public final class TableWriter {
         return new WriteResult(rows.size(), rows.size() - inserted);
     }
 
+    /**
+     * Binds and runs the rows, and reports how many were written.
+     *
+     * <p>A single row - which is what {@code collection.add(object)} produces - is executed
+     * directly rather than through the batch API, which costs DuckDB about 130 microseconds more
+     * per call and buys nothing below a handful of rows.</p>
+     */
+    private static long bindAndExecute(PreparedStatement statement, List<Object[]> rows) throws SQLException {
+        if (rows.size() == 1) {
+            Object[] row = rows.get(0);
+            for (int i = 0; i < row.length; i++) {
+                DuckDBTypes.bind(statement, i + 1, row[i]);
+            }
+            return Math.max(statement.executeUpdate(), 0);
+        }
+        for (Object[] row : rows) {
+            for (int i = 0; i < row.length; i++) {
+                DuckDBTypes.bind(statement, i + 1, row[i]);
+            }
+            statement.addBatch();
+        }
+        long written = 0;
+        for (int updateCount : statement.executeBatch()) {
+            written += Math.max(updateCount, 0);
+        }
+        return written;
+    }
+
     private long executeInsertBatch(Connection connection, List<Object[]> rows, String insertPrefix) {
         String sql = insertPrefix + Sql.quote(tableName) + ' ' + columnList
                 + " VALUES " + Sql.placeholders(columns.size());
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            for (Object[] row : rows) {
-                for (int i = 0; i < row.length; i++) {
-                    DuckDBTypes.bind(statement, i + 1, row[i]);
-                }
-                statement.addBatch();
-            }
-            long written = 0;
-            for (int updateCount : statement.executeBatch()) {
-                written += Math.max(updateCount, 0);
-            }
-            return written;
+            return bindAndExecute(statement, rows);
         }
         catch (SQLException e) {
             throw new IllegalStateException("Failed to insert " + rows.size() + " rows into " + tableName, e);
