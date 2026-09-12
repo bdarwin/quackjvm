@@ -47,7 +47,7 @@ fails here.
 ### `io.quackjvm.core.duckdb.TableWriter`
 
 Writes rows into a table, choosing its strategy by batch size: batches at or below
-`DEFAULT_APPENDER_THRESHOLD` (1024) go through a JDBC batch of prepared inserts; larger ones are
+`DEFAULT_APPENDER_THRESHOLD` (16) go through a JDBC batch of prepared inserts; larger ones are
 streamed through a per-connection temporary staging table using DuckDB's Appender, in chunks of
 `DEFAULT_STAGING_CHUNK_ROWS` (131,072) so that memory stays bounded.
 

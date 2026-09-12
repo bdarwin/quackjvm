@@ -12,7 +12,7 @@ DuckDBPersistence.builder(Car.CAR_ID)
         .columnarLayout(ColumnarLayout.ofRecord(Car.class))
         .memoryLimit("512MB")           // cap DuckDB's buffer pool - read this one
         .objectCacheSize(50_000)        // bounded heap cache of hot objects; off by default
-        .appenderThreshold(1024)        // batch size above which the Appender is used
+        .appenderThreshold(16)          // batch size above which the Appender is used
         .stagingChunkRows(131_072)      // rows staged at a time during a bulk load
         .maxPooledConnections(32)       // connections kept open for reuse between requests
         .serializeWrites(true)          // serialise writers; readers are never blocked
@@ -29,7 +29,7 @@ IndexedCollection<Car> cars = database.collection(Car.CAR_ID)
         .name("car")
         .columnarLayout(ColumnarLayout.ofRecord(Car.class))
         .objectCacheSize(50_000)
-        .appenderThreshold(1024)
+        .appenderThreshold(16)
         .stagingChunkRows(131_072)
         .build();
 ```

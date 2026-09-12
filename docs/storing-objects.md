@@ -45,8 +45,8 @@ Measured on a million objects of eight fields:
 | | BLOB | columnar |
 |---|---|---|
 | on disk | 51 MB | **36 MB** |
-| iterate everything | 653 ms | **343 ms** |
-| query returning 2% of the collection | 20.9 ms | **13.8 ms** |
+| iterate everything | 648 ms | **339 ms** |
+| query returning 2% of the collection | 20.9 ms | **13.2 ms** |
 | works with any field type | **yes** | scalar fields only |
 | queryable as SQL | no | **yes** |
 

@@ -17,7 +17,7 @@ collection that cost you a gigabyte of heap costs three megabytes.
 
 <div class="stats" markdown>
 <div class="stat"><span class="n">861&nbsp;MB&nbsp;→&nbsp;3&nbsp;MB</span><span class="l">Java heap, 1M objects</span></div>
-<div class="stat"><span class="n">1,350&nbsp;MB&nbsp;→&nbsp;145&nbsp;MB</span><span class="l">process memory</span></div>
+<div class="stat"><span class="n">1,387&nbsp;MB&nbsp;→&nbsp;145&nbsp;MB</span><span class="l">process memory</span></div>
 <div class="stat"><span class="n">129&nbsp;s&nbsp;→&nbsp;0.27&nbsp;s</span><span class="l">join across collections</span></div>
 <div class="stat"><span class="n">44×</span><span class="l">aggregate vs. rebuilding objects</span></div>
 </div>
@@ -144,8 +144,8 @@ Measured against `duckdb_jdbc` 1.4.1, and the reason this project exists:
 
 !!! warning "This is a memory trade, not a speed one"
 
-    On-heap CQEngine wins every single-collection query, and it is not close — between 100× and
-    3,000× on the small ones. No amount of tuning changes that: a pointer dereference beats a
+    On-heap CQEngine wins every single-collection query, and it is not close — between 80× and
+    250× on the small ones. No amount of tuning changes that: a pointer dereference beats a
     database query. **Take this when memory is your constraint, not when latency is.**
 
 1,000,000 objects, three indexed attributes, JDK 25 / Apple Silicon, `memory_limit=256MB`. Memory
@@ -154,17 +154,17 @@ is process RSS, because DuckDB and SQLite both keep their data in native memory 
 
 | | CQEngine on-heap | CQEngine SQLite | quackjvm (columnar) |
 |---|---|---|---|
-| process memory | 1,350 MB | **102 MB** | 145 MB |
-| Java heap | 861 MB | **3 MB** | **3 MB** |
+| process memory | 1,387 MB | **88 MB** | 145 MB |
+| Java heap | 862 MB | **3 MB** | **3 MB** |
 | on disk | – | 225 MB | **36 MB** |
-| loading 1M objects | **2.7 s** | 11.5 s | 4.0 s |
-| point lookup by key | **7.0 µs** | **535 µs** | 692 µs |
-| narrow range | **39 µs** | **1.3 ms** | 3.8 ms |
-| count matches | **1.6 µs** | 7.1 ms | 1.0 ms |
-| query returning 2% | **1.0 ms** | 98.6 ms | 13.8 ms |
-| iterate everything | **195 ms** | 768 ms | 343 ms |
-| single `add()` | **4.8 µs** | **1.1 ms** | 1.9 ms |
-| bulk write per object | 3.1 µs | – | **2.5 µs** |
+| loading 1M objects | **2.7 s** | 11.6 s | 4.1 s |
+| point lookup by key | **7.2 µs** | 546 µs | **556 µs** |
+| narrow range | **39 µs** | **1.4 ms** | 3.2 ms |
+| count matches | **3.6 µs** | 7.1 ms | 906 µs |
+| query returning 2% | **1.1 ms** | 98.6 ms | 13.2 ms |
+| iterate everything | **210 ms** | 751 ms | 339 ms |
+| single `add()` | **4.6 µs** | 1.1 ms | **937 µs** |
+| bulk write per object | 3.1 µs | – | **2.3 µs** |
 | join 200k to 50k | 0.373 s | – | **0.270 s** |
 
 Two rows go the other way, and they are why this exists: **bulk writing is faster than the heap,

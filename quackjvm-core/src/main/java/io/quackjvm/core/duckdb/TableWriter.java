@@ -28,8 +28,17 @@ import java.util.Set;
  */
 public final class TableWriter {
 
-    /** Batches at or below this size use prepared statements rather than the Appender. */
-    public static final int DEFAULT_APPENDER_THRESHOLD = 1024;
+    /**
+     * Batches at or below this size use prepared statements rather than the Appender.
+     *
+     * <p>Sixteen, because that is where the two cross over. Measured on a columnar file collection
+     * with three indexes, per object written: at a batch of 8 prepared statements win (380 us
+     * against 473), at 12 they are level, and past that the Appender pulls away - 2.6x at 32,
+     * 3.7x at 48, 37x at 512. The Appender pays a fixed cost per batch to set up a staging table
+     * and then writes rows for almost nothing, so the only question is how many rows share that
+     * cost.</p>
+     */
+    public static final int DEFAULT_APPENDER_THRESHOLD = 16;
 
     /**
      * How many rows are staged before being moved into the target table.

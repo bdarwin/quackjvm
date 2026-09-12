@@ -1,14 +1,14 @@
 # Writing data
 
 There are four ways to get objects in, and the difference between the slowest and the fastest is
-about 750x per object. Picking the right one matters more here than anywhere else in quackjvm.
+about 400x per object. Picking the right one matters more here than anywhere else in quackjvm.
 
 | | per object | use when |
 |---|---|---|
-| `add(one)` | ~1.9 ms | genuinely one object at a time |
+| `add(one)` | ~937 µs | genuinely one object at a time |
 | `addAll(batch)` | ~4.0 µs | you have a collection in hand |
 | `addAll` with `BULK_IMPORT` | ~3.0 µs | the objects are all new |
-| `DuckDBBulkWriter` | **~2.5 µs** | objects arrive as a stream |
+| `DuckDBBulkWriter` | **~2.3 µs** | objects arrive as a stream |
 
 ## `add` — one object
 
@@ -16,11 +16,14 @@ about 750x per object. Picking the right one matters more here than anywhere els
 cars.add(new Car(1, "Ford", "Focus", BLUE, 15_000.0));
 ```
 
-This works, and it is the slowest thing in the library: around **1.9 ms**, against 4.8 µs for an
-on-heap collection. Every single-object write is its own statement and its own commit against a
-columnar store, which is the workload columnar stores are worst at. Most of what remains is DuckDB
-itself: the single `INSERT OR IGNORE` that keeps `add` idempotent costs about 550 µs on its own,
-five times what a plain `INSERT` costs, because of the primary-key conflict check.
+This works, and it is the slowest thing in the library: around **937 µs**, against 4.6 µs for an
+on-heap collection. Every single-object write is its own set of statements and its own commit
+against a columnar store, which is the workload columnar stores are worst at.
+
+Essentially all of what remains is DuckDB's own per-statement cost — a delete at 200 µs, an insert
+at 116 µs, a commit at 92 µs, and the same again for each index. There is no tuning below that
+floor; the only way past it is to write more than one object per statement, which is what the rest
+of this page is about.
 
 If your application adds objects one at a time in a hot loop, batch them yourself — even batches of
 a hundred change the picture completely.
@@ -31,12 +34,31 @@ a hundred change the picture completely.
 cars.addAll(listOfCars);
 ```
 
-Any `addAll` of more than **1,024** objects (`appenderThreshold`) is automatically streamed through
+Any `addAll` of more than **16** objects (`appenderThreshold`) is automatically streamed through
 DuckDB's Appender rather than inserted row by row, in chunks of `stagingChunkRows` (131,072 by
 default) so that a large load does not need memory proportional to the batch.
 
 `addAll` is idempotent: an object whose primary key already exists replaces the stored one. That
 costs a delete-before-insert, which is where the next option comes in.
+
+**Batch size is the single biggest lever on write throughput.** Measured on a columnar file
+collection with three indexes and 200,000 objects already stored:
+
+| objects per `addAll` | per object |
+|---|---|
+| 1 | 919 µs |
+| 10 | 395 µs |
+| 100 | **44 µs** |
+| 1,000 | **6.9 µs** |
+| 10,000 | **2.0 µs** |
+
+The cliff between 10 and 100 is the Appender taking over from prepared statements. Below the
+threshold each row is its own statement; above it, rows are streamed into a staging table for
+almost nothing and moved across in one set-based statement. A batch of a thousand is faster per
+object than adding to an on-heap CQEngine collection.
+
+If your objects arrive one at a time, **collect them and write them in batches**. A hundred at a
+time already gets you 95% of the available win.
 
 ## `BULK_IMPORT` — a batch you know is new
 
@@ -89,7 +111,7 @@ try (DuckDBPersistence<Event, Long> persistence = DuckDBPersistence.builder(Even
 }
 ```
 
-Loading a million objects this way took **2.5 s**, against 4.0 s for `addAll` with `BULK_IMPORT`,
+Loading a million objects this way took **2.3 s**, against 4.1 s for `addAll` with `BULK_IMPORT`,
 and produced a **30 MB** file against 36 MB — appending straight into the target tables compresses
 into better row groups than staging rows and copying them. Memory stays bounded no matter how many
 objects pass through.

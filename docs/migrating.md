@@ -33,22 +33,22 @@ Be clear-eyed about this. On a million objects:
 
 | | CQEngine on-heap | DuckDB (columnar file) |
 |---|---|---|
-| process memory | 1,350 MB | **145 MB** |
-| Java heap | 861 MB | **3 MB** |
+| process memory | 1,387 MB | **145 MB** |
+| Java heap | 862 MB | **3 MB** |
 | on disk | – | **36 MB** |
-| loading 1M objects | **2.7 s** | 4.0 s |
-| point lookup by key | **7.0 µs** | 692 µs |
-| narrow range | **39 µs** | 3.8 ms |
-| count matches | **1.6 µs** | 1.0 ms |
-| query returning 2% | **1.0 ms** | 13.8 ms |
-| iterate everything | **195 ms** | 343 ms |
-| single `add()` | **4.8 µs** | 1.9 ms |
-| bulk write per object | 3.1 µs | **2.5 µs** |
+| loading 1M objects | **2.7 s** | 4.1 s |
+| point lookup by key | **7.2 µs** | 556 µs |
+| narrow range | **39 µs** | 3.2 ms |
+| count matches | **3.6 µs** | 906 µs |
+| query returning 2% | **1.1 ms** | 13.2 ms |
+| iterate everything | **210 ms** | 339 ms |
+| single `add()` | **4.6 µs** | 937 µs |
+| bulk write per object | 3.1 µs | **2.3 µs** |
 | join 200k to 50k | 0.373 s | **0.270 s** |
 
-**On-heap CQEngine wins every single-collection query, and it is not close** — between 100x and
-3,000x on the small ones. No amount of tuning changes that; a pointer dereference beats a database
-query. What you get back is 861 MB of Java heap that the garbage collector no longer walks, a 36 MB
+**On-heap CQEngine wins every single-collection query, and it is not close** — between 80x and
+250x on the small ones. No amount of tuning changes that; a pointer dereference beats a database
+query. What you get back is 862 MB of Java heap that the garbage collector no longer walks, a 36 MB
 file instead of 1.4 GB of process memory, joins across collections, and the whole of SQL.
 
 **Take this when memory is your constraint, not when latency is.** If your p99 is dominated by many
@@ -99,23 +99,24 @@ your result sets. The mapping is one-to-one:
 
 | | CQEngine SQLite (file) | DuckDB (columnar file) |
 |---|---|---|
-| process memory | **102 MB** | 145 MB |
+| process memory | **88 MB** | 145 MB |
 | on disk | 225 MB | **36 MB** |
-| loading 1M objects | 11.5 s | **4.0 s** |
-| point lookup by key | **535 µs** | 692 µs |
-| narrow range | **1.3 ms** | 3.8 ms |
-| count matches | 7.1 ms | **1.0 ms** |
-| query returning 2% | 98.6 ms | **13.8 ms** |
-| iterate everything | 768 ms | **343 ms** |
-| single `add()` | **1.1 ms** | 1.9 ms |
+| loading 1M objects | 11.6 s | **4.1 s** |
+| point lookup by key | 546 µs | **556 µs** |
+| narrow range | **1.4 ms** | 3.2 ms |
+| count matches | 7.1 ms | **906 µs** |
+| query returning 2% | 98.6 ms | **13.2 ms** |
+| iterate everything | 751 ms | **339 ms** |
+| single `add()` | 1.1 ms | **937 µs** |
 | joins across collections | not possible | **yes** |
 
-The split is B-tree versus columnar. SQLite wins narrow ranges and is level on point lookups and
-single writes; DuckDB wins counts (7.1x), large result sets (7.1x), disk footprint (6.3x) and
-loading (2.9x).
+DuckDB is now ahead on almost everything: counts (7.8x), large result sets (7.5x), iteration
+(2.2x), disk footprint (6.3x), loading (2.8x) and single writes (1.2x), and level on point lookups.
+SQLite keeps two columns — a narrow range scan, where a B-tree descends while a columnar index
+table is scanned, and resident memory.
 
-**If your workload is mostly narrow range scans and you do not need joins, CQEngine's SQLite
-persistence is the better tool.** It just cannot join, and its file is six times larger.
+**Unless narrow range scans dominate your workload, there is little reason left to stay on
+CQEngine's SQLite persistence** — and it cannot join.
 
 ### Two CQEngine bugs you stop having
 

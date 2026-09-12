@@ -127,14 +127,14 @@ execution inside DuckDB, not JDBC overhead. Against on-heap CQEngine, on a milli
 
 | | on-heap | DuckDB (columnar file) |
 |---|---|---|
-| point lookup by primary key | 7.0 µs | 692 µs |
-| narrow range, a few dozen matches | 39 µs | 3.8 ms |
-| count matches, nothing materialised | 1.6 µs | 1.0 ms |
-| query returning 2% of the collection | 1.0 ms | 13.8 ms |
-| iterate everything | 195 ms | 343 ms |
+| point lookup by primary key | 7.2 µs | 556 µs |
+| narrow range, a few dozen matches | 39 µs | 3.2 ms |
+| count matches, nothing materialised | 3.6 µs | 906 µs |
+| query returning 2% of the collection | 1.1 ms | 13.2 ms |
+| iterate everything | 210 ms | 339 ms |
 
 The pattern is worth internalising: **the bigger the query, the smaller the relative penalty.**
-A point lookup is 99x slower; iterating the whole collection is 1.8x. The fixed cost dominates
+A point lookup is 77x slower; iterating the whole collection is 1.6x. The fixed cost dominates
 small queries and disappears into large ones.
 
 If your application makes very many tiny queries, that ratio is the whole story and an on-heap
