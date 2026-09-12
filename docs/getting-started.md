@@ -75,8 +75,8 @@ Two things to know before you write this yourself:
 - A batch larger than the appender threshold is streamed through a temporary staging table in
   bounded chunks, so an iterator of a million rows never has to exist in memory as a list.
 
-Working code: [`examples/src/main/java/CoreColumnarRecords.java`](../examples/src/main/java/CoreColumnarRecords.java)
-and [`CoreBulkLoad.java`](../examples/src/main/java/CoreBulkLoad.java).
+Working code: [`examples/src/main/java/CoreColumnarRecords.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreColumnarRecords.java)
+and [`CoreBulkLoad.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreBulkLoad.java).
 
 ## CQEngine: moving a collection off the heap
 
@@ -110,8 +110,8 @@ cars.retrieve(and(equal(Car.MANUFACTURER, "Ford"), between(Car.PRICE, 20_000.0, 
   `DuckDBBulkWriter`.
 - Close the persistence, or the `DuckDBDatabase` if several collections share one.
 
-Working code: [`examples/src/main/java/CqEngineSwap.java`](../examples/src/main/java/CqEngineSwap.java)
-and [`CqEngineIndexes.java`](../examples/src/main/java/CqEngineIndexes.java).
+Working code: [`examples/src/main/java/CqEngineSwap.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CqEngineSwap.java)
+and [`CqEngineIndexes.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CqEngineIndexes.java).
 
 ## CQEngine: two collections in one database
 
@@ -152,7 +152,7 @@ A columnar layout is required for any of this: a collection stored as BLOBs has 
 opaque blob, so SQL cannot see its fields. `database.describe()` prints every collection, the name
 to use for it in `sql(...)`, and its columns.
 
-Working code: [`examples/src/main/java/CqEngineJoins.java`](../examples/src/main/java/CqEngineJoins.java).
+Working code: [`examples/src/main/java/CqEngineJoins.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CqEngineJoins.java).
 
 ## Next
 
@@ -165,4 +165,4 @@ Working code: [`examples/src/main/java/CqEngineJoins.java`](../examples/src/main
 - [Troubleshooting](troubleshooting.md) — every error you are likely to see
 - [Migrating](migrating.md) — from on-heap CQEngine, or from its SQLite persistence
 - [API overview](api-overview.md) — class by class
-- [examples/README.md](../examples/README.md) — every example, and how to run them
+- [examples/README.md](https://github.com/bdarwin/quackjvm/blob/main/examples/README.md) — every example, and how to run them

@@ -1,5 +1,7 @@
 # quackjvm
 
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.bdarwin/quackjvm-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.bdarwin/quackjvm-core)
+[![Docs](https://img.shields.io/badge/docs-bdarwin.github.io%2Fquackjvm-blue.svg)](https://bdarwin.github.io/quackjvm/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Tests](https://img.shields.io/badge/tests-88%20passing-brightgreen.svg)](#building-and-benchmarking)
@@ -844,7 +846,8 @@ mvn compile
 
 ## Documentation
 
-Full documentation is in [`docs/`](docs/README.md):
+**[bdarwin.github.io/quackjvm](https://bdarwin.github.io/quackjvm/)** — searchable, with every
+page below. The same pages live in [`docs/`](docs/) if you would rather read them here:
 
 | | |
 |---|---|

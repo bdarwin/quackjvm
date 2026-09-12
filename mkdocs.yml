@@ -1,0 +1,112 @@
+site_name: quackjvm
+site_description: DuckDB for the JVM. Java objects as columns, Arrow columnar reads, and a CQEngine collection that costs almost no heap.
+site_url: https://bdarwin.github.io/quackjvm/
+repo_url: https://github.com/bdarwin/quackjvm
+repo_name: bdarwin/quackjvm
+edit_uri: edit/main/docs/
+copyright: Apache 2.0 &middot; built by Darwin Baisa
+
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  icon:
+    logo: material/database-search
+    repo: fontawesome/brands/github
+  favicon: assets/favicon.svg
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Follow the system theme
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Storing objects: storing-objects.md
+  - Querying: querying.md
+  - Joins across collections: joins.md
+  - Aggregates and projections: aggregates.md
+  - Writing data: writing.md
+  - Tuning: tuning.md
+  - Troubleshooting: troubleshooting.md
+  - Migrating: migrating.md
+  - API reference: api-overview.md
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/bdarwin/quackjvm
+      name: quackjvm on GitHub
+    - icon: fontawesome/solid/cube
+      link: https://central.sonatype.com/artifact/io.github.bdarwin/quackjvm-core
+      name: quackjvm on Maven Central
+
+plugins:
+  - search
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn

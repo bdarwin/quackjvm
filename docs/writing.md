@@ -110,7 +110,7 @@ It is a loading tool, not a general write path.
 - **One thread.** A writer is not thread-safe and holds the persistence's write lock for its
   lifetime, so other writers wait. Readers are never blocked.
 
-The runnable version is [`examples/CqEngineBulkWriter.java`](../examples/src/main/java/CqEngineBulkWriter.java).
+The runnable version is [`examples/CqEngineBulkWriter.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CqEngineBulkWriter.java).
 
 ## Removing and updating
 

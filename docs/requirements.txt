@@ -1,0 +1,5 @@
+# Pinned: MkDocs 2.0 is announced as backward-incompatible with no migration path,
+# so the docs build must not float onto it.
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+pymdown-extensions==11.0.2

@@ -139,7 +139,7 @@ any DuckDB connection:
 ```
 
 Start at [Storing objects](storing-objects.md) and [Aggregates](aggregates.md), and see
-[`examples/CoreColumnarRecords.java`](../examples/src/main/java/CoreColumnarRecords.java).
+[`examples/CoreColumnarRecords.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreColumnarRecords.java).
 
 ## Reproducing these numbers
 

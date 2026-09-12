@@ -11,3 +11,6 @@ target/
 
 # Examples build output
 examples/target/
+
+# MkDocs build output
+site/

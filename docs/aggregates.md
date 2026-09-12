@@ -203,4 +203,4 @@ try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnectio
 `Rows.of` takes ownership of the connection it is given and closes it, so hand it a
 `duplicate()` — duplicates share the same in-memory database.
 
-The runnable version is [`examples/CoreColumnarRecords.java`](../examples/src/main/java/CoreColumnarRecords.java).
+The runnable version is [`examples/CoreColumnarRecords.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreColumnarRecords.java).

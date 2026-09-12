@@ -179,4 +179,4 @@ DuckDB database (in memory), queryable with sql():
 | both sides of each match | `database.join(...).stream()` |
 | a count, sum, group, pivot, or anything else | `database.query(...)` / `database.sql(...)` |
 
-A full runnable version of all three is [`examples/CqEngineJoins.java`](../examples/src/main/java/CqEngineJoins.java).
+A full runnable version of all three is [`examples/CqEngineJoins.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CqEngineJoins.java).
