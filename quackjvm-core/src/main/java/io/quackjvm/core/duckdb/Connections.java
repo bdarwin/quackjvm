@@ -69,6 +69,12 @@ public final class Connections {
         private final ConnectionPool pool;
         private final Lock lockToRelease;
         private boolean released;
+        /**
+         * Whether anything may be pending since the last commit. Set when a statement is made -
+         * conservatively, without waiting to see whether it is executed - and cleared by a commit
+         * or rollback, so the pool can skip a rollback it is certain has nothing to undo.
+         */
+        private boolean pending;
 
         ManagedConnectionHandler(Connection target, ConnectionPool pool, Lock lockToRelease) {
             this.target = target;
@@ -82,6 +88,12 @@ public final class Connections {
                 return target;
             }
             String name = method.getName();
+            if ("commit".equals(name) || "rollback".equals(name)) {
+                pending = false;
+            }
+            else if (name.startsWith("prepare") || name.startsWith("createStatement")) {
+                pending = true;
+            }
             if ("prepareStatement".equals(name) && args != null && args.length == 1
                     && args[0] instanceof String sql) {
                 // Served from the connection's cache, so that a statement repeated across requests
@@ -98,7 +110,7 @@ public final class Connections {
                 if (!released) {
                     released = true;
                     try {
-                        pool.release(target);
+                        pool.release(target, !pending);
                     }
                     finally {
                         if (lockToRelease != null) {

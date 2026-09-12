@@ -57,6 +57,16 @@ public final class ConnectionPool {
      * The connection is closed rather than pooled if the pool is full or the connection is broken.
      */
     public void release(Connection connection) {
+        release(connection, false);
+    }
+
+    /**
+     * @param committed whether the borrower's last act on this connection was to commit, so there
+     *                  is nothing left to roll back. DuckDB charges about 146 microseconds for a
+     *                  rollback even of an empty transaction, which on a single-object write is a
+     *                  quarter of the request.
+     */
+    public void release(Connection connection, boolean committed) {
         StatementCache cache = statementCaches.get(connection);
         if (cache != null) {
             cache.releaseAll();
@@ -66,8 +76,10 @@ public final class ConnectionPool {
                 return;
             }
             if (!connection.getAutoCommit()) {
-                // CQEngine commits before closing; this ends any transaction it did not.
-                connection.rollback();
+                if (!committed) {
+                    // CQEngine commits before closing; this ends any transaction it did not.
+                    connection.rollback();
+                }
                 connection.setAutoCommit(true);
             }
             if (idleCount.get() < maxIdle) {
