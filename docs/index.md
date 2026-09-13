@@ -130,8 +130,9 @@ nothing to walk.
 
 !!! note "Design notes"
 
-    [Write buffer](proposals/write-buffer.md) — where the remaining write latency goes, and what it
-    would take to remove it. Proposed, not implemented.
+    [Buffered writing](proposals/write-buffer.md) — where the remaining write latency goes, whether
+    `quackjvm-core` should expose `commit()` and `flush()`, and what an implicit buffer would cost
+    the CQEngine plugin. Proposed, not implemented.
 
 ## What the JDBC driver does not give you
 
