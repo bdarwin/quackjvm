@@ -151,13 +151,38 @@ costs more than reading a single row, and using Arrow there made them measurably
 ## Concurrency
 
 - **Reads** never block and never lock: DuckDB's MVCC gives each request a consistent snapshot.
+  Verified rather than asserted: with four readers and the write load going from 0 to 8 concurrent
+  writers, reader throughput moves 9 708 → 8 459 ops/s and reader p99 612 → 808 µs. That is CPU
+  sharing, not blocking — if it were contention the cost would grow with writer count, and it does
+  not.
+- **One `QueryOptions` per operation.** Do not hoist one out of a loop and share it between
+  threads: every thread would then share one database connection, which deadlocks inside DuckDB's
+  JDBC driver. quackjvm detects this and throws rather than hanging, but the fix is to build a
+  fresh `QueryOptions` each time — the flags on it are cheap to set again.
 - **Writes** are serialised against each other by default, because two DuckDB transactions writing
-  the same table at once cause one to fail with a conflict error. Turn this off with
-  `.serializeWrites(false)` if your application coordinates its own writes.
+  the same table at once cause one to fail with a conflict error. That costs **3.8x of write
+  throughput** at 16 threads (1 328 ops/s serialised against 5 055 not), and nothing at all when
+  only one thread writes (1 305 against 1 357).
+
+    Turn it off with `.serializeWrites(false)` **if writes from different threads never touch the
+    same primary key**. That condition is exact: with 50 shared keys and 8 threads, 11–25% of writes
+    abort with `TransactionContext Error: Conflict on tuple deletion!`. The failure is always a
+    clean exception with the whole write rolled back — the collection is never left inconsistent —
+    but a quarter of your writes disappearing is not a trade most applications want.
+
+    **Note that the lock is per database, not per collection**, so two collections sharing a
+    `DuckDBDatabase` serialise against each other even when writing different tables: 1 700 ops/s
+    shared against 3 400 with a database each. If you share a database only for joins and write the
+    collections from different threads, `serializeWrites(false)` recovers the whole 2x with no
+    conflicts, because two different tables cannot conflict.
 - **One JVM process, one database file.** DuckDB does not support several processes writing the
   same file. All connections are duplicated from a single open database.
-- `maxPooledConnections` sets how many connections are kept open for reuse between requests. Raise
-  it if you have many concurrent readers; each one costs a little memory. Pooled connections also
+- `maxPooledConnections` sets how many connections are kept open for reuse between requests.
+  **Pooling is worth 2.1x and the size is worth nothing past 4** — measured with 16 concurrent
+  readers: 7 930 ops/s unpooled, 15 676 at a pool of 1, 16 741 at 4, and flat from there to 64.
+  The reason is in DuckDB's driver: `duplicate()` takes the root connection's lock, so every
+  unpooled borrow serialises against every other. Do not tune this dial; the default of 32 is fine.
+  Pooled connections also
   keep their prepared statements between requests, which matters more than it sounds: DuckDB
   spends about 200 µs preparing a statement, so reusing one takes a single-object `add` from
   1.25 ms to 0.92 ms. Nothing to configure — it happens when the pool hands the same connection
@@ -169,14 +194,38 @@ costs more than reading a single row, and using Arrow there made them measurably
 Anything DuckDB accepts can be passed through:
 
 ```java
-.property("threads", "4")               // parallelism per query
+.property("threads", "2")               // parallelism per query - see below
 .property("temp_directory", "/fast/ssd")
-.property("preserve_insertion_order", "false")   // lower memory on large loads
+.property("preserve_insertion_order", "false")
 ```
 
-`threads` is worth knowing about: DuckDB defaults to one thread per core, which is right for
-analytics but can be wasteful if your application is running many small queries concurrently and
-already has its own parallelism.
+### `threads` is the only one that matters under concurrency
+
+DuckDB defaults to one thread per core and parallelises *within* a query. When your application is
+already supplying the concurrency, that is mostly overhead. Measured with 8 concurrent readers
+doing point lookups on a 10-core machine:
+
+| `threads` | throughput | p99 |
+|---|---|---|
+| default (10) | 14 961 ops/s | 1 115 µs |
+| **2** | 20 093 ops/s | 805 µs |
+| **1** | **24 803 ops/s** | **687 µs** |
+
+**But the same setting is what makes analytical queries fast**, and there it goes the other way —
+one application thread running a `GROUP BY` over 4,000,000 rows:
+
+| `threads` | `avg(price)` | `GROUP BY manufacturer` |
+|---|---|---|
+| default | **857 µs** | **9.7 ms** |
+| 2 | 2.4 ms | 32.5 ms |
+| 1 | 4.6 ms | **61.8 ms — 6.4x slower** |
+
+So there is no right default, only a right answer for your workload. **`threads=2` is the good
+compromise** for a request-serving application: it keeps most of the concurrent throughput and most
+of the single-query speed. Leave it alone if you run large analytical queries from few threads.
+
+`preserve_insertion_order` and `memory_limit` make no measurable difference under concurrency
+(+3% each, inside noise) — they matter for loading and for memory, not for parallelism.
 
 ## Storage management
 

@@ -26,6 +26,9 @@ public final class ConnectionPool {
     private final AtomicInteger idleCount = new AtomicInteger();
     /** One statement cache per pooled connection, kept across borrows - that is the point of it. */
     private final Map<Connection, StatementCache> statementCaches = new ConcurrentHashMap<>();
+    /** Set by {@link #close}, so a request still in flight discards its connection rather than
+     * returning it to a pool nobody will ever borrow from again. */
+    private volatile boolean closed;
 
     public ConnectionPool(DuckDBConnection rootConnection, int maxIdle) {
         this.rootConnection = rootConnection;
@@ -72,7 +75,11 @@ public final class ConnectionPool {
             cache.releaseAll();
         }
         try {
-            if (connection.isClosed()) {
+            if (closed || connection.isClosed()) {
+                // A connection which is broken, or whose pool has shut down, is not coming back:
+                // drop its statement cache with it rather than retaining both for the life of
+                // the pool.
+                discard(connection);
                 return;
             }
             if (!connection.getAutoCommit()) {
@@ -105,6 +112,7 @@ public final class ConnectionPool {
 
     /** Closes every pooled connection, and the statements cached against them. */
     public void close() {
+        closed = true;
         Connection connection;
         while ((connection = idle.pollFirst()) != null) {
             idleCount.decrementAndGet();

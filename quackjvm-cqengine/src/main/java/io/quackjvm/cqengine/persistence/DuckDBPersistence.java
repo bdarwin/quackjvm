@@ -192,10 +192,41 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
         return index instanceof DuckDBTypeIndex;
     }
 
+    /**
+     * Marks the thread a request's resources were opened on, so that a {@code QueryOptions}
+     * accidentally shared between threads is reported rather than deadlocking.
+     */
+    private static final class RequestOwner {
+        private final Thread thread = Thread.currentThread();
+    }
+
     @Override
     public void openRequestScopeResources(QueryOptions queryOptions) {
+        // QueryOptions is a plain map and this is a check-then-act, so without a lock two threads
+        // sharing one instance can both find it empty and both install a manager - which is the
+        // very situation below is meant to report. Uncontended in the normal case, where each
+        // request has its own QueryOptions and no other thread can see it.
+        synchronized (queryOptions) {
+            openRequestScopeResourcesLocked(queryOptions);
+        }
+    }
+
+    private void openRequestScopeResourcesLocked(QueryOptions queryOptions) {
         if (queryOptions.get(ConnectionManager.class) == null) {
+            queryOptions.put(RequestOwner.class, new RequestOwner());
             queryOptions.put(ConnectionManager.class, new RequestScopeConnectionManager(this));
+            return;
+        }
+        // Someone else's ConnectionManager is none of our business; ours is, and finding one here
+        // means this QueryOptions is being reused while a request is still open on it.
+        RequestOwner owner = queryOptions.get(RequestOwner.class);
+        if (owner != null && owner.thread != Thread.currentThread()) {
+            throw new IllegalStateException("A QueryOptions instance is being used by two threads at"
+                    + " once (opened on " + owner.thread.getName() + ", now used by "
+                    + Thread.currentThread().getName() + "). Both threads would share one database"
+                    + " connection, which deadlocks inside DuckDB's JDBC driver. Build a fresh"
+                    + " QueryOptions per operation rather than hoisting one out of the loop - the"
+                    + " flags on it are cheap to set again.");
         }
     }
 
@@ -205,6 +236,7 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
         if (connectionManager instanceof RequestScopeConnectionManager) {
             ((RequestScopeConnectionManager) connectionManager).close();
             queryOptions.remove(ConnectionManager.class);
+            queryOptions.remove(RequestOwner.class);
         }
     }
 
