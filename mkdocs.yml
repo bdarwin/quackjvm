@@ -1,5 +1,5 @@
 site_name: quackjvm
-site_description: DuckDB for the JVM. Java objects as columns, Arrow columnar reads, and a CQEngine collection that costs almost no heap.
+site_description: An embedded analytical engine for the JVM, built on DuckDB. Java objects as typed columns, questions answered in SQL, Arrow columnar reads.
 site_url: https://bdarwin.github.io/quackjvm/
 repo_url: https://github.com/bdarwin/quackjvm
 repo_name: bdarwin/quackjvm
@@ -56,17 +56,19 @@ theme:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
-  - Storing objects: storing-objects.md
-  - Querying: querying.md
-  - Joins across collections: joins.md
-  - Aggregates and projections: aggregates.md
-  - Writing data: writing.md
-  - Tuning: tuning.md
-  - Troubleshooting: troubleshooting.md
-  - Migrating: migrating.md
-  - API reference: api-overview.md
-  - Proposals:
-      - Buffered writing: proposals/write-buffer.md
+  - The engine:
+      - Storing objects: storing-objects.md
+      - Aggregates and projections: aggregates.md
+      - Writing data: writing.md
+      - Tuning: tuning.md
+  - CQEngine plugin:
+      - Querying: querying.md
+      - Joins across collections: joins.md
+      - Migrating: migrating.md
+  - Reference:
+      - API reference: api-overview.md
+      - Troubleshooting: troubleshooting.md
+      - Buffered writing (proposal): proposals/write-buffer.md
 
 markdown_extensions:
   - abbr

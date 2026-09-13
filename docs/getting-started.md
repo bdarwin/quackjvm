@@ -1,11 +1,12 @@
 # Getting started
 
-quackjvm is two Maven artifacts. Take only the one you need.
+quackjvm is two Maven artifacts. **Most people want only the first** — the CQEngine plugin exists
+for people already using CQEngine, and nothing in the engine depends on it.
 
 | artifact | what it gives you | depends on |
 |---|---|---|
-| `io.github.bdarwin:quackjvm-core` | DuckDB for the JVM: Java-to-DuckDB type mapping, columnar object layouts, bulk loading, a connection pool, and a small SQL API. No query framework. | DuckDB's JDBC driver |
-| `io.github.bdarwin:quackjvm-cqengine` | A DuckDB-backed `Persistence` for CQEngine, plus indexes, joins and a bulk writer. | the core, and CQEngine |
+| `io.github.bdarwin:quackjvm-core` | **The engine.** Java objects as typed DuckDB columns, typed SQL results, Arrow columnar reads, bulk loading, a connection pool. No query framework, no opinions. | DuckDB's JDBC driver |
+| `io.github.bdarwin:quackjvm-cqengine` | *Optional.* A DuckDB-backed `Persistence` for CQEngine, plus indexes, joins and a bulk writer. | the engine, and CQEngine |
 
 ## Requirements
 
@@ -36,10 +37,11 @@ implementation 'io.github.bdarwin:quackjvm-core:1.0.0'
 implementation 'io.github.bdarwin:quackjvm-cqengine:1.0.0'
 ```
 
-## Core: objects as columns, queried with SQL
+## The engine: objects as columns, queried with SQL
 
-Nothing here knows about CQEngine. A `ColumnarLayout` says how to shred an object into one typed
-column per field and how to rebuild it; `TableWriter` writes rows; `SqlQuery` reads them back.
+This is the main path, and nothing in it knows about CQEngine. A `ColumnarLayout` says how to
+shred an object into one typed column per field and how to rebuild it; `TableWriter` writes rows;
+`Rows` and `SqlQuery` read answers back.
 
 ```java
 record Reading(int sensorId, String site, double celsius, LocalDate day) {}
@@ -78,7 +80,7 @@ Two things to know before you write this yourself:
 Working code: [`examples/src/main/java/CoreColumnarRecords.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreColumnarRecords.java)
 and [`CoreBulkLoad.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreBulkLoad.java).
 
-## CQEngine: moving a collection off the heap
+## The plugin: moving a CQEngine collection off the heap
 
 One argument to the constructor, and the objects and their indexes live in DuckDB rather than in
 the Java heap. The query code does not change.
@@ -113,7 +115,7 @@ cars.retrieve(and(equal(Car.MANUFACTURER, "Ford"), between(Car.PRICE, 20_000.0, 
 Working code: [`examples/src/main/java/CqEngineSwap.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CqEngineSwap.java)
 and [`CqEngineIndexes.java`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CqEngineIndexes.java).
 
-## CQEngine: two collections in one database
+## The plugin: two collections in one database
 
 Collections which share a `DuckDBDatabase` are separate tables in the same DuckDB instance, which
 is what lets them be joined.

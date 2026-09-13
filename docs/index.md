@@ -5,22 +5,38 @@ hide:
 
 <div class="hero" markdown>
 
-# DuckDB for the JVM
+# An analytical engine for the JVM
 
 <p class="tagline" markdown>
-DuckDB's JDBC driver makes you treat an embedded columnar engine like a remote database. quackjvm
-does not: Java objects become typed columns, results come back as Arrow batches, and a CQEngine
-collection that cost you a gigabyte of heap costs three megabytes.
+Your Java objects become typed columns in <a href="https://duckdb.org/">DuckDB</a>. You ask
+questions of them in SQL — aggregates, groupings, pivots, window functions, joins — and get answers
+back as Java values, without rebuilding a single object. A million objects cost three megabytes of
+heap instead of eight hundred.
 </p>
 
 </div>
 
 <div class="stats" markdown>
+<div class="stat"><span class="n">62×</span><span class="l">faster grouping than an on-heap collection</span></div>
 <div class="stat"><span class="n">861&nbsp;MB&nbsp;→&nbsp;3&nbsp;MB</span><span class="l">Java heap, 1M objects</span></div>
-<div class="stat"><span class="n">1,387&nbsp;MB&nbsp;→&nbsp;145&nbsp;MB</span><span class="l">process memory</span></div>
+<div class="stat"><span class="n">10×</span><span class="l">faster aggregates than the heap</span></div>
 <div class="stat"><span class="n">129&nbsp;s&nbsp;→&nbsp;0.27&nbsp;s</span><span class="l">join across collections</span></div>
-<div class="stat"><span class="n">44×</span><span class="l">aggregate vs. rebuilding objects</span></div>
 </div>
+
+DuckDB is an analytical engine, and the JVM has never really had one. Its JDBC driver makes you
+treat it as a remote database: one boxed value per call, no way to map an object to columns, no
+write path for its own nested types. quackjvm is the layer that makes it what it actually is — an
+in-process columnar engine you can put Java objects into and ask real questions of.
+
+```java
+// Objects in.
+writer.write(connection, cars.stream().map(layout::toRow).iterator(), true);
+
+// Questions out. None of these rebuild an object.
+double total = db.query("SELECT sum(price) FROM car WHERE make = ?", "Ford").scalar(Double.class);
+List<Stats> by = db.query("SELECT make, count(*), avg(price) FROM car GROUP BY 1").records(Stats.class);
+db.query("PIVOT car ON colour USING count(*) GROUP BY make").forEachRow(System.out::println);
+```
 
 ## Install
 
@@ -44,19 +60,49 @@ Add `quackjvm-cqengine` instead if you use CQEngine; it brings the core with it.
 
 ## The shortest possible version
 
-```java
-// One line changes. Your queries do not.
-IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>(
-        DuckDBPersistence.onPrimaryKey(Car.CAR_ID));
+A record becomes a table. Nothing else is required — no framework, no mapping code.
 
-cars.addAll(millionCars);
-cars.retrieve(equal(Car.MANUFACTURER, "Ford"));   // exactly as before
+```java
+record Reading(int sensorId, String site, double celsius, LocalDate day) {}
+
+ColumnarLayout<Reading> layout = ColumnarLayout.ofRecord(Reading.class);   // columns from the record
+
+TableWriter writer = new TableWriter("reading", layout.toColumnDefs(), true,
+        TableWriter.DEFAULT_APPENDER_THRESHOLD);
+writer.createTable(connection, true);
+writer.write(connection, readings.stream().map(layout::toRow).iterator(), true);
+
+double average = Rows.of(connection.duplicate(),
+        "SELECT avg(celsius) FROM reading WHERE site = ?", "kitchen").scalar(Double.class);
+
+record SiteStats(String site, long readings, double avgCelsius) {}
+List<SiteStats> stats = Rows.of(connection.duplicate(),
+        "SELECT site, count(*), avg(celsius) FROM reading GROUP BY 1").records(SiteStats.class);
 ```
 
-A million objects that cost 861 MB of Java heap now cost 3 MB, and the garbage collector has
-nothing to walk.
+`Rows` gives you `scalar`, `list`, `records`, `count`, `forEachRow` and `stream`, and picks the read
+path for you — plain JDBC for a single value, Arrow columnar batches for anything wide. It needs
+only a `Connection`, so it reads Parquet and CSV just as happily:
 
-## Two modules, take either
+```java
+long rows = Rows.of(connection.duplicate(), "SELECT count(*) FROM 'data/*.parquet'").scalar(Long.class);
+```
+
+??? note "Already using CQEngine? One line changes."
+
+    ```java
+    // before
+    IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>();
+
+    // after - same queries, 300x smaller heap
+    IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>(
+            DuckDBPersistence.onPrimaryKey(Car.CAR_ID));
+    ```
+
+    Your query code does not change, and you can drop into SQL over the same data whenever the
+    object API runs out. See [Querying](querying.md) and [Migrating](migrating.md).
+
+## Two modules
 
 <div class="grid cards" markdown>
 
@@ -70,15 +116,16 @@ nothing to walk.
 
     [:octicons-arrow-right-24: Storing objects](storing-objects.md)
 
--   :material-layers-search-outline: **`quackjvm-cqengine`**
+-   :material-layers-search-outline: **`quackjvm-cqengine`** *(optional)*
 
     ---
 
-    One plugin built on the core: a `Persistence` for [CQEngine](https://github.com/npgall/cqengine).
-    Drop it in where you use CQEngine's on-heap, off-heap or SQLite persistence and get two things
-    CQEngine cannot do — a collection that costs almost no heap, and **joins across collections**.
+    One plugin built on the core, for people already using
+    [CQEngine](https://github.com/npgall/cqengine). It swaps their persistence in one line and adds
+    two things CQEngine cannot do — a collection costing almost no heap, and **joins across
+    collections**. Everything above still works underneath it.
 
-    [:octicons-arrow-right-24: Getting started](getting-started.md)
+    [:octicons-arrow-right-24: Using the plugin](querying.md)
 
 </div>
 
