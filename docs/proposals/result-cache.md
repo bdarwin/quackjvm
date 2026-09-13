@@ -1,7 +1,8 @@
 # Pre-aggregation vs. a result cache
 
 **Status:** measured. Recommendation: **pre-aggregate; do not build a result cache into the
-library.** Prompted by the dashboard numbers in
+library.** Superseded in part by [Managed materializations](materializations.md), which takes the
+same idea further after measuring it at ten million rows. Prompted by the dashboard numbers in
 [Aggregates and projections](../aggregates.md#many-people-the-same-panels).
 
 ## First, a correction
