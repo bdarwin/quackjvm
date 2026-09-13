@@ -1,6 +1,8 @@
 package io.quackjvm.cqengine;
 
 import io.quackjvm.cqengine.index.DuckDBIndex;
+import io.quackjvm.core.layout.ColumnarLayout;
+import io.quackjvm.cqengine.persistence.DuckDBDatabase;
 import io.quackjvm.cqengine.persistence.DuckDBPersistence;
 import io.quackjvm.cqengine.testutil.Car;
 import io.quackjvm.cqengine.testutil.Cars;
@@ -178,5 +180,62 @@ public class ConcurrencyTest {
             }
         }
         assertEquals("exactly one thread should own the shared options", 1, completed);
+    }
+
+    /**
+     * Two collections sharing a database write to different tables, which cannot conflict in
+     * DuckDB, so they hold separate locks and do not serialise against each other. This asserts
+     * the safety half of that - that both collections end up complete and correct - since the
+     * speed half (1,700 objects a second against 3,000) belongs in a benchmark.
+     */
+    @Test(timeout = 120_000)
+    public void twoCollectionsInOneDatabaseCanBeWrittenAtTheSameTime() throws Exception {
+        try (DuckDBDatabase database = DuckDBDatabase.builder().memoryLimit("256MB").build()) {
+            IndexedCollection<Car> cars = database.collection(Car.CAR_ID)
+                    .name("cars").columnarLayout(ColumnarLayout.ofRecord(Car.class)).build();
+            IndexedCollection<Car> vans = database.collection(Car.CAR_ID)
+                    .name("vans").columnarLayout(ColumnarLayout.ofRecord(Car.class)).build();
+            cars.addIndex(DuckDBIndex.onAttribute(Car.MANUFACTURER));
+            vans.addIndex(DuckDBIndex.onAttribute(Car.MANUFACTURER));
+
+            int each = 400;
+            List<Car> carData = Cars.generate(each, 3);
+            List<Car> vanData = Cars.generate(each, 4);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Exception> failures = new CopyOnWriteArrayList<>();
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            for (Object[] work : new Object[][]{{cars, carData}, {vans, vanData}}) {
+                @SuppressWarnings("unchecked")
+                IndexedCollection<Car> target = (IndexedCollection<Car>) work[0];
+                @SuppressWarnings("unchecked")
+                List<Car> data = (List<Car>) work[1];
+                pool.submit(() -> {
+                    try {
+                        go.await();
+                        for (Car car : data) {
+                            target.add(car);
+                        }
+                    }
+                    catch (Exception e) {
+                        failures.add(e);
+                    }
+                });
+            }
+            go.countDown();
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(90, TimeUnit.SECONDS));
+
+            assertEquals("writing two collections at once must not fail: " + failures,
+                    0, failures.size());
+            assertEquals(each, cars.size());
+            assertEquals(each, vans.size());
+            // And the indexes of each must be complete and not mixed up with the other's.
+            for (Car car : carData) {
+                assertEquals(car, cars.retrieve(equal(Car.CAR_ID, car.carId())).uniqueResult());
+            }
+            for (Car van : vanData) {
+                assertEquals(van, vans.retrieve(equal(Car.CAR_ID, van.carId())).uniqueResult());
+            }
+        }
     }
 }

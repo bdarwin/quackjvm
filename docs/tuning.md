@@ -170,11 +170,10 @@ costs more than reading a single row, and using Arrow there made them measurably
     clean exception with the whole write rolled back — the collection is never left inconsistent —
     but a quarter of your writes disappearing is not a trade most applications want.
 
-    **Note that the lock is per database, not per collection**, so two collections sharing a
-    `DuckDBDatabase` serialise against each other even when writing different tables: 1 700 ops/s
-    shared against 3 400 with a database each. If you share a database only for joins and write the
-    collections from different threads, `serializeWrites(false)` recovers the whole 2x with no
-    conflicts, because two different tables cannot conflict.
+    **The lock is per collection**, so two collections sharing a `DuckDBDatabase` do not serialise
+    against each other — they write different tables, and two different tables cannot conflict in
+    DuckDB. Sharing a database for joins therefore costs nothing in write throughput: 2 969 ops/s
+    shared against 3 232 with a database each, where a single database-wide lock gave 1 700.
 - **One JVM process, one database file.** DuckDB does not support several processes writing the
   same file. All connections are duplicated from a single open database.
 - `maxPooledConnections` sets how many connections are kept open for reuse between requests.

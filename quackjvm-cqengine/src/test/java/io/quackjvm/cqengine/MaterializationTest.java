@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.fail;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -207,5 +208,87 @@ public class MaterializationTest {
             assertEquals("the table is real, so it is still there",
                     rows, (long) reopened.query("SELECT count(*) FROM car_rollup").scalar(Long.class));
         }
+    }
+
+    // ---------- Incremental refresh ----------
+
+    @Test
+    public void appendingADeltaGivesTheSameAnswerAsARebuild() {
+        DuckDBDatabase database = database();
+        IndexedCollection<Car> cars = cars(database, 2_000);
+        String table = database.table(cars);
+        DuckDBDatabase.ManagedMaterialization rollup = database.materialize("car_rollup")
+                .as(rollupSql(database, cars)).build();
+
+        // New objects arrive, past a watermark.
+        List<Car> more = new ArrayList<>();
+        for (Car car : Cars.generate(500, 77)) {
+            more.add(new Car(car.carId() + 500_000, car.manufacturer(), car.model(), car.color(),
+                    car.doors(), car.price(), car.description(), car.registered()));
+        }
+        cars.addAll(more);
+
+        long appended = rollup.appendDelta(
+                "SELECT manufacturer, count(*), sum(price) FROM " + table
+                        + " WHERE objectKey >= ? GROUP BY 1", 500_000);
+        assertTrue("the delta should have appended some partial groups", appended > 0);
+
+        // Panels re-aggregate, because the table now holds partial groups.
+        long incrementalTotal = database.query("SELECT sum(n) FROM car_rollup").scalar(Long.class);
+        assertEquals("the incremental total must account for every object",
+                2_500, incrementalTotal);
+
+        // And it must agree with a rebuild, group for group.
+        List<String> beforeRefresh = perManufacturer(database);
+        rollup.refresh();
+        assertEquals("appending a delta must give what a rebuild gives",
+                beforeRefresh, perManufacturer(database));
+    }
+
+    @Test
+    public void refreshCollapsesThePartialGroupsAppendedByADelta() {
+        DuckDBDatabase database = database();
+        IndexedCollection<Car> cars = cars(database, 400);
+        String table = database.table(cars);
+        DuckDBDatabase.ManagedMaterialization rollup = database.materialize("car_rollup")
+                .as(rollupSql(database, cars)).build();
+        long groups = rollup.rowCount();
+
+        for (int i = 0; i < 3; i++) {
+            rollup.appendDelta("SELECT manufacturer, count(*), sum(price) FROM " + table
+                    + " WHERE objectKey < ? GROUP BY 1", 10);
+        }
+        assertTrue("appending adds partial groups rather than merging them",
+                rollup.rowCount() > groups);
+
+        rollup.refresh();
+        assertEquals("a refresh rebuilds from the base data, so the partials are gone",
+                groups, rollup.rowCount());
+    }
+
+    @Test
+    public void appendingToAMaterializationThatWasNeverBuiltIsRejected() {
+        DuckDBDatabase database = database();
+        IndexedCollection<Car> cars = cars(database, 20);
+        DuckDBDatabase.ManagedMaterialization rollup = database.materialize("car_rollup")
+                .as(rollupSql(database, cars)).build();
+        rollup.drop();
+        try {
+            rollup.appendDelta("SELECT manufacturer, count(*), sum(price) FROM "
+                    + database.table(cars) + " GROUP BY 1");
+            fail("appending to a materialization which does not exist should be rejected");
+        }
+        catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("has not been built"));
+        }
+    }
+
+    private static List<String> perManufacturer(DuckDBDatabase database) {
+        List<String> rows = new ArrayList<>();
+        database.query("SELECT manufacturer, sum(n) AS n, round(sum(total), 2) AS total"
+                + " FROM car_rollup GROUP BY 1 ORDER BY 1")
+                .forEachRow(row -> rows.add(row.getString("manufacturer")
+                        + "=" + row.getLong("n") + "/" + row.getDouble("total")));
+        return rows;
     }
 }

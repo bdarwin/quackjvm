@@ -114,17 +114,35 @@ against a real materialization.
 ## Keeping it in step
 
 Refreshing is a full rebuild, which on ten million rows is 22–55 ms. For append-only data with
-additive measures you can do better by folding in only the new rows — aggregate the delta and
-append it, since the panels already sum over the table:
+additive measures you can do better by folding in only the new rows:
 
-```sql
-INSERT INTO sales_rollup
-SELECT region, make, colour, year, count(*), sum(price)
-FROM sale WHERE saleId >= ? GROUP BY 1, 2, 3, 4;
+```java
+long appended = rollup.appendDelta(
+        "SELECT region, make, colour, year, count(*), sum(price)"
+      + " FROM sale WHERE saleId >= ? GROUP BY 1, 2, 3, 4",
+        watermark);
 ```
 
-3.5 ms against 13.8 ms for a rebuild, with an identical result. There is no API for this yet; run
-it with `database.query(...)` and keep your own watermark.
+3.5 ms against 13.8 ms for a rebuild, with an identical result. Two conditions, and both are on
+you:
+
+- **The measures must be additive.** `count`, `sum`, `min` and `max` combine across partial groups;
+  an average or a median does not. Store `count(*) AS n` and `sum(x) AS total`, and derive the
+  average at query time as `sum(total)/sum(n)`.
+- **Panels must re-aggregate.** After an append the table holds *partial* groups — the same key
+  appears once per delta — so a panel reads `SELECT make, sum(n) FROM rollup GROUP BY 1`, not
+  `SELECT make, n`. That is exactly what makes appending cheap: nothing is merged in place.
+
+`refresh()` collapses the partials again, because it rebuilds from the base data. Refresh
+occasionally so the table does not grow a delta at a time.
+
+!!! note "Why you write the delta query rather than us deriving it"
+
+    Deriving it would mean editing the materialization's own SQL to add a watermark predicate, and
+    a mistake there would put *wrong numbers* in the table silently. The same machinery used for
+    [seamless rewrite](proposals/materializations.md#should-it-be-seamless) is safe there precisely
+    because a failed match just falls through to the original query and costs nothing but speed.
+    Correctness-critical edits and best-effort optimisations do not deserve the same trust.
 
 The trade is the same as any precomputation: **a materialization is as old as its last refresh.**
 The difference from a cache is that a stale materialization still answers every question it covers,

@@ -60,7 +60,13 @@ public final class DuckDBDatabase implements Closeable {
     private final ConnectionPool connectionPool;
     private final Map<String, ManagedMaterialization> materializations = new ConcurrentHashMap<>();
     private final boolean serializeWrites;
-    private final Lock writeLock = new ReentrantLock(true);
+    /**
+     * Guards writes which touch the database as a whole rather than one collection's tables.
+     * Writes to a collection take that collection's own lock instead - see
+     * {@link DuckDBPersistence#getWriteLock()} - so two collections sharing a database do not
+     * serialise against each other.
+     */
+    private final Lock databaseWriteLock = new ReentrantLock(true);
 
     /** Every persistence created from this database, by collection name. */
     private final Map<String, DuckDBPersistence<?, ?>> persistences = new ConcurrentHashMap<>();
@@ -549,6 +555,16 @@ public final class DuckDBDatabase implements Closeable {
             withConnection(materialization::refresh);
         }
 
+        /**
+         * Folds new rows in without rebuilding, by appending the result of a query computing the
+         * same aggregate over only those rows. See {@link Materialization#appendDelta}: the
+         * measures must be additive and panels must re-aggregate.
+         */
+        public long appendDelta(String deltaSql, Object... parameters) {
+            return withConnectionReturning(
+                    connection -> materialization.appendDelta(connection, deltaSql, parameters));
+        }
+
         public void refreshIfOlderThan(java.time.Duration age) {
             withConnection(connection -> materialization.refreshIfOlderThan(connection, age));
         }
@@ -630,10 +646,21 @@ public final class DuckDBDatabase implements Closeable {
     // ---------- Connections ----------
 
     Connection borrowConnection(boolean readRequest) {
+        return borrowConnection(readRequest, databaseWriteLock);
+    }
+
+    /**
+     * @param writeLock the lock a write request should hold for its duration, or null not to
+     *                  serialise. A collection passes its own, so that collections sharing this
+     *                  database write concurrently - two different tables cannot conflict in
+     *                  DuckDB, verified with eight threads creating, indexing and writing their
+     *                  own tables at once.
+     */
+    Connection borrowConnection(boolean readRequest, Lock writeLock) {
         if (closed) {
             throw new IllegalStateException("This DuckDBDatabase has been closed: " + this);
         }
-        if (!serializeWrites || readRequest) {
+        if (!serializeWrites || readRequest || writeLock == null) {
             return Connections.managed(connectionPool.borrow(), connectionPool, null);
         }
         writeLock.lock();
@@ -657,7 +684,7 @@ public final class DuckDBDatabase implements Closeable {
     }
 
     Lock getWriteLock() {
-        return serializeWrites ? writeLock : null;
+        return serializeWrites ? databaseWriteLock : null;
     }
 
     boolean isSerializeWrites() {
