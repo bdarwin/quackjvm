@@ -82,21 +82,70 @@ db.materialize("sales_rollup")
         .build();
 ```
 
-## On "redirect queries there"
+## Should it be seamless?
 
 Automatically rewriting a query against the base table into one against a materialization is what
-Oracle calls materialised-view rewrite and ClickHouse calls projections. **In general it is a
-research problem** — deciding whether one SQL statement can be answered from another means solving
-query containment, and DuckDB will happily accept SQL we did not generate and cannot parse.
+Oracle calls materialised-view rewrite and ClickHouse calls projections. My first answer was that it
+is a research problem, because deciding whether one SQL statement can be answered from another is
+query containment, and we would have to parse SQL we did not generate.
 
-The honest version is **routing by name**: you declare the materialization, and your panel queries
-name it. That is one word of change at the call site and it gets essentially all of the benefit,
-because a dashboard's panels are written once and run millions of times.
+**That was wrong about the hard part. DuckDB exposes its own parser, in both directions:**
 
-A narrow automatic rewrite is *possible* later — matching only queries that group by a subset of a
-declared materialization's dimensions, filter only on those dimensions, and use only additive
-measures — and it would let existing panels speed up without being edited. It should not be in the
-first version, and it must always fall through to the base table when it cannot prove a match.
+```sql
+SELECT json_serialize_sql('SELECT make, count(*) AS n, sum(price) AS total
+                           FROM sale WHERE region = ''R0'' GROUP BY 1');
+-- {"statements":[{"node":{"type":"SELECT_NODE","select_list":[...],
+--   "from_table":{"table_name":"sale"},"where_clause":{...},"group_expressions":[...]}}]}
+
+SELECT json_deserialize_sql(json_serialize_sql('SELECT 1'));   -- back to SQL, and it runs
+```
+
+The AST hands over exactly the four things a match needs: **`table_name`**, **`select_list`** with
+each **`function_name`**, **`group_expressions`**, and **`where_clause`**. So we never write a
+parser — the engine that will execute the query is the same one that parses it for us.
+
+That makes a restricted rewrite tractable. A query is rewritable against materialization *M* when:
+
+1. it reads exactly the base table of *M*;
+2. every grouping expression is one of *M*'s dimensions;
+3. the `WHERE` clause references only *M*'s dimensions;
+4. every aggregate is derivable — `count(*)` → `sum(n)`, `sum(x)` → `sum(total_x)`, `min`/`max`
+   directly, `avg(x)` → `sum(total_x)/sum(n)`.
+
+Anything else — a median, an exact `count(DISTINCT)`, a filter on a column *M* does not carry, a
+join, a window over the base grain — **falls through to the original query untouched**. That
+fall-through is the whole safety argument: a bug in matching costs performance, never correctness.
+
+### The condition I would put on it
+
+**Seamless is only safe if it is verifiable.** Because both queries are available, quackjvm can run
+them both and compare:
+
+```java
+DuckDBDatabase db = DuckDBDatabase.builder()
+        .materializationRewrite(Rewrite.VERIFY)   // OFF | ON | VERIFY
+        .build();
+```
+
+`VERIFY` runs the rewritten query *and* the original and fails loudly if they disagree — slow, and
+exactly what you want in a test suite or a staging soak. You turn it on against your own panels,
+prove the rewrite on your own data, then switch to `ON` in production. An optimisation that silently
+changes results is unacceptable; one you can prove on your own queries first is a different
+proposition.
+
+### The real risk, which is not correctness
+
+`json_serialize_sql` is an internal debugging facility, not a stable public API. **Its shape can
+change between DuckDB releases**, and quackjvm pins a DuckDB version but users override that. So:
+treat any unexpected AST shape as "not rewritable" and fall through; never throw. The failure mode
+of a version bump must be that the rewrite quietly stops happening, not that queries break.
+
+### So: staged
+
+1. **Routing by name first.** One word at the call site, no parsing, all of the speedup. A
+   dashboard's panels are written once and run millions of times, so naming them is cheap.
+2. **Then the restricted rewrite, `OFF` by default, with `VERIFY`** for adoption.
+3. **Never a general rewrite.** Containment over arbitrary SQL is not worth attempting here.
 
 ## What this costs
 
