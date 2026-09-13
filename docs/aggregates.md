@@ -135,6 +135,63 @@ try (Stream<SqlRow> rows = database.query("SELECT make, price FROM car").stream(
 `toArray`. It is **one reusable view over the cursor**, so a row you want to keep beyond the
 iteration must be copied with `toArray()`.
 
+## Many people, the same panels
+
+A dashboard is the shape this is best at, and it is worth its own numbers because it is neither of
+the two cases usually measured. It is not many small queries and it is not one big analytical
+query — it is **many large queries at once**, which pull DuckDB's tuning in opposite directions.
+
+Measured on 2,000,000 sales, four panels — a group-by, a pivot, a filtered revenue-by-year, and a
+headline scalar aggregate — with each "user" looping over them. Against an on-heap CQEngine
+collection doing the same four in Java:
+
+| users | on-heap panels/s | quackjvm panels/s | on-heap p50 | quackjvm p50 |
+|---|---|---|---|---|
+| 1 | 11.2 | **804** | 124 ms | **1.3 ms** |
+| 2 | 24.7 | **1,087** | 122 ms | **1.8 ms** |
+| 4 | 49.2 | **1,216** | 124 ms | **3.0 ms** |
+| 8 | 96.2 | **1,116** | 120 ms | **4.8 ms** |
+| 16 | 95.6 | 1,070 | 196 ms | 8.1 ms |
+
+**Roughly 70–100x the throughput, and a hundredth of the latency.** A panel that takes the heap
+120 ms takes DuckDB 1.3 ms, because a group-by over two million rows is a columnar scan rather than
+two million virtual calls.
+
+### Tuning it: `threads` is the dial
+
+DuckDB parallelises *within* a query, which is what makes one panel fast and what makes sixteen
+panels fight over the same cores. The default is one thread per core; on a 10-core machine:
+
+| users | default | `threads=1` | `threads=2` | `threads=4` |
+|---|---|---|---|---|
+| 1 | **804** | 191 | 293 | 589 |
+| 4 | 1,216 | 742 | 794 | 1,207 |
+| 8 | 1,116 | 1,379 | 1,225 | **1,408** |
+| 16 | 1,070 | **1,470** | 1,285 | 1,329 |
+| p99 at 16 users | 77.6 ms | **39.0 ms** | 43.5 ms | 48.5 ms |
+
+Three things to take from it:
+
+- **Total throughput saturates around 1,200–1,470 panels/s whatever you do.** That is the machine,
+  not the setting. What the setting changes is how the work is shared out.
+- **The default is best at low concurrency and worst at high.** It wins outright at one user
+  (804 against 191) and loses at sixteen, where its p99 is twice the alternatives'.
+- **`threads = cores / 2` is the best all-rounder.** At `threads=4` on ten cores you keep most of
+  the single-user latency (1.9 ms against 1.3) and get the best throughput at eight users.
+
+```java
+DuckDBDatabase.builder().property("threads", "4").build();
+```
+
+If a handful of people share a dashboard, leave the default. If you are serving many concurrent
+sessions and care about the tail, halve it. See [Tuning](tuning.md#threads-is-the-only-one-that-matters-under-concurrency).
+
+### Give each request its own `QueryOptions`
+
+Worth repeating here because a dashboard server is exactly where it goes wrong: do not hoist one
+`QueryOptions` out of a loop and share it between request threads. See
+[Tuning](tuning.md#concurrency).
+
 ## Which read path is used
 
 `scalar` and `scalarOptional` deliberately read through plain JDBC: setting up a columnar export

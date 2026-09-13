@@ -246,6 +246,10 @@ expensive part of an object store is rebuilding objects, and none of these need 
 And the whole of SQL comes with it: window functions, `QUALIFY`, CTEs, `UNION`, reading a Parquet
 or CSV file and joining it against your collection without an import step.
 
+The clearest case is a **dashboard**: several people looking at the same group-bys and pivots. Four
+panels over 2,000,000 rows, on-heap against quackjvm — **11 panels/s becomes 804, and 124 ms
+becomes 1.3 ms**. See [Many people, the same panels](aggregates.md#many-people-the-same-panels).
+
 The rule underneath both tables: **rebuilding objects is what costs.** Materialising those same
 200,000 cars and summing them in Java takes quackjvm 58 ms; asking DuckDB for the sum takes 1.0 ms.
 If your workload fetches objects one at a time, stay on the heap. If it asks questions *about* many
