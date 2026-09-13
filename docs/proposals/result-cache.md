@@ -1,91 +1,133 @@
-# Proposal: a result cache for repeated panels
+# Pre-aggregation vs. a result cache
 
-**Status:** proposed, not implemented. Prompted by the dashboard measurements in
+**Status:** measured. Recommendation: **pre-aggregate; do not build a result cache into the
+library.** Prompted by the dashboard numbers in
 [Aggregates and projections](../aggregates.md#many-people-the-same-panels).
 
-## The observation
+## First, a correction
 
-A dashboard asks **the same questions over and over**. Ten people looking at the same board run the
-same group-by and the same pivot, seconds apart, against data that has not changed. Today every one
-of those is a full columnar scan.
+An earlier draft of this page recommended materialised views. **DuckDB 1.4.1 does not have them.**
 
-Measured on 2,000,000 sales with four panels, quackjvm saturates at **1,200–1,470 panels/s**
-whatever `threads` is set to — that ceiling is the machine's cores and memory bandwidth, not
-anything in the code. No tuning gets past it, because every request does the work again.
+```
+CREATE MATERIALIZED VIEW mv AS SELECT ...
+  -> Parser Error: syntax error at or near "MATERIALIZED"
+```
 
-A cache does not have to get past it. It has to avoid the work.
+A plain `CREATE VIEW` is a live view: it re-runs the query against the base table every time and
+caches nothing. The only way to precompute in DuckDB is `CREATE TABLE AS SELECT` — a real table you
+keep in step yourself.
+
+Which invites the fair objection: **that is just a cache in a different place, with the same
+staleness problem.** It is worth taking seriously, so this page measures the difference rather than
+asserting it.
+
+## The setup
+
+2,000,000 sales; a dashboard's four panels. The pre-aggregate carries every dimension a panel might
+group or filter by, with **additive measures only** — counts and sums, never averages:
+
+```sql
+CREATE TABLE agg AS
+SELECT region, make, colour, year, count(*) AS n, sum(price) AS total
+FROM sale GROUP BY 1,2,3,4;
+```
+
+**3,000 rows — 0.2% of the base table — built in 17 ms.** Averages are derived at query time as
+`sum(total)/sum(n)`, which is why the measures have to be additive: you cannot average an average.
+
+## What it buys
+
+| panel | base table | pre-aggregate | |
+|---|---|---|---|
+| group by make: count and average price | 6.3 ms | **1.31 ms** | 5x |
+| pivot: colour across make | 10.1 ms | **1.84 ms** | 5x |
+| revenue by year for one make | 2.7 ms | **0.64 ms** | 4x |
+| headline numbers for one region | 2.3 ms | **0.44 ms** | 5x |
+| **a slice nobody precomputed** — region × year, APAC only | 2.6 ms | **0.52 ms** | 5x |
+
+Note the last row. **That query was never anticipated, and the pre-aggregate still answers it 5x
+faster.** A result cache would have missed it completely and scanned all two million rows. This is
+the real difference between the two, and it is not a matter of degree: a cache can only answer
+questions it has already been asked, parameter for parameter, while a pre-aggregate answers any
+question that can be derived from its grain.
+
+**The honest limit is that 5x, not 100x.** Once the table is 3,000 rows the query no longer costs
+anything — what is left is DuckDB's fixed ~0.5 ms per statement, which no amount of precomputation
+removes. A cache hit *would* beat that, because it issues no statement at all.
+
+## Staleness: the part the objection is really about
+
+Both go stale. They do not go stale the same way.
+
+**A pre-aggregate can be incrementally maintained; a cached result cannot.** For additive measures,
+folding in new rows is just aggregating the new rows and appending the delta — panels already sum
+over the table, so duplicate group rows are simply summed too:
+
+```sql
+INSERT INTO agg
+SELECT region, make, colour, year, count(*), sum(price)
+FROM sale WHERE saleId >= :watermark GROUP BY 1,2,3,4;
+```
+
+Measured with 50,000 new sales arriving:
 
 | | |
 |---|---|
-| a panel today | 1.3 ms at one user, 8.1 ms at sixteen |
-| the same panel from a map | a few microseconds |
+| full rebuild | 13.8 ms |
+| **fold in the delta** | **3.5 ms** |
+| result identical to a full rebuild | **yes** — verified group by group |
 
-The interesting number is not the speedup on a hit — that is obvious — it is that **throughput
-stops being bounded by DuckDB at all** for the cached fraction. A board where eight of ten panels
-are shared and unchanged would serve most requests without touching the engine.
+A cache entry has no equivalent. You cannot partially update "the answer to that query"; you can
+only throw it away and pay the full price on the next request.
 
-## The shape
+The other asymmetry: **a stale pre-aggregate still answers every question**, just slightly behind.
+A stale cache entry is simply wrong for the one query it holds.
 
-```java
-DuckDBDatabase db = DuckDBDatabase.builder()
-        .file(file)
-        .resultCache(Duration.ofSeconds(5), 200)   // ttl, max entries; default off
-        .build();
+## What it cannot do
 
-// Unchanged. Served from the cache when an identical query ran inside the TTL.
-List<MakeStats> stats = db.query("SELECT make, count(*), avg(price) FROM sale GROUP BY 1")
-                          .records(MakeStats.class);
-```
+Non-additive measures. A pre-aggregate can carry `count`, `sum`, `min` and `max`, and averages
+derived from sum and count. It cannot carry a median or an exact distinct count, because those
+cannot be combined from partial groups:
 
-Keyed on the SQL string plus its bound parameters. Only whole materialised results are cacheable —
-`scalar`, `list`, `records`, `count` — never `stream()` or `forEachRow`, which hand back a cursor.
+| | base table |
+|---|---|
+| median price | 0.4 ms — no pre-aggregate equivalent |
+| exact distinct models | 0.4 ms — no pre-aggregate equivalent |
 
-## What has to be decided
+In practice this matters less than it sounds: both are already fast, because they are the queries
+DuckDB is built for. `approx_count_distinct` *is* mergeable via HyperLogLog if you need distinct
+counts at scale.
 
-1. **Staleness is the whole design.** A TTL is the honest, simple answer: results may be up to
-   *ttl* old, you choose how old, and nothing is ever silently wrong beyond that bound. The
-   alternative — invalidating on write — sounds better and is much harder: quackjvm would have to
-   know which tables a SQL string touches to invalidate the right entries, and DuckDB will happily
-   parse SQL we did not generate. A crude version (any write to this database clears the whole
-   cache) is cheap and correct, and for a read-mostly dashboard almost as good. **I would ship
-   TTL plus clear-on-write, and not attempt per-table invalidation.**
+Incremental maintenance also assumes **append-only** data. Deletes and updates break the fold-in,
+because a delta can add to a group but not remove from it. A mutable base table means either
+compensating negative deltas or a periodic full rebuild — which at 17 ms is not much of a hardship.
 
-2. **Cached results must be immutable.** `records()` returns a `List`; handing the same list to two
-   callers means one can mutate what the other sees. Wrap in `List.copyOf` on the way in.
+## The two are not alternatives
 
-3. **Memory.** This is a library whose selling point is not using heap. A cache of results is heap,
-   bounded by entry count rather than bytes, and a `records()` result can be large. Cap entries,
-   default the whole thing **off**, and say plainly in the javadoc that this trades heap for
-   latency — the opposite of the rest of the project.
+- **A pre-aggregate reduces the work**: 2,000,000 rows become 3,000. It composes, it is
+  incrementally maintainable, and it lives in DuckDB rather than on the Java heap.
+- **A cache eliminates the work** for a question already asked, and does nothing for any other.
 
-4. **It belongs in core, not the plugin.** `Rows` is where every materialised read goes and it
-   already takes a connection; the cache sits in front of it. The CQEngine plugin gets it for free
-   through `database.query(...)`, and `retrieve()` is deliberately *not* cached — a collection that
-   returns stale objects from `retrieve` would violate what `IndexedCollection` promises.
-
-## Alternatives considered
-
-**Let the application cache it.** Entirely reasonable, and for many teams the right answer — a
-`Caffeine` cache around the call site is ten lines and they control the invalidation. The argument
-for putting it in the library is that the key (SQL plus parameters) is exactly what we already
-have, and that getting it right once is better than every caller inventing it. **This is the main
-argument against the proposal and should be weighed honestly before building it.**
-
-**Rely on DuckDB.** DuckDB has no result cache. Its buffer pool means the *data* is warm, which is
-already reflected in the 1.3 ms — there is no further win to be had there.
-
-**Materialised views.** DuckDB supports them, and for a fixed dashboard they are strictly better
-than a cache: computed once, queryable, no staleness policy to argue about. Worth documenting as
-the answer for panels that are known in advance. A cache is for the case where the queries are not
-known ahead of time.
+They stack, and the pre-aggregate is the one to do first, because it needs no library support at
+all — it is a `CREATE TABLE AS SELECT` and a `WHERE id >= :watermark`.
 
 ## Recommendation
 
-**Measure the hit rate before building anything.** The whole case rests on a dashboard asking
-repeated identical questions, and that is an assumption about someone else's application, not
-something measured here. The benchmark deliberately randomises panel parameters, so it does not
-answer it either.
+**Do not build a result cache into quackjvm.**
 
-The cheap first step is to document **materialised views** for known panels, which needs no code at
-all and is better than a cache where it applies. Build the cache only if real usage shows a high
-rate of identical, parameter-for-parameter repeated queries.
+1. **Pre-aggregate first.** It is 4–5x, it composes, it is incrementally maintainable, it stays off
+   the heap, and it requires nothing from this library beyond the SQL you already have. Document
+   the pattern, including the additive-measures rule and the watermark refresh.
+2. **If a cache is still wanted after that, it belongs at the call site.** The remaining upside is
+   DuckDB's ~0.5 ms statement floor. Ten lines of Caffeine around the call give the same benefit,
+   and the application is the only thing that actually knows when its data changed — which is the
+   entire difficulty. A library-level TTL would be guessing on the caller's behalf.
+3. **Never cache `retrieve()`.** A CQEngine `IndexedCollection` promising objects it no longer
+   contains is a correctness bug, not a tuning option. Whatever happens on the SQL side, the object
+   API stays live.
+
+The measurement that would change this recommendation is a real dashboard showing a high rate of
+**parameter-for-parameter identical** queries. The benchmark here deliberately varies the
+parameters, because that is what a dashboard with filters does.
+
+Reproduce: `io.quackjvm.cqengine.bench.PreAggregateBenchmark`.

@@ -186,6 +186,39 @@ DuckDBDatabase.builder().property("threads", "4").build();
 If a handful of people share a dashboard, leave the default. If you are serving many concurrent
 sessions and care about the tail, halve it. See [Tuning](tuning.md#threads-is-the-only-one-that-matters-under-concurrency).
 
+### Pre-aggregate the panels
+
+A dashboard usually slices the same few measures a handful of ways, which means the base table is
+doing far more work than the question needs. One table fixes that:
+
+```sql
+CREATE TABLE agg AS
+SELECT region, make, colour, year, count(*) AS n, sum(price) AS total
+FROM sale GROUP BY 1,2,3,4;
+```
+
+On 2,000,000 sales that is **3,000 rows — 0.2% of the base table — built in 17 ms**, and panels run
+against it 4–5x faster. Keep the measures **additive** (counts and sums, never averages) and derive
+the rest at query time as `sum(total)/sum(n)`; you cannot average an average.
+
+Two things make this better than caching the answers. It **serves slices you never anticipated** —
+a region × year breakdown nobody precomputed is still 5x faster against the pre-aggregate, where a
+cache would simply miss. And it can be **kept in step incrementally**: for append-only data, fold in
+the new rows rather than rebuilding.
+
+```sql
+INSERT INTO agg
+SELECT region, make, colour, year, count(*), sum(price)
+FROM sale WHERE saleId >= :watermark GROUP BY 1,2,3,4;
+```
+
+3.5 ms against 13.8 ms for a full rebuild, and the result is identical.
+
+Note that **DuckDB has no materialised views** — `CREATE MATERIALIZED VIEW` is a parser error and a
+plain `CREATE VIEW` is live, re-scanning the base table every time. A pre-aggregate is a real table
+you maintain. The full comparison, including what it cannot do, is in
+[Pre-aggregation vs. a result cache](proposals/result-cache.md).
+
 ### Give each request its own `QueryOptions`
 
 Worth repeating here because a dashboard server is exactly where it goes wrong: do not hoist one
