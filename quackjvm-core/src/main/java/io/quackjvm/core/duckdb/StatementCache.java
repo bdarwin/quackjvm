@@ -22,11 +22,13 @@ import java.util.Map;
  * - which would mean one request using the same SQL twice at once - is not served from the cache;
  * the second caller gets a real statement of its own.</p>
  *
- * <p><b>Queries are not pooled.</b> Closing a real JDBC statement closes the result set it
- * produced; a pooled statement's {@code close} cannot, because the statement lives on. Rather than
- * depend on every caller draining its result set before closing the statement, a statement which
- * has produced a result set is dropped from the cache and closed for real. Writes - which is where
- * the cost being saved actually is - are pooled.</p>
+ * <p><b>Queries are pooled too, and their result sets are closed for them.</b> Closing a real JDBC
+ * statement closes the result set it produced, and a pooled statement has to do the same or a
+ * caller who relies on that leaks a result set - which on DuckDB means an open transaction and a
+ * checkpoint that cannot run. So the cache remembers the result set each {@code executeQuery}
+ * returned and closes it when the statement comes back, which is exactly what a real close does.
+ * A statement handed out twice without being closed is not served from the cache, so overlapping
+ * result sets on one connection each get a statement of their own.</p>
  *
  * <p><b>Invalidation.</b> DuckDB resolves a prepared statement against the catalog as it stands
  * when the statement is prepared, so a cached statement outlives the table it refers to only until
@@ -93,8 +95,8 @@ final class StatementCache {
         private final PreparedStatement statement;
         private final PreparedStatement proxy;
         private boolean inUse;
-        /** Set once this statement has produced a result set, which makes it unsafe to pool. */
-        private boolean producedResultSet;
+        /** The result set of the last executeQuery, closed when the statement is returned. */
+        private java.sql.ResultSet openResultSet;
 
         Entry(PreparedStatement statement) {
             this.statement = statement;
@@ -103,16 +105,11 @@ final class StatementCache {
                     new Class<?>[]{PreparedStatement.class},
                     (p, method, args) -> {
                         String name = method.getName();
-                        if ("executeQuery".equals(name)) {
-                            producedResultSet = true;
-                        }
                         if ("close".equals(name) && (args == null || args.length == 0)) {
                             inUse = false;
-                            if (producedResultSet) {
-                                evict();
-                                statement.close();
-                                return null;
-                            }
+                            // A real close would close this; so must we, or the caller leaks it.
+                            Sql.closeQuietly(openResultSet);
+                            openResultSet = null;
                             try {
                                 statement.clearBatch();
                             }
@@ -123,12 +120,17 @@ final class StatementCache {
                             }
                             return null;
                         }
+                        Object result;
                         try {
-                            return method.invoke(statement, args);
+                            result = method.invoke(statement, args);
                         }
                         catch (InvocationTargetException e) {
                             throw e.getCause();
                         }
+                        if ("executeQuery".equals(name)) {
+                            openResultSet = (java.sql.ResultSet) result;
+                        }
+                        return result;
                     });
         }
 
