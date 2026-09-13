@@ -186,6 +186,47 @@ DuckDBDatabase.builder().property("threads", "4").build();
 If a handful of people share a dashboard, leave the default. If you are serving many concurrent
 sessions and care about the tail, halve it. See [Tuning](tuning.md#threads-is-the-only-one-that-matters-under-concurrency).
 
+### At multi-million scale, pre-aggregation is the only lever that matters
+
+The numbers above are 2,000,000 rows and simple panels. Scale both and the picture sharpens.
+**10,000,000 rows, 16 concurrent users, four genuinely complex panels** — a window function ranking
+top models within each region, a three-dimensional roll-up with a `HAVING`, a two-dimensional
+`PIVOT`, and a share-of-total using a correlated aggregate:
+
+| | panels/s | p50 | p99 |
+|---|---|---|---|
+| base table, all 16 at once | 42.5 | 296 ms | 898 ms |
+| base table, at most 2 running | 41.4 | 384 ms | **443 ms** |
+| **pre-aggregate, all 16 at once** | **2,285** | **5.3 ms** | 25 ms |
+| pre-aggregate, at most 4 running | 1,330 | 11.8 ms | **18 ms** |
+
+**54x the throughput and a 36x smaller tail.** The pre-aggregate is 18,000 rows — 0.18% of the base
+table — and takes 62 ms to build.
+
+Two things follow, and they are the whole of the guidance for this shape of workload:
+
+**Limiting concurrency fixes the tail but never the throughput.** Look at the first two rows:
+allowing only two queries to run at a time leaves throughput unchanged (42.5 → 41.4) and halves p99
+(898 ms → 443 ms). That is because the machine is already saturated — DuckDB parallelises *within*
+a query and expects to own the machine while it runs one, so sixteen at once is sixteen queries
+fighting for the same cores. Making them queue does not create capacity, it just stops them
+trampling each other. **You cannot tune your way to more throughput here.**
+
+**Reducing the work is what creates capacity.** That is the third row, and it is not a tuning
+change at all — it is asking a smaller question.
+
+**And the two interact.** With the pre-aggregate, limiting concurrency *hurts* (2,285 → 1,330),
+because the queries are now short enough that queueing is pure overhead. So: limit concurrency when
+queries are slow, do not when they are fast. Fix the queries first and the question goes away.
+
+!!! warning "`threads` is a global setting, not a per-connection one"
+
+    The obvious idea — give analytical queries many threads and interactive ones few — does not
+    work. `SET threads=1` on any connection changes it for every connection of that database,
+    verified by reading `current_setting('threads')` back from the others. There is no per-query
+    parallelism budget in DuckDB 1.4.1, which is why admission control on our side of the boundary
+    is the only remaining lever on latency.
+
 ### Pre-aggregate the panels
 
 A dashboard usually slices the same few measures a handful of ways, which means the base table is

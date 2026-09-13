@@ -13,9 +13,21 @@ CREATE MATERIALIZED VIEW mv AS SELECT ...
   -> Parser Error: syntax error at or near "MATERIALIZED"
 ```
 
-A plain `CREATE VIEW` is a live view: it re-runs the query against the base table every time and
-caches nothing. The only way to precompute in DuckDB is `CREATE TABLE AS SELECT` — a real table you
-keep in step yourself.
+A plain `CREATE VIEW` stores the query, not its result, and re-runs it against the base table every
+time. Three independent checks on 4,000,000 rows, since this is the sort of claim worth not taking
+on trust:
+
+| | |
+|---|---|
+| the `GROUP BY` against the base table | 5.6 ms |
+| the same thing **through the view** | 5.7 ms |
+| a genuinely precomputed `CREATE TABLE AS SELECT` | **0.2 ms** |
+
+`EXPLAIN SELECT * FROM v` shows `HASH_GROUP_BY` over `SEQ_SCAN` — it is re-running the aggregate.
+And the view reflects rows inserted after it was created, where the precomputed table does not.
+
+So the only way to precompute in DuckDB is `CREATE TABLE AS SELECT` — a real table you keep in step
+yourself.
 
 Which invites the fair objection: **that is just a cache in a different place, with the same
 staleness problem.** It is worth taking seriously, so this page measures the difference rather than
@@ -51,9 +63,17 @@ the real difference between the two, and it is not a matter of degree: a cache c
 questions it has already been asked, parameter for parameter, while a pre-aggregate answers any
 question that can be derived from its grain.
 
-**The honest limit is that 5x, not 100x.** Once the table is 3,000 rows the query no longer costs
-anything — what is left is DuckDB's fixed ~0.5 ms per statement, which no amount of precomputation
-removes. A cache hit *would* beat that, because it issues no statement at all.
+**That 5x is the floor, and it grows with scale and complexity.** On 2,000,000 rows with simple
+panels, what is left after pre-aggregating is DuckDB's fixed ~0.5 ms per statement, which no amount
+of precomputation removes — so 5x is all there is. Raise the table to 10,000,000 rows and make the
+panels genuinely complex (a window function, a three-dimensional roll-up, a two-dimensional pivot, a
+correlated share-of-total) with 16 concurrent users, and the same technique is worth **54x**:
+42.5 panels/s against 2,285, with p99 falling from 898 ms to 25 ms. The pre-aggregate is 18,000
+rows, 0.18% of the base table, built in 62 ms.
+
+The rule is simply that pre-aggregation removes work proportional to the base table while leaving
+the fixed per-statement cost behind. The larger and more complex the query, the more of it there is
+to remove.
 
 ## Staleness: the part the objection is really about
 

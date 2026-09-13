@@ -199,6 +199,18 @@ Anything DuckDB accepts can be passed through:
 .property("preserve_insertion_order", "false")
 ```
 
+### `threads` is global, not per connection
+
+Worth knowing before you plan around it: **setting `threads` on one connection sets it for every
+connection of that database.** There is no per-query parallelism budget in DuckDB 1.4.1, so you
+cannot give an analytical query ten threads and a dashboard panel two. Verified by setting it on
+one connection and reading `current_setting('threads')` back from the others — they all report the
+new value.
+
+That constraint is why [admission control](aggregates.md#at-multi-million-scale-pre-aggregation-is-the-only-lever-that-matters)
+— limiting how many queries run at once, on your side of the boundary — is the only remaining lever
+on tail latency once `threads` is set.
+
 ### `threads` is the only one that matters under concurrency
 
 DuckDB defaults to one thread per core and parallelises *within* a query. When your application is
