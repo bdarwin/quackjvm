@@ -14,14 +14,22 @@ double total = database.query("SELECT sum(price) FROM car WHERE make = ?", "Ford
                        .scalar(Double.class);
 ```
 
-Measured on 1,000,000 cars, 200,000 matching:
+Measured on 1,000,000 cars, 200,000 matching — and compared against an **on-heap** CQEngine
+collection holding the same objects, not just against quackjvm doing it the slow way:
 
-| | time | |
-|---|---|---|
-| retrieve matching objects, sum in Java | 99.8 ms | what an object query engine makes you do |
-| `query(...).scalar(Double.class)` | **2.3 ms** | **44x faster** |
-| `query(...).list(Double.class)` — one column, 200k rows | 11.6 ms | 8.6x |
-| `query(...).records(MakeStats.class)` — grouped | 5.3 ms | – |
+| | on-heap | quackjvm | |
+|---|---|---|---|
+| sum a column over 200k matches | 10.5 ms | **1.0 ms** | **10x faster** |
+| group by make: count and average price | 117.5 ms | **1.9 ms** | **62x faster** |
+| pivot: makes across years | *not possible* | 0.6 ms | – |
+| median price | *not possible*\* | 14.6 ms | – |
+| approximate distinct models | *not possible* | 0.6 ms | – |
+
+<sub>\* possible, but only by materialising all 1,000,000 objects and sorting them in Java.</sub>
+
+Note what the first row says: this is not merely faster than quackjvm materialising the objects
+(58 ms), it is **ten times faster than the heap**, which has the objects in hand already. Rebuilding
+objects is what costs, and an aggregate rebuilds none.
 
 ## The `Rows` API
 

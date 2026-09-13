@@ -46,10 +46,26 @@ Be clear-eyed about this. On a million objects:
 | bulk write per object | 3.1 µs | **2.3 µs** |
 | join 200k to 50k | 0.373 s | **0.270 s** |
 
-**On-heap CQEngine wins every single-collection query, and it is not close** — between 80x and
-250x on the small ones. No amount of tuning changes that; a pointer dereference beats a database
-query. What you get back is 862 MB of Java heap that the garbage collector no longer walks, a 36 MB
-file instead of 1.4 GB of process memory, joins across collections, and the whole of SQL.
+**On-heap CQEngine wins every small single-collection query, and it is not close** — between 80x
+and 250x. No amount of tuning changes that, and the reason is structural: DuckDB sequentially scans
+a table even for an equality on its primary key, so no index you add will help. See
+[Querying](querying.md#why-a-point-lookup-costs-what-it-does).
+
+What you get back is 862 MB of Java heap the garbage collector no longer walks, a 36 MB file
+instead of 1.4 GB of process memory, joins across collections, and the whole of SQL.
+
+**And the table above asks only the heap's questions.** Ask a database's and it inverts, on the
+same million objects:
+
+| | on-heap | quackjvm | |
+|---|---|---|---|
+| sum a column over 200k matches | 10.5 ms | **1.0 ms** | **10x faster** |
+| group by make: count and average price | 117.5 ms | **1.9 ms** | **62x faster** |
+| pivot, median, approximate distinct counts | *not possible* | under 15 ms | – |
+
+The dividing line is whether a question needs the objects rebuilt. Fetching one object: stay on the
+heap. Asking something *about* many objects: this is 10–60x faster and expresses things the heap
+cannot. See [Aggregates and projections](aggregates.md).
 
 **Take this when memory is your constraint, not when latency is.** If your p99 is dominated by many
 small lookups, stay on the heap.

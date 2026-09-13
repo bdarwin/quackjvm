@@ -130,11 +130,19 @@ is the better one, not whether moving off the heap is worth it at all.
 
 ### Reading them
 
-**Against on-heap CQEngine, this is a memory trade, not a speed one.** 1,350 MB of process memory
-becomes 145 MB, and 861 MB of Java heap becomes 3 MB - the garbage collector stops having a million
-objects to walk. Every individual query gets slower, most of them by two orders of magnitude in
-relative terms and by a fraction of a millisecond in absolute ones. Take it when memory is your
-constraint, not when latency is.
+**Against on-heap CQEngine, this is a memory trade, not a speed one - for these queries.** 1,387 MB
+of process memory becomes 145 MB, and 862 MB of Java heap becomes 3 MB, and the garbage collector
+stops having a million objects to walk. Every query in that table gets slower, most by two orders
+of magnitude in relative terms and a fraction of a millisecond in absolute ones.
+
+The reason is structural rather than fixable: **DuckDB sequentially scans a table even for an
+equality on its primary key.** It does not use the index. Measured on a million rows, a one-row
+lookup costs 224 us with a primary key, 233 us with no key at all, and 254 us with an explicit ART
+index - slower. Even `SELECT 1`, touching no table, costs 48 us. It is an analytical engine.
+
+**But that table asks the heap's questions.** Ask a database's questions and it inverts - see
+*Answering questions without rebuilding objects* below, where a grouped aggregate over the same
+million objects is 62x faster than the heap and a pivot has no on-heap equivalent at all.
 
 **All three side by side.** The same million objects, the same three indexes, the same queries -
 stock CQEngine in the heap, CQEngine's own SQLite disk persistence, and this plugin. All three are
@@ -206,14 +214,21 @@ List<MakeStats> stats = database.query(
 database.query("PIVOT car ON colour USING count(*) GROUP BY make").forEachRow(System.out::println);
 ```
 
-The same question, 1,000,000 cars, 200,000 of them matching:
+The same questions, 1,000,000 cars, 200,000 of them matching, against an on-heap CQEngine
+collection holding the same objects:
 
-| | time | |
-|---|---|---|
-| retrieve matching objects, sum in Java | 99.8 ms | what an object query engine makes you do |
-| `query(...).scalar(Double.class)` | **2.3 ms** | **44x** |
-| `query(...).list(Double.class)` - one column of 200k rows | 11.6 ms | 8.6x |
-| `query(...).records(MakeStats.class)` - grouped | 5.3 ms | – |
+| | on-heap | quackjvm | |
+|---|---|---|---|
+| sum a column over 200k matches | 10.5 ms | **1.0 ms** | **10x faster** |
+| group by make: count and average price | 117.5 ms | **1.9 ms** | **62x faster** |
+| pivot: makes across years | _not possible_ | 0.6 ms | – |
+| median price | _not possible_* | 14.6 ms | – |
+| approximate distinct models | _not possible_ | 0.6 ms | – |
+
+<sub>* possible, but only by materialising all 1,000,000 objects and sorting them in Java.</sub>
+
+The rule underneath it: **rebuilding objects is what costs.** Materialising those 200,000 cars and
+summing them in Java takes quackjvm 58 ms; asking DuckDB for the sum takes 1.0 ms.
 
 `scalar` deliberately reads through JDBC rather than Arrow: setting up a columnar export costs more
 than reading a single value. `list` and `records` use Arrow. Both are handled for you.

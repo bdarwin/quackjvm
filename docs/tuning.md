@@ -101,9 +101,15 @@ cars.addIndex(DuckDBIndex.onAttributeWithArtIndex(Car.MANUFACTURER));
 difference to any of those queries, because DuckDB was already scanning the compressed columns
 faster than it could traverse an index.
 
-Where they do help is a highly selective equality lookup into a large index table: on a million-row
-index over 50,000 distinct values, fetching the ~20 matching objects took 1.19 ms by scan and
-0.87 ms with an ART index. Worth it for a hot lookup path; not worth it by default.
+Where they do help is a highly selective equality lookup into a large **attribute index table**: on
+a million-row index over 50,000 distinct values, fetching the ~20 matching objects took 1.19 ms by
+scan and 0.87 ms with an ART index. Worth it for a hot lookup path; not worth it by default.
+
+Where they do **not** help at all is the object table itself. DuckDB sequentially scans it for an
+equality on the primary key regardless: a one-row lookup on a million rows costs 224 µs with a
+primary key, 233 µs with none, and 254 µs with an ART index — adding one made it slower. There is
+no index you can add to make a point lookup fast; see
+[Querying](querying.md#why-a-point-lookup-costs-what-it-does).
 
 ## The object cache
 

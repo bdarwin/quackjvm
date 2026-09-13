@@ -133,6 +133,24 @@ execution inside DuckDB, not JDBC overhead. Against on-heap CQEngine, on a milli
 | query returning 2% of the collection | 1.1 ms | 13.2 ms |
 | iterate everything | 210 ms | 339 ms |
 
+### Why a point lookup costs what it does
+
+Not because of JDBC, and not because of anything quackjvm does. **DuckDB sequentially scans a table
+even for an equality on its primary key** — it does not use the index. Measured on a million rows,
+fetching one row by key:
+
+| | |
+|---|---|
+| table with a `PRIMARY KEY` | 224 µs |
+| table with no key at all | 233 µs |
+| table with an explicit ART index | 254 µs — *slower* |
+| `SELECT 1`, touching no table | 48 µs |
+
+A vectorised scan of a million compressed rows in 224 µs is fast for a scan. It is just never going
+to beat a B-tree descent or a pointer dereference, and no index you add will change it. This is
+what an analytical engine is. Plan around it: if your workload is dominated by single-object
+lookups, keep those objects on the heap.
+
 The pattern is worth internalising: **the bigger the query, the smaller the relative penalty.**
 A point lookup is 77x slower; iterating the whole collection is 1.6x. The fixed cost dominates
 small queries and disappears into large ones.
