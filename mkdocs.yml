@@ -59,6 +59,7 @@ nav:
   - The engine:
       - Storing objects: storing-objects.md
       - Aggregates and projections: aggregates.md
+      - Materializations: materializations.md
       - Writing data: writing.md
       - Tuning: tuning.md
   - CQEngine plugin:

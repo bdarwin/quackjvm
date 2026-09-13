@@ -1,6 +1,7 @@
 # Proposal: managed materializations
 
-**Status:** proposed, measured, **recommended**. This supersedes the result-cache idea in
+**Status:** stage 1 is **built and shipped** — see [Materializations](../materializations.md).
+Stages 2 and 3 below (incremental refresh, seamless rewrite) are still proposed. This supersedes the result-cache idea in
 [Pre-aggregation vs. a result cache](result-cache.md).
 
 ## The idea
@@ -142,8 +143,8 @@ of a version bump must be that the rewrite quietly stops happening, not that que
 
 ### So: staged
 
-1. **Routing by name first.** One word at the call site, no parsing, all of the speedup. A
-   dashboard's panels are written once and run millions of times, so naming them is cheap.
+1. ~~**Routing by name first.**~~ **Built** — `database.materialize(name).as(sql).build()`, with the
+   atomic refresh. See [Materializations](../materializations.md).
 2. **Then the restricted rewrite, `OFF` by default, with `VERIFY`** for adoption.
 3. **Never a general rewrite.** Containment over arbitrary SQL is not worth attempting here.
 

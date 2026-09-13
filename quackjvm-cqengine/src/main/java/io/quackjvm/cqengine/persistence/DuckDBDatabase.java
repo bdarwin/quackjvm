@@ -6,6 +6,7 @@ import io.quackjvm.core.duckdb.ColumnDef;
 import io.quackjvm.core.duckdb.ConnectionPool;
 import io.quackjvm.cqengine.internal.JoinTarget;
 import io.quackjvm.cqengine.query.Join;
+import io.quackjvm.core.sql.Materialization;
 import io.quackjvm.core.sql.Rows;
 import io.quackjvm.core.sql.SqlQuery;
 import io.quackjvm.core.sql.SqlRow;
@@ -57,6 +58,7 @@ public final class DuckDBDatabase implements Closeable {
     private final File file;
     private final DuckDBConnection rootConnection;
     private final ConnectionPool connectionPool;
+    private final Map<String, ManagedMaterialization> materializations = new ConcurrentHashMap<>();
     private final boolean serializeWrites;
     private final Lock writeLock = new ReentrantLock(true);
 
@@ -466,6 +468,136 @@ public final class DuckDBDatabase implements Closeable {
      * A readable listing of everything {@link #sql} can query: each collection, the name to use for
      * it, and its columns. Print this when writing a query.
      */
+    // ---------- Materializations ----------
+
+    /**
+     * Precomputes a query into a table, so that requests are served from the answer rather than
+     * from the data. See {@link Materialization}.
+     *
+     * <pre>
+     * ManagedMaterialization topModels = database.materialize("top_models")
+     *         .as("SELECT region, make, sum(price) AS revenue FROM sale GROUP BY 1, 2")
+     *         .build();
+     *
+     * database.query("SELECT * FROM top_models WHERE region = ?", "EMEA").records(Row.class);
+     * topModels.refresh();
+     * </pre>
+     */
+    public MaterializationBuilder materialize(String name) {
+        return new MaterializationBuilder(this, name);
+    }
+
+    /** The materializations built through this database, by name. */
+    public Map<String, ManagedMaterialization> getMaterializations() {
+        return Map.copyOf(materializations);
+    }
+
+    public static final class MaterializationBuilder {
+        private final DuckDBDatabase database;
+        private final String name;
+        private String sql;
+
+        private MaterializationBuilder(DuckDBDatabase database, String name) {
+            this.database = database;
+            this.name = name;
+        }
+
+        /** The query to precompute. */
+        public MaterializationBuilder as(String sql) {
+            this.sql = sql;
+            return this;
+        }
+
+        /** Registers it and builds the table if it is not there already. */
+        public ManagedMaterialization build() {
+            ManagedMaterialization managed =
+                    new ManagedMaterialization(database, new Materialization(name, sql));
+            managed.createIfAbsent();
+            database.materializations.put(name, managed);
+            return managed;
+        }
+    }
+
+    /** A {@link Materialization} bound to this database, so it needs no connection passed in. */
+    public static final class ManagedMaterialization {
+        private final DuckDBDatabase database;
+        private final Materialization materialization;
+
+        private ManagedMaterialization(DuckDBDatabase database, Materialization materialization) {
+            this.database = database;
+            this.materialization = materialization;
+        }
+
+        public String getName() {
+            return materialization.getName();
+        }
+
+        public String getSql() {
+            return materialization.getSql();
+        }
+
+        public java.time.Instant getBuiltAt() {
+            return materialization.getBuiltAt();
+        }
+
+        public boolean isOlderThan(java.time.Duration age) {
+            return materialization.isOlderThan(age);
+        }
+
+        /** Rebuilds it atomically; readers never see it missing. */
+        public void refresh() {
+            withConnection(materialization::refresh);
+        }
+
+        public void refreshIfOlderThan(java.time.Duration age) {
+            withConnection(connection -> materialization.refreshIfOlderThan(connection, age));
+        }
+
+        public long rowCount() {
+            return withConnectionReturning(materialization::rowCount);
+        }
+
+        public boolean exists() {
+            return withConnectionReturning(materialization::exists);
+        }
+
+        /** Drops the table and forgets it. */
+        public void drop() {
+            withConnection(materialization::drop);
+            database.materializations.remove(getName());
+        }
+
+        private void createIfAbsent() {
+            withConnection(materialization::createIfAbsent);
+        }
+
+        private void withConnection(java.util.function.Consumer<Connection> action) {
+            // An unmanaged connection: a refresh runs DDL and must not hold a request-scoped one.
+            try (Connection connection = database.newConnection()) {
+                action.accept(connection);
+            }
+            catch (SQLException e) {
+                throw new IllegalStateException("Failed to open a connection for "
+                        + materialization, e);
+            }
+        }
+
+        private <T> T withConnectionReturning(java.util.function.Function<Connection, T> action) {
+            try (Connection connection = database.newConnection()) {
+                return action.apply(connection);
+            }
+            catch (SQLException e) {
+                throw new IllegalStateException("Failed to open a connection for "
+                        + materialization, e);
+            }
+        }
+
+        @Override
+        public String toString() {
+            return materialization.toString();
+        }
+    }
+
     public String describe() {
         StringBuilder description = new StringBuilder("DuckDB database ")
                 .append(file == null ? "(in memory)" : file).append(", queryable with sql():\n");
