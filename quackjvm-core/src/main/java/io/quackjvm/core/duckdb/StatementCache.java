@@ -44,6 +44,8 @@ final class StatementCache {
 
     private final Connection connection;
     private final Map<String, Entry> entries = new HashMap<>();
+    private long hits;
+    private long misses;
 
     StatementCache(Connection connection) {
         this.connection = connection;
@@ -56,10 +58,12 @@ final class StatementCache {
     PreparedStatement prepare(String sql) throws SQLException {
         Entry entry = entries.get(sql);
         if (entry != null && !entry.inUse) {
+            hits++;
             entry.inUse = true;
             entry.statement.clearParameters();
             return entry.proxy;
         }
+        misses++;
         if (entry != null) {
             // Already handed out and not yet closed; this caller needs its own.
             return connection.prepareStatement(sql);
@@ -71,6 +75,16 @@ final class StatementCache {
         created.inUse = true;
         entries.put(sql, created);
         return created.proxy;
+    }
+
+    /** How many prepares were served from the cache rather than reaching DuckDB. */
+    long getHits() {
+        return hits;
+    }
+
+    /** How many prepares reached DuckDB, which costs about 200 microseconds each. */
+    long getMisses() {
+        return misses;
     }
 
     /** Discards every cached statement; see the note on invalidation above. */

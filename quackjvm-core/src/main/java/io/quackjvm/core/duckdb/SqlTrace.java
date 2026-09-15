@@ -22,13 +22,61 @@ import java.util.Map;
  * for (int i = 0; i &lt; n; i++) collection.add(object(i));
  * SqlTrace.dump("add", n);
  * </pre>
+ *
+ * <p>Statement <em>counts</em> are exact and do not depend on how fast the machine is, which makes
+ * them the one part of performance that can be asserted in a test. {@link #countsByStatement()}
+ * exists for that: a budget of "one add issues two statements against the object table" catches a
+ * regression that a timing threshold would miss on a fast machine and report falsely on a slow
+ * one.</p>
+ *
+ * <p>Timings are accumulated under a lock, so tracing serialises the work it measures. Leave it off
+ * when measuring concurrency; it answers "where does one request spend its time", not "why do N
+ * requests not scale".</p>
  */
 public final class SqlTrace {
 
-    public static final boolean ENABLED = Boolean.getBoolean("quackjvm.trace");
+    private static volatile boolean enabled = Boolean.getBoolean("quackjvm.trace");
     public static final Map<String, long[]> STATS = new LinkedHashMap<>();
 
     private SqlTrace() {
+    }
+
+    /** Whether tracing is on. Set by {@code -Dquackjvm.trace=true} or {@link #setEnabled}. */
+    public static boolean isEnabled() {
+        return enabled;
+    }
+
+    /**
+     * Turns tracing on or off at runtime, so a test can measure one block without a system
+     * property. Only connections borrowed after this call are traced.
+     */
+    public static void setEnabled(boolean value) {
+        enabled = value;
+    }
+
+    /** How many times each statement ran since the last {@link #reset}, keyed by its SQL. */
+    public static synchronized Map<String, Long> countsByStatement() {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        STATS.forEach((what, stat) -> counts.put(what, stat[0]));
+        return counts;
+    }
+
+    /**
+     * How many statements were executed since the last {@link #reset}, ignoring the cost of
+     * preparing them and of opening and closing connections.
+     *
+     * @param sqlFragment counts only statements whose SQL contains this, or all of them if null
+     */
+    public static synchronized long executionCount(String sqlFragment) {
+        long total = 0;
+        for (Map.Entry<String, long[]> entry : STATS.entrySet()) {
+            String what = entry.getKey();
+            boolean isExecution = what.startsWith("execute");
+            if (isExecution && (sqlFragment == null || what.contains(sqlFragment))) {
+                total += entry.getValue()[0];
+            }
+        }
+        return total;
     }
 
     public static synchronized void record(String what, long nanos) {
@@ -63,7 +111,7 @@ public final class SqlTrace {
     }
 
     public static Connection wrap(Connection connection) {
-        if (!ENABLED) {
+        if (!enabled) {
             return connection;
         }
         return (Connection) Proxy.newProxyInstance(SqlTrace.class.getClassLoader(),

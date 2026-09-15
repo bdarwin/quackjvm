@@ -110,6 +110,25 @@ public final class ConnectionPool {
         Sql.closeQuietly(connection);
     }
 
+    /**
+     * How many prepares this pool's connections served from cache, and how many reached DuckDB.
+     *
+     * <p>A prepare costs DuckDB about 200 microseconds, and the difference between a hit and a miss
+     * is invisible to anything that only counts JDBC calls - which is why it is counted here, so a
+     * test can assert the cache is working rather than infer it from a stopwatch.</p>
+     *
+     * @return {@code {hits, misses}}
+     */
+    public long[] getStatementCacheStats() {
+        long hits = 0;
+        long misses = 0;
+        for (StatementCache cache : statementCaches.values()) {
+            hits += cache.getHits();
+            misses += cache.getMisses();
+        }
+        return new long[]{hits, misses};
+    }
+
     /** Closes every pooled connection, and the statements cached against them. */
     public void close() {
         closed = true;

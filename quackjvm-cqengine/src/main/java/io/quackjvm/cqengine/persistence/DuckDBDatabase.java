@@ -71,7 +71,40 @@ public final class DuckDBDatabase implements Closeable {
     /** Every persistence created from this database, by collection name. */
     private final Map<String, DuckDBPersistence<?, ?>> persistences = new ConcurrentHashMap<>();
     /** Collections created through {@link CollectionBuilder}, so that joins can resolve them. */
-    private final Map<Object, DuckDBPersistence<?, ?>> byCollection = new ConcurrentHashMap<>();
+    /**
+     * Collections to their persistence, keyed by <b>identity</b>.
+     *
+     * <p>Not by equality, and this matters more than it looks. An {@code IndexedCollection} is a
+     * {@code Set}, so its {@code equals} and {@code hashCode} are {@code AbstractSet}'s - which
+     * call {@code size()}, which for a DuckDB-backed collection is a database query. A
+     * {@code ConcurrentHashMap} calls {@code equals} on a key <em>while holding the bin's lock</em>,
+     * so registering a collection would run a query under that lock: one thread waiting on the
+     * collection's write lock while holding the bin, another holding that write lock and waiting
+     * for the bin. Eight collections built at once deadlocked on exactly that.</p>
+     *
+     * <p>Identity is also the semantics we want: two collection instances are two collections,
+     * however equal their contents.</p>
+     */
+    private final Map<CollectionKey, DuckDBPersistence<?, ?>> byCollection = new ConcurrentHashMap<>();
+
+    /** An identity key, so that looking a collection up never touches its contents. */
+    private static final class CollectionKey {
+        private final com.googlecode.cqengine.IndexedCollection<?> collection;
+
+        CollectionKey(com.googlecode.cqengine.IndexedCollection<?> collection) {
+            this.collection = collection;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof CollectionKey && ((CollectionKey) other).collection == collection;
+        }
+
+        @Override
+        public int hashCode() {
+            return System.identityHashCode(collection);
+        }
+    }
 
     private volatile boolean closed;
 
@@ -243,7 +276,7 @@ public final class DuckDBDatabase implements Closeable {
             DuckDBPersistence<O, A> persistence = buildPersistence();
             com.googlecode.cqengine.IndexedCollection<O> collection =
                     new DuckDBIndexedCollection<>(persistence);
-            database.byCollection.put(collection, persistence);
+            database.byCollection.put(new CollectionKey(collection), persistence);
             // The object table exists by now (the collection's construction created it), so the
             // view can be pointed at it.
             database.createViewFor(persistence);
@@ -278,7 +311,7 @@ public final class DuckDBDatabase implements Closeable {
     /** Associates a collection with its persistence, so joins can resolve it. */
     public void register(com.googlecode.cqengine.IndexedCollection<?> collection,
                          DuckDBPersistence<?, ?> persistence) {
-        byCollection.put(collection, persistence);
+        byCollection.put(new CollectionKey(collection), persistence);
     }
 
     /**
@@ -292,7 +325,7 @@ public final class DuckDBDatabase implements Closeable {
         if (collection == null) {
             return null;
         }
-        DuckDBPersistence<?, ?> persistence = byCollection.get(collection);
+        DuckDBPersistence<?, ?> persistence = byCollection.get(new CollectionKey(collection));
         if (persistence == null) {
             persistence = persistenceByReflection(collection);
         }
@@ -303,7 +336,8 @@ public final class DuckDBDatabase implements Closeable {
      * Recovers the persistence from a collection which was constructed directly rather than through
      * {@link CollectionBuilder}. CQEngine keeps it in a protected field with no accessor.
      */
-    private DuckDBPersistence<?, ?> persistenceByReflection(Object collection) {
+    private DuckDBPersistence<?, ?> persistenceByReflection(
+            com.googlecode.cqengine.IndexedCollection<?> collection) {
         try {
             java.lang.reflect.Field field =
                     com.googlecode.cqengine.ConcurrentIndexedCollection.class.getDeclaredField("persistence");
@@ -311,7 +345,7 @@ public final class DuckDBDatabase implements Closeable {
             Object value = field.get(collection);
             if (value instanceof DuckDBPersistence<?, ?> duckDBPersistence
                     && duckDBPersistence.getDatabase() == this) {
-                byCollection.put(collection, duckDBPersistence);
+                byCollection.put(new CollectionKey(collection), duckDBPersistence);
                 return duckDBPersistence;
             }
             return null;
@@ -323,7 +357,7 @@ public final class DuckDBDatabase implements Closeable {
 
     /** The persistence backing the given collection, or null if it is not stored in this database. */
     public DuckDBPersistence<?, ?> persistenceFor(com.googlecode.cqengine.IndexedCollection<?> collection) {
-        return byCollection.get(collection);
+        return byCollection.get(new CollectionKey(collection));
     }
 
     public Collection<DuckDBPersistence<?, ?>> getPersistences() {
@@ -681,6 +715,14 @@ public final class DuckDBDatabase implements Closeable {
         catch (SQLException e) {
             throw new IllegalStateException("Failed to open a DuckDB connection to " + this, e);
         }
+    }
+
+    /**
+     * How many prepared statements were served from cache and how many reached DuckDB, as
+     * {@code {hits, misses}}. A miss costs DuckDB about 200 microseconds; a hit costs nothing.
+     */
+    public long[] getStatementCacheStats() {
+        return connectionPool.getStatementCacheStats();
     }
 
     Lock getWriteLock() {

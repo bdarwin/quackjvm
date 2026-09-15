@@ -155,6 +155,10 @@ costs more than reading a single row, and using Arrow there made them measurably
   writers, reader throughput moves 9 708 → 8 459 ops/s and reader p99 612 → 808 µs. That is CPU
   sharing, not blocking — if it were contention the cost would grow with writer count, and it does
   not.
+- **Do not use an `IndexedCollection` as a map key.** It is a `Set`, so its `equals` and `hashCode`
+  are `AbstractSet`'s — which call `size()`, which for a DuckDB-backed collection is a database
+  query. A `ConcurrentHashMap` calls `equals` while holding a bin lock, so this deadlocks. quackjvm
+  keys its own collection maps by identity for exactly this reason.
 - **One `QueryOptions` per operation.** Do not hoist one out of a loop and share it between
   threads: every thread would then share one database connection, which deadlocks inside DuckDB's
   JDBC driver. quackjvm detects this and throws rather than hanging, but the fix is to build a
