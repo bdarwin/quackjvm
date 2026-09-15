@@ -117,6 +117,55 @@ Anything else — a median, an exact `count(DISTINCT)`, a filter on a column *M*
 join, a window over the base grain — **falls through to the original query untouched**. That
 fall-through is the whole safety argument: a bug in matching costs performance, never correctness.
 
+### Can a rewrite give a different answer? Yes — I broke it four ways
+
+This is the question that decides whether the feature is worth having, so I tried hard to produce a
+wrong answer from a rewrite a reasonable matcher would have accepted. 300,000 rows, some NULLs, a
+rollup of `count(*)`, `sum(price)`:
+
+| hazard | base table | rewritten | |
+|---|---|---|---|
+| `sum` of a `DOUBLE` | 29400.000882016073 | 29400.000881985878 | **differs** |
+| `count(*)` → `sum(n)` | 300000 | 300000 | same |
+| `count(price)` → `sum(n)` | 294000 | 300000 | **differs by 2%** |
+| `avg(price)` → `sum(total)/sum(n)` | 0.100000003 | 0.098000003 | **differs by 2%** |
+| `max(price)` → `max(total_price)` | 0.100000006 | 9800.000294 | **catastrophically wrong** |
+| `sum` of an integer | 592208 | 592208 | same |
+
+Every one of those is a plausible-looking number on a dashboard. Nobody spots them.
+
+**But the failures are two different species, ten orders of magnitude apart.**
+
+**Semantic errors — 2e-2.** `count(*)` counts NULLs and `count(x)` does not; deriving an average as
+`sum/count(*)` divides by the wrong denominator; a `max` taken over pre-summed groups is not a max
+of anything. These are **bugs, entirely preventable**, and they are the catastrophic ones.
+
+**Re-association — 1e-12.** Floating-point addition is not associative, so summing 18,000 partial
+sums does not give bit-identical results to summing 300,000 values. This one **cannot be fixed by a
+better matcher**. It can, however, be avoided by not using floating point:
+
+| measure type | rewritten result |
+|---|---|
+| `DOUBLE` | differs, relative error **1.05e-12** |
+| `DECIMAL(18,4)` | **exact** |
+| `BIGINT` | **exact** |
+| `count(*)` | **exact** |
+| `avg` over `DECIMAL` | **exact** |
+
+Money should be `DECIMAL` anyway. With `DECIMAL` and integer measures a rewrite is **bit-for-bit
+identical**, and the hazard disappears rather than being tolerated.
+
+### The rules this imposes
+
+1. **Never infer a measure's aggregate from its column name.** The materialization declares
+   `n = count(*)`, `n_price = count(price)`, `total_price = sum(price)`, and a query is rewritten
+   only against the exact aggregate that was declared. The `max` disaster above is what name-guessing
+   produces.
+2. **`count(*)` and `count(x)` are different measures.** Conflating them cost 2%.
+3. **`avg(x)` becomes `sum(total_x)/sum(n_x)` where `n_x` is `count(x)`** — never `count(*)`.
+4. **A `DOUBLE` measure is re-associated.** Declare it, do not hide it: results will differ around
+   the twelfth significant digit. Refuse to rewrite `DOUBLE` measures at all under a strict setting.
+
 ### The condition I would put on it
 
 **Seamless is only safe if it is verifiable.** Because both queries are available, quackjvm can run
@@ -130,9 +179,14 @@ DuckDBDatabase db = DuckDBDatabase.builder()
 
 `VERIFY` runs the rewritten query *and* the original and fails loudly if they disagree — slow, and
 exactly what you want in a test suite or a staging soak. You turn it on against your own panels,
-prove the rewrite on your own data, then switch to `ON` in production. An optimisation that silently
-changes results is unacceptable; one you can prove on your own queries first is a different
-proposition.
+prove the rewrite on your own data, then switch to `ON` in production.
+
+**And the measurements above are what make `VERIFY` workable.** It cannot demand bit equality,
+because a `DOUBLE` measure legitimately differs at 1e-12. It does not have to: the gap between
+unavoidable noise (1e-12) and the smallest bug found here (2e-2) is **ten orders of magnitude**, so
+a relative tolerance anywhere around 1e-9 passes every correct rewrite and catches every incorrect
+one. Without measuring both species there would have been no way to size that tolerance, and a
+verify mode that cannot tell noise from error is worth nothing.
 
 ### The real risk, which is not correctness
 
