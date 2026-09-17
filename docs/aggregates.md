@@ -224,7 +224,7 @@ queries are slow, do not when they are fast. Fix the queries first and the quest
     The obvious idea — give analytical queries many threads and interactive ones few — does not
     work. `SET threads=1` on any connection changes it for every connection of that database,
     verified by reading `current_setting('threads')` back from the others. There is no per-query
-    parallelism budget in DuckDB 1.4.1, which is why admission control on our side of the boundary
+    parallelism budget in DuckDB 1.5.5, which is why admission control on our side of the boundary
     is the only remaining lever on latency.
 
 ### Pre-aggregate the panels

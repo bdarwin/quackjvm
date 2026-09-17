@@ -46,14 +46,14 @@ db.query("PIVOT car ON colour USING count(*) GROUP BY make").forEachRow(System.o
     <dependency>
         <groupId>io.github.bdarwin</groupId>
         <artifactId>quackjvm-core</artifactId>
-        <version>1.0.0</version>
+        <version>1.1.0</version>
     </dependency>
     ```
 
 === "Gradle"
 
     ```groovy
-    implementation 'io.github.bdarwin:quackjvm-core:1.0.0'
+    implementation 'io.github.bdarwin:quackjvm-core:1.1.0'
     ```
 
 Add `quackjvm-cqengine` instead if you use CQEngine; it brings the core with it. Java 17 or later.
@@ -183,7 +183,7 @@ long rows = Rows.of(connection.duplicate(), "SELECT count(*) FROM 'data/*.parque
 
 ## What the JDBC driver does not give you
 
-Measured against `duckdb_jdbc` 1.4.1, and the reason this project exists:
+Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 
 | capability | JDBC driver | quackjvm |
 |---|---|---|
@@ -191,7 +191,7 @@ Measured against `duckdb_jdbc` 1.4.1, and the reason this project exists:
 | storing Java objects | write your own row mapping | `ColumnarLayout` maps records, beans or explicit accessors to typed columns |
 | bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
 | LIST / STRUCT / MAP / ARRAY | readable, **no write path at all** | planned, via Arrow |
-| Java UDFs | absent | planned |
+| Java UDFs and table functions | **shipped in 1.5** — raw, one callback interface | not wrapped yet |
 
 ## The honest trade
 

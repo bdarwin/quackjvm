@@ -31,6 +31,10 @@ On a million objects, against an on-heap Java collection holding the same data: 
 over 200,000 matches is **10x faster**, grouping them **62x faster**, and a pivot has no on-heap
 equivalent at all.
 
+## Changelog
+
+[CHANGELOG.md](CHANGELOG.md) - 1.1.0 requires `duckdb_jdbc` 1.5.5 or later.
+
 ## Documentation
 
 **[bdarwin.github.io/quackjvm](https://bdarwin.github.io/quackjvm/)** - searchable, with runnable
@@ -44,6 +48,7 @@ examples throughout. This page is the overview; the site is the manual.
 | [Writing data](https://bdarwin.github.io/quackjvm/writing/) | Batching, bulk loading, and what each costs. |
 | [Tuning](https://bdarwin.github.io/quackjvm/tuning/) | Memory limits, `optimize()`, Arrow, concurrency. |
 | [Querying](https://bdarwin.github.io/quackjvm/querying/) · [Joins](https://bdarwin.github.io/quackjvm/joins/) · [Migrating](https://bdarwin.github.io/quackjvm/migrating/) | The CQEngine plugin. |
+| [Materializations](https://bdarwin.github.io/quackjvm/materializations/) | Precompute a query into a table, and refresh it without breaking readers. |
 | [Troubleshooting](https://bdarwin.github.io/quackjvm/troubleshooting/) · [API reference](https://bdarwin.github.io/quackjvm/api-overview/) | |
 
 ## Modules
@@ -57,7 +62,7 @@ examples throughout. This page is the overview; the site is the manual.
 <dependency>
     <groupId>io.github.bdarwin</groupId>
     <artifactId>quackjvm-core</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
@@ -68,16 +73,16 @@ needs `--add-opens=java.base/java.nio=ALL-UNNAMED` on Java 17 and later.
 
 ## What the JDBC driver does not give you
 
-Measured against `duckdb_jdbc` 1.4.1, and the reason this project exists:
+Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 
 | capability | JDBC driver | quackjvm |
 |---|---|---|
 | reading results | one boxed value per call; `DuckDBVector` is package-private so the columnar chunk already in your JVM is unreachable | Arrow columnar batches - **1M rows x 4 columns: 602 ms to 60 ms** |
 | storing Java objects | write your own row mapping | `ColumnarLayout` maps records, beans or explicit accessors to typed columns |
 | bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
+| precomputing a query | `CREATE TABLE AS`, and a refresh that breaks readers | `Materialization`, refreshed without a window where the table is missing |
 | LIST / STRUCT / MAP / ARRAY | readable, **no write path at all** | planned, via Arrow |
-| Java UDFs | absent | planned |
-| Java collections as tables | only via raw `registerArrowStream` | planned |
+| Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | not wrapped yet; see below |
 
 ## Objects in, answers out
 
@@ -315,22 +320,26 @@ express, and `database.query(...)` gives you arbitrary SQL over both. See
 
 DuckDB's JDBC driver is the bottleneck, and specifically:
 
-| capability | state in `duckdb_jdbc` 1.4.1 |
+| capability | state in `duckdb_jdbc` 1.5.5 |
 |---|---|
 | columnar / vectorised reads | the chunk is already in the JVM, but `DuckDBVector` is package-private, so you read it one boxed value at a time - about 250 ns per value |
 | Arrow export and import | exposed, both directions, and 17x faster than row-by-row JDBC (measured: 1M rows x 4 columns, 602 ms -> 36 ms) |
 | LIST / STRUCT / MAP / ARRAY reads | work |
-| LIST / STRUCT / MAP / ARRAY writes | **absent** - the appender's native entry points are scalars only |
-| Java UDFs | **absent** |
-| table functions / replacement scans | only through `registerArrowStream` |
+| LIST / STRUCT / MAP / ARRAY writes | **absent** - the appender's native entry points are scalars only, and the new table functions cannot express them either |
+| Java UDFs | **shipped in 1.5** - `DuckDBFunctions.scalarFunction()` |
+| table functions | **shipped in 1.5** - `DuckDBFunctions.tableFunction()`, raw: you implement `bind`, `init` and `apply` and write into vectors by hand |
 
 So the roadmap for `quackjvm-core`, roughly in order of leverage:
 
 1. **Arrow-backed reads.** Replaces per-value `getObject` calls with columnar batches. Fixes the
    largest remaining cost in the CQEngine plugin - rebuilding objects from columns - and is the
    foundation for everything else.
-2. **Java collections as DuckDB tables**, via `registerArrowStream`: query and join a `List` against
-   stored data with no load step.
+2. **Java collections as DuckDB tables.** DuckDB 1.5 shipped table functions, and they work: a
+   plain `java.util.List` registered as one, queried with SQL and **joined against 200,000 stored
+   rows in 4.4 ms with no load step** - and live, so mutating the list changes what the next query
+   sees. What is missing is the glue: `ColumnarLayout` already knows how to turn an object into
+   columns, so an `Iterable<O>` should become a table without anyone writing a `bind`/`init`/`apply`
+   by hand.
 3. **Nested types**, read and write. The write path needs Arrow regardless, since the appender
    cannot express them.
 

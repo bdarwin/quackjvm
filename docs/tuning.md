@@ -205,7 +205,7 @@ Anything DuckDB accepts can be passed through:
 ### `threads` is global, not per connection
 
 Worth knowing before you plan around it: **setting `threads` on one connection sets it for every
-connection of that database.** There is no per-query parallelism budget in DuckDB 1.4.1, so you
+connection of that database.** There is no per-query parallelism budget in DuckDB 1.5.5, so you
 cannot give an analytical query ten threads and a dashboard panel two. Verified by setting it on
 one connection and reading `current_setting('threads')` back from the others — they all report the
 new value.

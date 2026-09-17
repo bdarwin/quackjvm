@@ -11,6 +11,10 @@ for people already using CQEngine, and nothing in the engine depends on it.
 ## Requirements
 
 - Java 17 or later.
+- `duckdb_jdbc` **1.5.5 or later**, which quackjvm brings in for you. Do not pin an older one:
+  `DuckDBConnection.duplicate()` changed its return type in 1.5, which is source-compatible but
+  **binary**-incompatible, so mixing quackjvm 1.1.0 with duckdb_jdbc 1.4.x fails at runtime with
+  `NoSuchMethodError`. Database files are compatible in both directions between 1.4 and 1.5.
 - On JDK 22 and later, run with `--enable-native-access=ALL-UNNAMED`; DuckDB's driver loads a
   native library and the JVM otherwise warns about it.
 - Apache Arrow is optional. With `arrow-vector`, `arrow-c-data` and `arrow-memory-unsafe` on the
@@ -23,7 +27,7 @@ for people already using CQEngine, and nothing in the engine depends on it.
 <dependency>
     <groupId>io.github.bdarwin</groupId>
     <artifactId>quackjvm-core</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
@@ -32,9 +36,9 @@ Add `quackjvm-cqengine` instead if you want the CQEngine plugin; it brings the c
 Gradle:
 
 ```groovy
-implementation 'io.github.bdarwin:quackjvm-core:1.0.0'
+implementation 'io.github.bdarwin:quackjvm-core:1.1.0'
 // or
-implementation 'io.github.bdarwin:quackjvm-cqengine:1.0.0'
+implementation 'io.github.bdarwin:quackjvm-cqengine:1.1.0'
 ```
 
 ## The engine: objects as columns, queried with SQL
