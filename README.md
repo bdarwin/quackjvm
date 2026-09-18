@@ -82,7 +82,7 @@ Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 | bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
 | precomputing a query | `CREATE TABLE AS`, and a refresh that breaks readers | `Materialization`, refreshed without a window where the table is missing |
 | LIST / STRUCT / MAP / ARRAY | readable, **no write path at all** | planned, via Arrow |
-| Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | not wrapped yet; see below |
+| Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | not wrapped yet - runnable examples: [table function](examples/src/main/java/CoreTableFunction.java), [streaming](examples/src/main/java/CoreTableFunctionStreaming.java), [scalar](examples/src/main/java/CoreScalarFunction.java) |
 
 ## Objects in, answers out
 
@@ -419,6 +419,9 @@ command to run it in its header and its real output at the bottom.
 | `CqEngineIndexes` | indexes, equality, ranges and compound queries |
 | `CqEngineJoins` | two collections in one database: `existsIn`, joined pairs, SQL aggregation |
 | `CqEngineBulkWriter` | streaming half a million objects in |
+| `CqEngineMaterialization` | a panel precomputed, refreshed under concurrent readers, and kept current with deltas |
+| `CoreTableFunction`, `CoreTableFunctionStreaming` | a Java `List` and a paged feed queried and joined as tables |
+| `CoreScalarFunction` | Java functions called from SQL, and what each form costs per row |
 
 ```bash
 cd examples

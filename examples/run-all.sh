@@ -7,6 +7,6 @@ for example in src/main/java/*.java; do
     echo "================================================================"
     echo "$example"
     echo "================================================================"
-    java --enable-native-access=ALL-UNNAMED -Xmx2g -cp "$(cat "$CLASSPATH_FILE")" "$example"
+    java --enable-native-access=ALL-UNNAMED -Xmx4g -cp "$(cat "$CLASSPATH_FILE")" "$example"
     echo
 done
