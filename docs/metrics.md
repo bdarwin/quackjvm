@@ -88,6 +88,30 @@ Timers are log-linear histograms (eight buckets per power of two), so a percenti
 is within 6% of the true value. Subtracting two snapshots gives the percentiles of just the
 interval between them.
 
+## Profiles
+
+Once a minute, each heavy statement has one real execution profiled by DuckDB. "Heavy" means it
+averages 1 ms or more a call. You get what `EXPLAIN ANALYZE` would show, without running the query
+again:
+
+```java
+QueryProfile profile = database.metrics().profile(QuackMetrics.shapeOf(sql));
+profile.getRowsScanned();     // after DuckDB skipped the blocks its filters ruled out
+profile.getParallelism();     // CPU time over wall time: how many cores it kept busy
+profile.getOperators();       // the plan, each step's time and the rows it produced
+```
+
+Three things measured while building it:
+- **DuckDB's own "latency" figure in a profile is wrong** when the profiler is switched on for one
+  statement at a time. It measures from when the profiler was last switched, not from when the
+  statement began: a 2 ms statement sampled 300 ms after the last sample reported 300 ms. So the
+  time is quackjvm's own measurement of that call.
+- **The profile of a query whose results weren't read to the end is empty.** So quackjvm's one-row
+  reads finish their results.
+- **The profile contains data values**, including values bound to `?`. They are removed.
+
+Turn profiling off with `profileStatements(false)`, or `metrics.setProfiling(false)`.
+
 ## What it costs
 
 Recording a request or a statement costs a few atomic increments. Measured on single adds, primary

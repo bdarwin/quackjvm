@@ -10,6 +10,13 @@
   any other host (DNS rebinding), and is read-only with no endpoint that runs SQL. While it runs it records
   what it samples to `quackjvm-metrics/` as JSON Lines that DuckDB queries directly: headline
   numbers every second, and statements, collections and findings every ten; kept for seven days.
+- Profiles: once a minute, each heavy statement (1 ms or more a call) has one real execution
+  profiled by DuckDB - what `EXPLAIN ANALYZE` would show, without running anything twice - in
+  `metrics().profiles()`, on the dashboard when the statement is opened, and in
+  `profiles-DATE.jsonl`. About 3% of the one call profiled; values removed, bound ones included.
+  `profileStatements(false)` turns it off.
+- quackjvm's one-row reads (`Sql.queryLong`, `Rows.scalar` and `count`, key lookups) read on until
+  the result ends: DuckDB leaves the profile of a query closed after its only row empty.
 - The dashboard shows each statement in full: click one, or tick "Show full SQL", to see it laid
   out a clause per line with its timings and a copy button; heavy statements (1 ms or more a
   call) are tagged. Statement shapes are now kept up to 4,000 characters rather than 160, which

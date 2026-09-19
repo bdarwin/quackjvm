@@ -51,6 +51,18 @@ public final class Sql {
         }
     }
 
+    /**
+     * Asks a one-row result for the row after its only one, which ends the query.
+     *
+     * <p>With results streamed, DuckDB finishes a query only when asked for a row past its last.
+     * Closing the result after its one row abandons the query instead, and an abandoned query
+     * leaves DuckDB's profile of it empty - so a count or a key lookup could never be profiled.
+     * The extra call returns false at once.</p>
+     */
+    public static void finishReading(ResultSet resultSet) throws SQLException {
+        resultSet.next();
+    }
+
     public static long queryLong(Connection connection, String sql, List<Object> parameters) {
         STATEMENTS.incrementAndGet();
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -59,7 +71,9 @@ public final class Sql {
                 if (!resultSet.next()) {
                     throw new IllegalStateException("No row returned by: " + sql);
                 }
-                return resultSet.getLong(1);
+                long value = resultSet.getLong(1);
+                finishReading(resultSet);
+                return value;
             }
         }
         catch (SQLException e) {

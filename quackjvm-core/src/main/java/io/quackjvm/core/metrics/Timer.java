@@ -23,6 +23,10 @@ public final class Timer {
     private final String name;
     private final AtomicLongArray buckets = new AtomicLongArray(BUCKETS);
     private final LongAdder totalNanos = new LongAdder();
+    /** Kept apart from the buckets so the mean is cheap enough to ask for on every execute. */
+    private final LongAdder count = new LongAdder();
+    /** When this statement may next be profiled; see {@link QuackMetrics#setProfiling}. */
+    private final java.util.concurrent.atomic.AtomicLong nextProfileAt = new java.util.concurrent.atomic.AtomicLong();
 
     Timer(String name) {
         this.name = name;
@@ -38,6 +42,25 @@ public final class Timer {
         }
         buckets.incrementAndGet(bucketOf(nanos));
         totalNanos.add(nanos);
+        count.increment();
+    }
+
+    /** Mean of everything recorded so far, in nanoseconds; 0 before anything was. */
+    public long meanNanos() {
+        long n = count.sum();
+        return n == 0 ? 0 : totalNanos.sum() / n;
+    }
+
+    /**
+     * Claims the right to profile this statement's next execution: true at most once per interval,
+     * and only once the statement has a history - enough calls to have a mean worth trusting.
+     */
+    boolean claimProfile(long now, long intervalNanos, long minMeanNanos) {
+        long due = nextProfileAt.get();
+        if (now - due < 0 || count.sum() < 5 || meanNanos() < minMeanNanos) {
+            return false;
+        }
+        return nextProfileAt.compareAndSet(due, now + intervalNanos);
     }
 
     /** Starts timing; pass the result to {@link #stop}. */

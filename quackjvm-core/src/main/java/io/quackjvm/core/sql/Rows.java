@@ -82,7 +82,9 @@ public final class Rows {
                 if (!resultSet.next()) {
                     return Optional.empty();
                 }
-                return Optional.ofNullable(DuckDBTypes.read(resultSet, 1, type));
+                T value = DuckDBTypes.read(resultSet, 1, type);
+                Sql.finishReading(resultSet);
+                return Optional.ofNullable(value);
             }
         }
         catch (SQLException e) {

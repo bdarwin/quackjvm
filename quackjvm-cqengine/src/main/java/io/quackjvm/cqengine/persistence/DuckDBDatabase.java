@@ -160,6 +160,7 @@ public final class DuckDBDatabase implements Closeable {
         private boolean serializeWrites = true;
         private int maxPooledConnections = 32;
         private boolean metrics = true;
+        private boolean profileStatements = true;
         private final Properties properties = new Properties();
 
         Builder() {
@@ -206,8 +207,20 @@ public final class DuckDBDatabase implements Closeable {
             return this;
         }
 
+        /**
+         * Whether heavy statements - a millisecond or more on average - have one real execution a
+         * minute profiled by DuckDB, as {@code EXPLAIN ANALYZE} would show it, in
+         * {@code metrics().profiles()}. On by default with metrics; about 3% of that one execution.
+         */
+        public Builder profileStatements(boolean profileStatements) {
+            this.profileStatements = profileStatements;
+            return this;
+        }
+
         public DuckDBDatabase build() {
-            return new DuckDBDatabase(file, properties, serializeWrites, maxPooledConnections, metrics);
+            DuckDBDatabase database = new DuckDBDatabase(file, properties, serializeWrites, maxPooledConnections, metrics);
+            database.metrics.setProfiling(metrics && profileStatements);
+            return database;
         }
     }
 

@@ -19,12 +19,18 @@ public final class StatementMeter {
     private final QuackMetrics metrics;
     /** The timer for a prepared statement; null for a plain one, which is timed per SQL. */
     private final Timer fixedTimer;
+    /** The SQL of a prepared statement; null for a plain one, whose SQL comes with each execute. */
+    private final String sql;
     private Timer openQuery;
     private long openedAt;
+    /** Set when the open query's execution is being profiled: its statement and SQL. */
+    private Statement profiledStatement;
+    private String profiledSql;
 
-    public StatementMeter(QuackMetrics metrics, Timer fixedTimer) {
+    public StatementMeter(QuackMetrics metrics, Timer fixedTimer, String sql) {
         this.metrics = metrics;
         this.fixedTimer = fixedTimer;
+        this.sql = sql;
     }
 
     /** A proxy handler that meters every call to the given statement. */
@@ -49,11 +55,12 @@ public final class StatementMeter {
         // Executing again closes the previous result set, which ends that query.
         finish();
         Timer timer = fixedTimer;
+        String executed = sql;
         if (timer == null) {
-            timer = args != null && args.length > 0 && args[0] instanceof String sql
-                    ? metrics.statementTimer(sql)
-                    : metrics.statementTimer("(batch)");
+            executed = args != null && args.length > 0 && args[0] instanceof String given ? given : "(batch)";
+            timer = metrics.statementTimer(executed);
         }
+        boolean profiled = metrics.beforeExecute(target, timer);
         long startedAt = System.nanoTime();
         Object result;
         try {
@@ -67,9 +74,16 @@ public final class StatementMeter {
         if ("executeQuery".equals(name) || ("execute".equals(name) && Boolean.TRUE.equals(result))) {
             openQuery = timer;
             openedAt = startedAt;
+            // A query's profile is complete only once its results have been read: take it at finish.
+            profiledStatement = profiled ? target : null;
+            profiledSql = profiled ? executed : null;
         }
         else {
-            timer.record(System.nanoTime() - startedAt);
+            long elapsed = System.nanoTime() - startedAt;
+            timer.record(elapsed);
+            if (profiled) {
+                metrics.captureProfile(target, timer, executed, elapsed);
+            }
         }
         return result;
     }
@@ -77,7 +91,13 @@ public final class StatementMeter {
     /** Ends the timing of a query whose results were open. Harmless if none was. */
     public void finish() {
         if (openQuery != null) {
-            openQuery.record(System.nanoTime() - openedAt);
+            long elapsed = System.nanoTime() - openedAt;
+            openQuery.record(elapsed);
+            if (profiledStatement != null) {
+                metrics.captureProfile(profiledStatement, openQuery, profiledSql, elapsed);
+                profiledStatement = null;
+                profiledSql = null;
+            }
             openQuery = null;
         }
     }

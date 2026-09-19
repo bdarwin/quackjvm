@@ -331,7 +331,12 @@ public final class ObjectTable<O, K> {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             DuckDBTypes.bind(statement, 1, key);
             try (ResultSet resultSet = statement.executeQuery()) {
-                return resultSet.next() ? readObject(resultSet, 1) : null;
+                if (!resultSet.next()) {
+                    return null;
+                }
+                O object = readObject(resultSet, 1);
+                Sql.finishReading(resultSet);
+                return object;
             }
         }
         catch (SQLException e) {

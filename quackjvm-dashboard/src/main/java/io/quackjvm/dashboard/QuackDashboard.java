@@ -69,6 +69,8 @@ public final class QuackDashboard implements AutoCloseable {
     private volatile String recordingDirectory;
     private volatile String recordingError;
     private long recordedSeconds;
+    /** When each statement's profile was last written to disk, so each is written once. */
+    private final Map<String, java.time.Instant> recordedProfiles = new java.util.HashMap<>();
     /** Null when not watching. Used by the sampling thread only. */
     private final OtherProcesses otherProcesses;
     private volatile OtherProcessesSeen otherProcessesSeen;
@@ -380,6 +382,14 @@ public final class QuackDashboard implements AutoCloseable {
         Json line = new Json().object().field("ts", ts).field("seconds", second.getIntervalSeconds());
         headlineFields(line, second);
         recorder.write(Recorder.Kind.METRICS, at, line.end().toString());
+        for (io.quackjvm.core.metrics.QueryProfile profile : metrics.profiles().values()) {
+            if (!profile.getCapturedAt().equals(recordedProfiles.get(profile.getShape()))) {
+                recordedProfiles.put(profile.getShape(), profile.getCapturedAt());
+                Json row = new Json().object().field("ts", profile.getCapturedAt().toString());
+                profileFields(row, profile);
+                recorder.write(Recorder.Kind.PROFILES, at, row.end().toString());
+            }
+        }
         if (busy != null) {
             double others = otherProcessesSeen.othersShare();
             for (OtherProcesses.Busy process : busy) {
@@ -450,7 +460,7 @@ public final class QuackDashboard implements AutoCloseable {
         }
         json.end();
         collections(json, recent);
-        statements(json, minute);
+        statements(json, minute, metrics);
         series(json, sampler.points());
         return json.end().toString();
     }
@@ -546,7 +556,7 @@ public final class QuackDashboard implements AutoCloseable {
         }
     }
 
-    private static void statements(Json json, MetricsSnapshot minute) {
+    private static void statements(Json json, MetricsSnapshot minute, QuackMetrics metrics) {
         double seconds = Math.max(1e-9, minute.getIntervalSeconds());
         List<TimerSnapshot> hottest = minute.statementsByTotalTime();
         long total = 0;
@@ -557,7 +567,36 @@ public final class QuackDashboard implements AutoCloseable {
         json.key("statements").array();
         for (TimerSnapshot timer : hottest.subList(0, Math.min(15, hottest.size()))) {
             statementFields(json.object(), timer, seconds, total == 0 ? 0 : timer.totalNanos() / (double) total);
+            String name = timer.getName();
+            io.quackjvm.core.metrics.QueryProfile profile =
+                    metrics.profile(name.substring(QuackMetrics.STATEMENT.length() + 1, name.length() - 1));
+            if (profile != null) {
+                json.key("profile").object();
+                profileFields(json, profile);
+                json.end();
+            }
             json.end();
+        }
+        json.endArray();
+    }
+
+    /** One profile, values already removed by the core: totals, then the plan a step at a time. */
+    private static void profileFields(Json json, io.quackjvm.core.metrics.QueryProfile profile) {
+        json.field("shape", profile.getShape())
+                .field("capturedAt", profile.getCapturedAt().toEpochMilli())
+                .field("latencyMillis", profile.getLatencyMillis())
+                .field("cpuMillis", profile.getCpuMillis())
+                .field("parallelism", profile.getParallelism())
+                .field("rowsScanned", profile.getRowsScanned())
+                .field("rowsReturned", profile.getRowsReturned())
+                .field("peakMemoryBytes", profile.getPeakMemoryBytes())
+                .field("tempBytes", profile.getTempBytes());
+        json.key("operators").array();
+        for (io.quackjvm.core.metrics.QueryProfile.Operator operator : profile.getOperators()) {
+            json.object().field("depth", operator.depth()).field("name", operator.name())
+                    .field("millis", operator.millis()).field("rows", operator.rows())
+                    .field("estimatedRows", operator.estimatedRows()).field("rowsScanned", operator.rowsScanned())
+                    .field("detail", operator.detail()).end();
         }
         json.endArray();
     }

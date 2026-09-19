@@ -65,6 +65,31 @@ clause per line, with its calls, mean, p50, p99 and total time, and a button to 
 what the CPU diagnosis counts. A light statement near the top costs by how often it runs, not by
 what it asks.
 
+**Profiles: what `EXPLAIN ANALYZE` would show, without running anything twice.** Once a minute,
+each heavy statement (1 ms or more a call) has one of its real executions profiled by DuckDB.
+That's the application's own call, with its own parameters, not a second run. Open the statement
+to see the profile:
+- how long that call took
+- rows scanned against rows returned
+- CPU time and how many cores it kept busy
+- peak memory, and bytes spilled to disk
+- the plan: each step's time and share, the rows it produced, and DuckDB's estimate
+
+In the demo, the query that looked expensive turned out not to compute its `count(DISTINCT ...)`
+or `quantile_cont` at all. The outer `count(*)` only needed the number of groups, so DuckDB
+dropped both. What remained was one `GROUP BY` over one column, at about 3.6 ms, and its average
+of 20 ms on the page was time spent waiting for cores.
+
+- **Cost:** measured at about 3% of the one profiled call. The profiler is switched on and off
+  only immediately before one of the application's own statements. Running any statement on a
+  DuckDB connection closes a result still being read on it, so switching at any other moment
+  could cut one off.
+- **No data values:** DuckDB's profile does carry values, including values bound to `?`. They are
+  removed before the profile is kept.
+- **One-row reads:** quackjvm's own one-row reads (`count()`, `scalar()`, key lookups) read on
+  until the result ends, because DuckDB leaves the profile of an abandoned query empty.
+- **Turning it off:** `DuckDBDatabase.builder().profileStatements(false)`.
+
 **Other programs using the cores.** CPU for this process alone would miss half the story: another
 program on the machine starves DuckDB just as badly as DuckDB's own queries do. When other
 programs hold a quarter of the machine or more, the page names the busiest ones, with their pid
@@ -96,6 +121,7 @@ JSON Lines, one file of each kind per day (UTC), and DuckDB reads them directly:
 | `statements-DATE.jsonl` | every 10 s | statement shape that ran: calls, total, mean, p50, p99 |
 | `collections-DATE.jsonl` | every 10 s | collection used: reads and writes with their times, lock wait, wait share |
 | `findings-DATE.jsonl` | every 10 s | cause the diagnosis found, with its evidence and advice |
+| `profiles-DATE.jsonl` | when a heavy statement is profiled, at most once a minute each | profile: time, rows scanned and returned, CPU, memory, spill, and the plan step by step |
 | `processes-DATE.jsonl` | when other programs hold 25% of the machine, at most every 5 s | other program using 2% or more of the machine: name, pid, share |
 
 Every line has a `ts`, which DuckDB reads as a `TIMESTAMP`. These queries were run against a

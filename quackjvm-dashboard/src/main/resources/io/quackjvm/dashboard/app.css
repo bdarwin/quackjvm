@@ -230,6 +230,19 @@ tr.detail pre {
 }
 .detail-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .detail-meta b { color: var(--text); font-weight: 600; }
+.profile { margin-top: 12px; }
+.profile .profile-head { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.profile .profile-head b { color: var(--text); }
+.profile .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+.profile .facts b { color: var(--text); font-weight: 600; }
+.profile td, .profile th { padding: 5px 10px; font-size: 12px; }
+.profile td.op { font: 12px/1.4 var(--mono); white-space: nowrap; }
+.profile td.op .indent { color: var(--faint); white-space: pre; }
+.profile td.info { font: 11px/1.4 var(--mono); color: var(--muted); max-width: 0; width: 45%; }
+.profile td.info span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile tr.hot td.op { color: var(--warn); font-weight: 600; }
+.no-profile { margin-top: 10px; font-size: 12px; color: var(--faint); }
+
 button.copy {
   margin-left: auto;
   font: inherit;

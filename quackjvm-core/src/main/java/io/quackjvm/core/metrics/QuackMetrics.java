@@ -7,7 +7,12 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.Instant;
+import java.sql.SQLException;
+import java.util.Collections;
 import java.util.Locale;
+import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -96,6 +101,18 @@ public final class QuackMetrics {
     private final Map<String, LongSupplier> cumulatives = new ConcurrentHashMap<>();
     /** Raw SQL to its timer, so that a statement seen before costs one map lookup. */
     private final Map<String, Timer> statementTimers = new ConcurrentHashMap<>();
+
+    private volatile boolean profiling = true;
+    private volatile long profileIntervalNanos = TimeUnit.MINUTES.toNanos(1);
+    /** The latest profile of each statement, by shape. */
+    private final Map<String, QueryProfile> profiles = new ConcurrentHashMap<>();
+    /**
+     * Connections left with DuckDB's profiler on after a sampled statement. It is switched off just
+     * before the connection's next statement, never at any other moment - see {@link #beforeExecute}.
+     * Weak, so a connection closed while in here is not kept alive by it.
+     */
+    private final Set<Connection> profilerOn = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+    private volatile boolean anyProfilerOn;
 
     public QuackMetrics() {
         gauge(CORES, () -> Runtime.getRuntime().availableProcessors());
@@ -231,6 +248,104 @@ public final class QuackMetrics {
         return new MetricsSnapshot(System.nanoTime(), Instant.now(), 0, timerSnapshots, counterValues, gaugeValues);
     }
 
+    // ---------- Profiling ----------
+
+    /**
+     * Whether to profile heavy statements: once per interval, a statement averaging a millisecond or
+     * more has one of its real executions profiled by DuckDB, and the result kept in
+     * {@link #profiles()} - what {@code EXPLAIN ANALYZE} would show, without running anything twice.
+     * Measured at about 3% of that one execution. On by default.
+     */
+    public void setProfiling(boolean on) {
+        this.profiling = on;
+    }
+
+    public boolean isProfiling() {
+        return profiling;
+    }
+
+    /** How often each statement may be profiled. A minute by default. */
+    public void setProfileInterval(java.time.Duration interval) {
+        this.profileIntervalNanos = interval.toNanos();
+    }
+
+    /** The latest profile of each statement that has been profiled, by statement shape. */
+    public Map<String, QueryProfile> profiles() {
+        return Collections.unmodifiableMap(profiles);
+    }
+
+    /** The latest profile of the statement with this shape, or null if it has not been profiled. */
+    public QueryProfile profile(String shape) {
+        return profiles.get(shape);
+    }
+
+    /**
+     * Called just before a statement executes. Switches the profiler off if a previous statement on
+     * this connection left it on, and on if this execution is to be profiled.
+     *
+     * <p>Only here, just before the application's own statement runs: running any statement on a
+     * DuckDB connection closes a result set still being read on it, and so does the application's
+     * statement about to run, so nothing is closed that was not going to be. Doing the same at any
+     * other moment - after a query, say - could cut off a result set the application is reading.</p>
+     *
+     * @return whether this execution is being profiled
+     */
+    boolean beforeExecute(Statement target, Timer timer) {
+        if (!anyProfilerOn && !profiling) {
+            return false;
+        }
+        try {
+            Connection connection = target.getConnection();
+            if (!(connection instanceof org.duckdb.DuckDBConnection duckdb)) {
+                return false;
+            }
+            if (anyProfilerOn && profilerOn.remove(connection)) {
+                anyProfilerOn = !profilerOn.isEmpty();
+                run(duckdb, "RESET enable_profiling");
+            }
+            if (profiling && timer.getName().startsWith(STATEMENT + "[")
+                    && !timer.getName().equals(scoped(STATEMENT, OTHER_STATEMENTS))
+                    && timer.claimProfile(System.nanoTime(), profileIntervalNanos, HEAVY_NANOS)) {
+                run(duckdb, "SET enable_profiling = 'no_output'");
+                profilerOn.add(connection);
+                anyProfilerOn = true;
+                return true;
+            }
+        }
+        catch (SQLException | RuntimeException e) {
+            // Profiling is an extra; it must never disturb the statement it rides on.
+        }
+        return false;
+    }
+
+    /** Reads the profile of a statement that just finished, if it was the one profiled. */
+    void captureProfile(Statement target, Timer timer, String sql, long wallNanos) {
+        try {
+            if (!(target.getConnection() instanceof org.duckdb.DuckDBConnection duckdb)) {
+                return;
+            }
+            String shape = timer.getName().substring(STATEMENT.length() + 1, timer.getName().length() - 1);
+            QueryProfile profile = QueryProfile.fromDuckDB(
+                    duckdb.getProfilingInformation(org.duckdb.ProfilerPrintFormat.JSON), sql, shape, Instant.now(),
+                    wallNanos / 1e6);
+            if (profile != null) {
+                profiles.put(shape, profile);
+            }
+        }
+        catch (SQLException | RuntimeException e) {
+            // No profile this time; the statement will be sampled again next interval.
+        }
+    }
+
+    private static final long HEAVY_NANOS = (long) (Diagnosis.HEAVY_STATEMENT_MILLIS * 1_000_000);
+
+    private static void run(org.duckdb.DuckDBConnection connection, String sql) throws SQLException {
+        // On the DuckDB connection itself, not a pooled wrapper, so the statement cache is untouched.
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(sql);
+        }
+    }
+
     // ---------- Measuring plain connections ----------
 
     /**
@@ -263,14 +378,14 @@ public final class QuackMetrics {
 
     /** Times a prepared statement's executions under the shape of its SQL. */
     public PreparedStatement meter(PreparedStatement statement, String sql) {
-        StatementMeter meter = new StatementMeter(this, statementTimer(sql));
+        StatementMeter meter = new StatementMeter(this, statementTimer(sql), sql);
         return (PreparedStatement) Proxy.newProxyInstance(QuackMetrics.class.getClassLoader(),
                 new Class<?>[]{PreparedStatement.class}, meter.handler(statement));
     }
 
     /** Times a plain statement's executions, each under the shape of the SQL it was given. */
     public Statement meter(Statement statement) {
-        StatementMeter meter = new StatementMeter(this, null);
+        StatementMeter meter = new StatementMeter(this, null, null);
         return (Statement) Proxy.newProxyInstance(QuackMetrics.class.getClassLoader(),
                 new Class<?>[]{Statement.class}, meter.handler(statement));
     }

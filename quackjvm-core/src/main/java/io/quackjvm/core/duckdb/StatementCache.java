@@ -161,7 +161,7 @@ final class StatementCache {
 
         Entry(PreparedStatement statement, String sql) {
             this.statement = statement;
-            this.meter = metrics != null ? new StatementMeter(metrics, metrics.statementTimer(sql)) : null;
+            this.meter = metrics != null ? new StatementMeter(metrics, metrics.statementTimer(sql), sql) : null;
             this.proxy = (PreparedStatement) Proxy.newProxyInstance(
                     StatementCache.class.getClassLoader(),
                     new Class<?>[]{PreparedStatement.class},

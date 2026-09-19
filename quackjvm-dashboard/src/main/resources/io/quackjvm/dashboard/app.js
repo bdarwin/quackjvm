@@ -307,7 +307,70 @@ function toggleStatement(shape) {
   if (lastState) renderStatements(lastState);
 }
 
-function statementDetail(st, windowSeconds) {
+function fmtCount(v) {
+  if (!isNum(v)) return '–';
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + 'M';
+  if (v >= 1e4) return (v / 1e3).toFixed(0) + 'k';
+  return Math.round(v).toLocaleString();
+}
+
+/** DuckDB's profile of one real call: what EXPLAIN ANALYZE would show. */
+function profileBlock(p, now) {
+  const box = el('div', 'profile');
+  const head = el('div', 'profile-head');
+  head.append('Profile of one real call, taken ', el('b', null, fmtDuration(Math.max(0, now - p.capturedAt)) + ' ago'),
+    ' - what EXPLAIN ANALYZE would show, without running it again');
+  const facts = el('div', 'facts');
+  const fact = (label, value) => {
+    const span = el('span', null, label + ' ');
+    span.append(el('b', null, value));
+    return span;
+  };
+  facts.append(
+    fact('took', fmtMs(p.latencyMillis)),
+    fact('rows scanned', fmtCount(p.rowsScanned)),
+    fact('returned', fmtCount(p.rowsReturned)),
+    fact('CPU', `${fmtMs(p.cpuMillis)} (${isNum(p.parallelism) ? p.parallelism.toFixed(1) : '–'} cores busy)`),
+    fact('peak memory', fmtBytes(p.peakMemoryBytes)),
+    fact('spilled to disk', fmtBytes(p.tempBytes)));
+  const table = el('table');
+  const thead = el('thead');
+  const hr = el('tr');
+  for (const [label, cls] of [['Step', ''], ['Time', 'num'], ['Share', ''], ['Rows out', 'num'], ['Estimated', 'num'], ['Details', '']]) {
+    hr.append(el('th', cls || null, label));
+  }
+  thead.append(hr);
+  const tbody = el('tbody');
+  const ops = p.operators || [];
+  const total = ops.reduce((sum, o) => sum + (isNum(o.millis) ? o.millis : 0), 0);
+  const hottest = Math.max(0, ...ops.map((o) => (isNum(o.millis) ? o.millis : 0)));
+  for (const o of ops) {
+    const tr = el('tr', o.millis > 0 && o.millis === hottest ? 'hot' : null);
+    const op = el('td', 'op');
+    op.append(el('span', 'indent', '  '.repeat(o.depth) + (o.depth ? '└ ' : '')), o.name);
+    const share = el('td');
+    // Shares of a few microseconds are noise; say nothing rather than draw them.
+    if (total >= 0.05) share.append(bar(o.millis / total));
+    const info = el('td', 'info');
+    const text = el('span', null, o.detail || '');
+    text.title = o.detail || '';
+    info.append(text);
+    tr.append(op, cell(fmtMs(o.millis), 'num'), share, cell(fmtCount(o.rows), 'num'), cell(fmtCount(o.estimatedRows), 'num'), info);
+    tbody.append(tr);
+  }
+  table.append(thead, tbody);
+  const wrap = el('div', 'table-wrap');
+  wrap.append(table);
+  box.append(head, facts, wrap);
+  if (total < 0.05) {
+    box.append(el('div', 'no-profile',
+      'The plan itself took almost no time: this call\'s time went to reaching DuckDB and committing, not to the query.'));
+  }
+  return box;
+}
+
+function statementDetail(st, windowSeconds, state) {
   const tr = el('tr', 'detail');
   const td = el('td');
   td.colSpan = 5;
@@ -338,7 +401,10 @@ function statementDetail(st, windowSeconds) {
     setTimeout(() => { copy.textContent = 'Copy SQL'; }, 1500);
   });
   meta.append(copy);
-  td.append(pre, meta);
+  td.append(pre, meta, st.profile ? profileBlock(st.profile, state.timestamp)
+    : el('div', 'no-profile', st.mean >= 1
+      ? 'Not profiled yet: one real call of each heavy statement is profiled at most once a minute.'
+      : 'Not profiled: only heavy statements (1 ms or more a call) are.'));
   tr.append(td);
   return tr;
 }
@@ -373,7 +439,7 @@ function renderStatements(state) {
     sql.append(line);
     tr.append(share, cell(fmtRate(st.perSecond), 'num'), cell(fmtMs(st.mean), 'num'), cell(fmtMs(st.p99), 'num'), sql);
     rows.push(tr);
-    if (open) rows.push(statementDetail(st, state.longWindowSeconds));
+    if (open) rows.push(statementDetail(st, state.longWindowSeconds, state));
   }
   if (rows.length === 0) {
     const tr = el('tr');
