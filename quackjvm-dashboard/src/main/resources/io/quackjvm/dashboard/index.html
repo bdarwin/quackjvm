@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>quackjvm dashboard</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="name">quackjvm</span>
+      <span class="app" id="title"></span>
+    </div>
+    <div class="status" id="status" data-state="waiting">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="status-text">Connecting…</span>
+    </div>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <main>
+    <section aria-labelledby="diagnosis-heading">
+      <h2 id="diagnosis-heading">Where it is choking <span class="hint" id="window"></span></h2>
+      <div id="findings" class="findings"></div>
+    </section>
+
+    <section aria-labelledby="now-heading">
+      <h2 id="now-heading">Now <span class="hint">last 10 s, charts over the last 5 min</span></h2>
+      <div class="tiles" id="tiles"></div>
+    </section>
+
+    <section aria-labelledby="collections-heading">
+      <h2 id="collections-heading">Wait against work, by collection <span class="hint">last 10 s</span></h2>
+      <div class="table-wrap">
+        <table id="collections">
+          <thead>
+            <tr>
+              <th scope="col">Collection</th>
+              <th scope="col" class="num">Reads/s</th>
+              <th scope="col" class="num">Read p50 · p99</th>
+              <th scope="col" class="num">Writes/s</th>
+              <th scope="col" class="num">Write p50 · p99</th>
+              <th scope="col" class="num">Lock wait p99</th>
+              <th scope="col">Share of write time spent waiting</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="statements-heading">
+      <h2 id="statements-heading">Where DuckDB's time went <span class="hint" id="statements-window">last minute</span></h2>
+      <div class="table-wrap">
+        <table id="statements">
+          <thead>
+            <tr>
+              <th scope="col">Share of time</th>
+              <th scope="col" class="num">Calls/s</th>
+              <th scope="col" class="num">Mean</th>
+              <th scope="col" class="num">p99</th>
+              <th scope="col">Statement</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Read-only. Values are removed from statements before they are recorded.
+    Diagnosis rules and what each metric means: <code>docs/metrics.md</code>.
+  </footer>
+</body>
+</html>

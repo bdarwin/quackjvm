@@ -56,7 +56,8 @@ public final class Diagnosis {
     static final double LOCK_WAIT_P99_MILLIS = 1.0;
     static final double CPU_BUSY = 0.7;
     static final double CPU_CONCURRENCY = 1.5;
-    static final double HEAVY_STATEMENT_MILLIS = 1.0;
+    /** Statements at least this long on average count as heavy: DuckDB runs them in parallel. */
+    public static final double HEAVY_STATEMENT_MILLIS = 1.0;
     /** DuckDB's cost of preparing a statement, measured; what a cache miss throws away. */
     static final double PREPARE_MILLIS = 0.2;
 
@@ -107,12 +108,7 @@ public final class Diagnosis {
         // Only statements heavy enough for DuckDB to run in parallel: the choke is several of those
         // each asking for every core. Sub-millisecond writes keep a machine busy too, but on one
         // thread each, and lowering DuckDB's threads would do nothing for them.
-        double concurrency = 0;
-        for (TimerSnapshot timer : interval.statementsByTotalTime()) {
-            if (timer.meanMillis() >= HEAVY_STATEMENT_MILLIS) {
-                concurrency += timer.totalNanos() / (double) interval.getIntervalNanos();
-            }
-        }
+        double concurrency = interval.statementConcurrency(HEAVY_STATEMENT_MILLIS);
         if (!(busy >= CPU_BUSY) || !(concurrency >= CPU_CONCURRENCY)) {
             return;
         }
@@ -207,7 +203,7 @@ public final class Diagnosis {
         findings.add(new Finding(Cause.PREPARES, share * 0.8,
                 "statements are being prepared from scratch",
                 String.format("%,d of %,d prepares missed the statement cache (%.0f%%), not counting those"
-                                + " that re-prepare a failed statement: about %.0f ms of DuckDB parsing and planning",
+                                + " that re-prepare a failed statement: about %,.0f ms of DuckDB parsing and planning",
                         misses, hits + allMisses, 100.0 * misses / (hits + allMisses), wasted),
                 "usually SQL built with values written into it rather than bound with ? placeholders - every"
                         + " distinct string is a new statement to prepare. Bind the values instead."));

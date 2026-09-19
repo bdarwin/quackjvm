@@ -63,6 +63,7 @@ nav:
       - Writing data: writing.md
       - Tuning: tuning.md
       - Metrics and diagnosis: metrics.md
+      - Dashboard: dashboard.md
   - CQEngine plugin:
       - Querying: querying.md
       - Joins across collections: joins.md

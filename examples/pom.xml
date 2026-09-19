@@ -33,6 +33,13 @@
             <artifactId>quackjvm-cqengine</artifactId>
             <version>${quackjvm.version}</version>
         </dependency>
+
+        <!-- Only DashboardDemo needs this. -->
+        <dependency>
+            <groupId>io.github.bdarwin</groupId>
+            <artifactId>quackjvm-dashboard</artifactId>
+            <version>${quackjvm.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

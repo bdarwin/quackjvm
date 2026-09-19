@@ -73,6 +73,23 @@ public final class TimerSnapshot {
         return 0;
     }
 
+    /** Both timers' recordings together, under this one's name - for totals across scopes. */
+    public TimerSnapshot plus(TimerSnapshot other) {
+        if (other == null) {
+            return this;
+        }
+        long[] sum = new long[counts.length];
+        for (int i = 0; i < counts.length; i++) {
+            sum[i] = counts[i] + other.counts[i];
+        }
+        return new TimerSnapshot(name, sum, totalNanos + other.totalNanos);
+    }
+
+    /** A timer with nothing recorded, to start a {@link #plus} from. */
+    public static TimerSnapshot none(String name) {
+        return empty(name);
+    }
+
     /** What was recorded after {@code earlier} and up to this snapshot. */
     public TimerSnapshot minus(TimerSnapshot earlier) {
         if (earlier == null) {

@@ -49,6 +49,7 @@ examples throughout. This page is the overview; the site is the manual.
 | [Tuning](https://bdarwin.github.io/quackjvm/tuning/) | Memory limits, `optimize()`, Arrow, concurrency. |
 | [Querying](https://bdarwin.github.io/quackjvm/querying/) · [Joins](https://bdarwin.github.io/quackjvm/joins/) · [Migrating](https://bdarwin.github.io/quackjvm/migrating/) | The CQEngine plugin. |
 | [Materializations](https://bdarwin.github.io/quackjvm/materializations/) | Precompute a query into a table, and refresh it without breaking readers. |
+| [Metrics and diagnosis](https://bdarwin.github.io/quackjvm/metrics/) · [Dashboard](https://bdarwin.github.io/quackjvm/dashboard/) | Where it spends its time, and where it is choking. |
 | [Troubleshooting](https://bdarwin.github.io/quackjvm/troubleshooting/) · [API reference](https://bdarwin.github.io/quackjvm/api-overview/) | |
 
 ## Modules
@@ -57,6 +58,7 @@ examples throughout. This page is the overview; the site is the manual.
 |---|---|
 | **`quackjvm-core`** | DuckDB for the JVM. Java-object-to-column mapping, an Arrow columnar read path that is 10x faster than reading rows through JDBC, bulk loading, connection pooling, typed SQL access. Depends on nothing but DuckDB. |
 | **`quackjvm-cqengine`** | One plugin built on the core: a `Persistence` implementation for [CQEngine](https://github.com/npgall/cqengine). Drop it in where you would use CQEngine's on-heap, off-heap or SQLite persistence. |
+| **`quackjvm-dashboard`** | Optional. A live page showing where quackjvm is choking - write-lock queueing, CPU contention, conflicts, memory - and what to change. The JDK's own HTTP server, localhost-only and read-only by default; depends on nothing but the core. |
 
 ```xml
 <dependency>

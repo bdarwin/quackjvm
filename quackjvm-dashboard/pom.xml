@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.bdarwin</groupId>
+        <artifactId>quackjvm</artifactId>
+        <version>1.1.0</version>
+    </parent>
+
+    <artifactId>quackjvm-dashboard</artifactId>
+    <name>quackjvm-dashboard</name>
+    <description>A live web page showing where quackjvm spends its time and where it is choking.
+        Served by the JDK's own HTTP server; no dependencies beyond quackjvm-core.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.bdarwin</groupId>
+            <artifactId>quackjvm-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

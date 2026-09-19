@@ -151,6 +151,23 @@ public final class MetricsSnapshot {
         return total / (double) intervalNanos;
     }
 
+    /**
+     * Like {@link #statementConcurrency()}, counting only statements whose mean time over the
+     * interval is at least the given length - the ones heavy enough for DuckDB to run in parallel.
+     */
+    public double statementConcurrency(double minMeanMillis) {
+        if (intervalNanos <= 0) {
+            return Double.NaN;
+        }
+        long total = 0;
+        for (TimerSnapshot timer : scopes(QuackMetrics.STATEMENT).values()) {
+            if (timer.count() > 0 && timer.meanMillis() >= minMeanMillis) {
+                total += timer.totalNanos();
+            }
+        }
+        return total / (double) intervalNanos;
+    }
+
     /** Statement shapes by the time they took over the interval, most first. */
     public List<TimerSnapshot> statementsByTotalTime() {
         List<TimerSnapshot> all = new ArrayList<>(scopes(QuackMetrics.STATEMENT).values());

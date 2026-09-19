@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- `quackjvm-dashboard`, a new optional module: `QuackDashboard.start(database.metrics(), 8090)` serves
+  a live page with the diagnosis of the last ten seconds, headline numbers with five minutes of
+  history, wait against work per collection, and where DuckDB's time went. Runs on the JDK's own
+  HTTP server with no other dependency; listens on loopback only, refuses requests addressed to
+  any other host (DNS rebinding), and is read-only with no endpoint that runs SQL.
 - Metrics, on by default: `database.metrics()` records request, write-lock-wait and per-statement
   timings, conflicts, statement-cache hits, connection churn, CPU, and DuckDB's memory, spill and
   threads. `Diagnosis.of(interval)` names where quackjvm is choking - write lock, CPU, conflicts,

@@ -11,7 +11,7 @@ all beyond the DuckDB 1.5 driver it brings in. The `CqEngine` ones are for the C
 Install the two artifacts into your local Maven repository, from the repository root:
 
 ```
-mvn -pl quackjvm-core,quackjvm-cqengine install -DskipTests
+mvn -pl quackjvm-core,quackjvm-cqengine,quackjvm-dashboard install -DskipTests
 ```
 
 Then write the runtime classpath to `target/classpath.txt`, which is what the run commands read:
@@ -62,6 +62,7 @@ cd examples
 | [`CqEngineBulkWriter.java`](src/main/java/CqEngineBulkWriter.java) | `DuckDBBulkWriter` streaming half a million objects in, with the indexes populated as they pass. |
 | [`CqEngineMaterialization.java`](src/main/java/CqEngineMaterialization.java) | A windowed panel over five million rows precomputed into a table, refreshed fifteen times under four concurrent readers without one failed read, and a rollup kept current by folding in new rows. |
 | [`CqEngineConcurrency.java`](src/main/java/CqEngineConcurrency.java) | Readers unaffected by writers; two collections in one database writing in parallel; two writers on the same keys with `serializeWrites` on and off; and a `QueryOptions` shared between threads, refused instead of deadlocking. |
+| [`DashboardDemo.java`](src/main/java/DashboardDemo.java) | The dashboard watching an application that chokes a different way every half minute - write-lock queueing, CPU contention from twenty dashboard users, SQL with values pasted in - so you can watch the diagnosis change. Needs `quackjvm-dashboard`. |
 
 ## Notes
 
