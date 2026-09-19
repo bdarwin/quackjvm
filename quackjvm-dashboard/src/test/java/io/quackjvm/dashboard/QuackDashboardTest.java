@@ -23,7 +23,8 @@ public class QuackDashboardTest {
     @Before
     public void start() {
         metrics = new QuackMetrics();
-        dashboard = QuackDashboard.builder(metrics).port(0).title("test").start();
+        // Not recording: RecorderTest covers that, into a temporary folder of its own.
+        dashboard = QuackDashboard.builder(metrics).port(0).title("test").recordTo(null).start();
     }
 
     @After

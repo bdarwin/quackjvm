@@ -139,7 +139,7 @@ and turns off the host check. Only do that behind whatever already protects your
 `examples/src/main/java/DashboardDemo.java` changes its load every half minute:
 1. a quiet period
 2. eight threads queueing for one collection's write lock
-3. twenty dashboard users competing for CPU
+3. twenty users running heavy reports, competing for CPU
 4. SQL built with the values pasted in
 
 Open the printed address and watch the diagnosis change with each phase.

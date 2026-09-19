@@ -4,7 +4,7 @@
  *
  *   quiet          one user reading and writing now and then - nothing to report
  *   write lock     eight threads adding objects one at a time to the same collection
- *   dashboards     twenty users refreshing heavy GROUP BY panels over two million rows
+ *   heavy queries  twenty users running heavy GROUP BY reports over two million rows
  *   literal SQL    queries built by pasting values into the SQL instead of binding them
  *
  * Starting a dashboard is one line; everything else here is the load.
@@ -93,7 +93,7 @@ public class DashboardDemo {
                         refunds.add(new Order(id, "c", -id));
                     }
                 }),
-                new Phase("dashboards", 2 * cores, () ->
+                new Phase("heavy queries", 2 * cores, () ->
                         database.query("SELECT region, count(DISTINCT customer), quantile_cont(price, 0.9)"
                                 + " FROM sale GROUP BY 1").count()),
                 new Phase("literal SQL", 2, () -> {
