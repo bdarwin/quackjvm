@@ -70,12 +70,21 @@ public final class ConnectionPool {
      *                  quarter of the request.
      */
     public void release(Connection connection, boolean committed) {
+        release(connection, committed, false);
+    }
+
+    /**
+     * @param broken whether a commit, rollback or change of auto-commit mode failed on this
+     *               connection. DuckDB's JDBC driver cannot recover from that - see
+     *               {@code Transactions} - so the connection is closed rather than pooled.
+     */
+    public void release(Connection connection, boolean committed, boolean broken) {
         StatementCache cache = statementCaches.get(connection);
         if (cache != null) {
             cache.releaseAll();
         }
         try {
-            if (closed || connection.isClosed()) {
+            if (broken || closed || connection.isClosed()) {
                 // A connection which is broken, or whose pool has shut down, is not coming back:
                 // drop its statement cache with it rather than retaining both for the life of
                 // the pool.

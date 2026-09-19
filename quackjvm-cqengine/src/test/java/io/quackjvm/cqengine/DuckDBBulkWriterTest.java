@@ -134,6 +134,30 @@ public class DuckDBBulkWriterTest {
         }
     }
 
+    /**
+     * The same, but relying on close() to flush - as try-with-resources does. DuckDB's Appender
+     * swallows a failed flush on close and discards the rows, so without an explicit flush in
+     * close() this reported nothing and lost every object written since the last flush.
+     */
+    @Test
+    public void aDuplicateIsReportedEvenWhenOnlyCloseFlushes() {
+        DuckDBPersistence<Car, Integer> persistence = track(DuckDBPersistence.onPrimaryKey(Car.CAR_ID));
+        IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>(persistence);
+        List<Car> generated = Cars.generate(10, 36);
+        cars.addAll(generated);
+
+        try {
+            try (DuckDBBulkWriter<Car> writer = persistence.bulkWriter()) {
+                writer.add(generated.get(0));      // already stored
+            }                                      // close() is the only flush
+            fail("a primary key violation on close must be reported, not swallowed");
+        }
+        catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage() + " / " + expected.getCause(),
+                    (expected.getMessage() + expected.getCause()).toLowerCase().contains("key"));
+        }
+    }
+
     @Test
     public void writingAnObjectWhichAlreadyExistsIsReported() {
         DuckDBPersistence<Car, Integer> persistence = track(DuckDBPersistence.onPrimaryKey(Car.CAR_ID));

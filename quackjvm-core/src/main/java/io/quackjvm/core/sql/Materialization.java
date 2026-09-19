@@ -1,9 +1,9 @@
 package io.quackjvm.core.sql;
 
 import io.quackjvm.core.duckdb.Sql;
+import io.quackjvm.core.duckdb.Transactions;
 
 import java.sql.Connection;
-import java.sql.SQLException;
 import java.time.Instant;
 
 /**
@@ -99,24 +99,27 @@ public final class Materialization {
     public void refresh(Connection connection) {
         String pending = name + PENDING_SUFFIX;
         Sql.execute(connection, "CREATE OR REPLACE TABLE " + Sql.quote(pending) + " AS " + sql);
-        boolean autoCommit = true;
+        // Begun and ended with SQL rather than setAutoCommit/commit - see Transactions for the
+        // driver bug that makes the difference - and only when the caller is not already in a
+        // transaction, which is theirs to commit.
+        boolean ownTransaction = Transactions.isAutoCommit(connection);
         try {
-            autoCommit = connection.getAutoCommit();
-            if (autoCommit) {
-                connection.setAutoCommit(false);
+            if (ownTransaction) {
+                Transactions.begin(connection);
             }
             Sql.execute(connection, "DROP TABLE IF EXISTS " + Sql.quote(name));
             Sql.execute(connection, "ALTER TABLE " + Sql.quote(pending) + " RENAME TO " + Sql.quote(name));
-            connection.commit();
+            if (ownTransaction) {
+                Transactions.commit(connection);
+            }
             builtAt = Instant.now();
         }
-        catch (SQLException | RuntimeException e) {
-            rollbackQuietly(connection);
-            dropPendingQuietly(connection, pending);
+        catch (RuntimeException e) {
+            if (ownTransaction) {
+                Transactions.rollbackQuietly(connection);
+                dropPendingQuietly(connection, pending);
+            }
             throw new IllegalStateException("Failed to refresh materialization " + name, e);
-        }
-        finally {
-            restoreAutoCommit(connection, autoCommit);
         }
     }
 
@@ -194,15 +197,6 @@ public final class Materialization {
         builtAt = null;
     }
 
-    private static void rollbackQuietly(Connection connection) {
-        try {
-            connection.rollback();
-        }
-        catch (SQLException ignored) {
-            // Reported through the exception the caller is already getting.
-        }
-    }
-
     private static void dropPendingQuietly(Connection connection, String pending) {
         try {
             Sql.execute(connection, "DROP TABLE IF EXISTS " + Sql.quote(pending));
@@ -210,18 +204,6 @@ public final class Materialization {
         catch (RuntimeException ignored) {
             // Leaves a stray table rather than masking the original failure; the next refresh
             // replaces it.
-        }
-    }
-
-    private static void restoreAutoCommit(Connection connection, boolean autoCommit) {
-        if (!autoCommit) {
-            return;
-        }
-        try {
-            connection.setAutoCommit(true);
-        }
-        catch (SQLException ignored) {
-            // The connection is broken; the pool discards it on release.
         }
     }
 

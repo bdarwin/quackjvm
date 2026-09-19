@@ -339,6 +339,8 @@ public final class TableWriter {
                 appendRow(appender, rows.next());
                 written++;
             }
+            // Explicit: DuckDB's close() swallows a failed flush and silently drops the rows.
+            appender.flush();
         }
         catch (SQLException e) {
             throw new IllegalStateException("Failed to bulk-append rows to " + tableName, e);
@@ -389,13 +391,23 @@ public final class TableWriter {
             }
         }
 
+        /**
+         * Flushes, then closes. The flush is explicit because DuckDB's own {@code close()} swallows
+         * a failed flush - a duplicate primary key, running out of memory - and discards the rows
+         * with no error, the new ones along with the offending one.
+         */
         @Override
         public void close() {
             try {
-                appender.close();
+                flush();
             }
-            catch (SQLException e) {
-                throw new IllegalStateException("Failed to close the appender on " + tableName, e);
+            finally {
+                try {
+                    appender.close();
+                }
+                catch (SQLException e) {
+                    throw new IllegalStateException("Failed to close the appender on " + tableName, e);
+                }
             }
         }
     }

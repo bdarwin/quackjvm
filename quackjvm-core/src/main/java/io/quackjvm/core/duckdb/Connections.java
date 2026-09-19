@@ -75,6 +75,14 @@ public final class Connections {
          * or rollback, so the pool can skip a rollback it is certain has nothing to undo.
          */
         private boolean pending;
+        /**
+         * Set when commit, rollback or a change of auto-commit mode throws. After that DuckDB's JDBC
+         * driver (1.5.5) no longer agrees with DuckDB about whether a transaction is open, and
+         * nothing recovers it: later "transactions" on the connection commit statement by
+         * statement, and their commit() throws although the work has landed. Such a connection
+         * must never be handed to another request, so the pool discards it.
+         */
+        private boolean broken;
 
         ManagedConnectionHandler(Connection target, ConnectionPool pool, Lock lockToRelease) {
             this.target = target;
@@ -110,7 +118,7 @@ public final class Connections {
                 if (!released) {
                     released = true;
                     try {
-                        pool.release(target, !pending);
+                        pool.release(target, !pending, broken);
                     }
                     finally {
                         if (lockToRelease != null) {
@@ -124,6 +132,9 @@ public final class Connections {
                 return method.invoke(target, args);
             }
             catch (InvocationTargetException e) {
+                if ("commit".equals(name) || "rollback".equals(name) || "setAutoCommit".equals(name)) {
+                    broken = true;
+                }
                 throw e.getCause();
             }
         }

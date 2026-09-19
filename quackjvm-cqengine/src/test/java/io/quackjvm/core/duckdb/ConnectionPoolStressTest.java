@@ -7,6 +7,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,6 +16,7 @@ import java.util.concurrent.CountDownLatch;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * The statement cache and the {@code pending} flag are written for a single thread, and are safe
@@ -192,6 +194,58 @@ public class ConnectionPoolStressTest {
             assertTrue("a connection released after close() must be closed, not pooled",
                     inFlight.isClosed());
             assertEquals(0, cacheCount(pool));
+        }
+    }
+
+    /**
+     * A connection whose commit failed must not be handed to the next request. DuckDB's JDBC driver
+     * cannot recover from a failed commit: afterwards a "transaction" on that connection commits
+     * each statement as it runs, so a rollback no longer undoes anything.
+     */
+    @Test
+    public void aConnectionWhoseCommitFailedIsNeverReused() throws Exception {
+        try (DuckDBConnection root = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
+            try (Statement statement = root.createStatement()) {
+                statement.execute("CREATE TABLE u (k INTEGER PRIMARY KEY)");
+                statement.execute("CREATE TABLE v (k INTEGER)");
+            }
+            ConnectionPool pool = new ConnectionPool(root, 4);
+            Connection first = Connections.managed(pool.borrow(), pool, null);
+            Connection second = Connections.managed(pool.borrow(), pool, null);
+            first.setAutoCommit(false);
+            second.setAutoCommit(false);
+            try (Statement a = first.createStatement(); Statement b = second.createStatement()) {
+                a.execute("INSERT INTO u VALUES (1)");
+                b.execute("INSERT INTO u VALUES (1)");
+            }
+            first.commit();
+            try {
+                second.commit();
+                fail("the second commit should conflict");
+            }
+            catch (java.sql.SQLException expected) {
+                // the failure that poisons the connection
+            }
+            first.close();
+            second.close();   // released last, so it would be the next one borrowed
+
+            // The next request: a transaction that it rolls back must leave nothing behind.
+            for (int i = 0; i < 2; i++) {
+                Connection next = Connections.managed(pool.borrow(), pool, null);
+                next.setAutoCommit(false);
+                try (Statement statement = next.createStatement()) {
+                    statement.execute("INSERT INTO v VALUES (7)");
+                }
+                next.rollback();
+                next.setAutoCommit(true);
+                next.close();
+            }
+            try (Statement statement = root.createStatement();
+                 ResultSet rows = statement.executeQuery("SELECT count(*) FROM v")) {
+                rows.next();
+                assertEquals("a rolled-back insert on a pooled connection must not persist", 0, rows.getLong(1));
+            }
+            pool.close();
         }
     }
 
