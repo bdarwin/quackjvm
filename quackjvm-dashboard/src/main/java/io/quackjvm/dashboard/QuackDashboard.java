@@ -394,7 +394,6 @@ public final class QuackDashboard implements AutoCloseable {
             for (TimerSnapshot timer : window.statementsByTotalTime()) {
                 Json row = new Json().object().field("ts", ts).field("seconds", seconds);
                 statementFields(row, timer, seconds, Double.NaN);
-                row.field("totalMillis", timer.totalMillis());
                 recorder.write(Recorder.Kind.STATEMENTS, at, row.end().toString());
             }
             forEachCollection(window, (name, fields) -> {
@@ -570,7 +569,8 @@ public final class QuackDashboard implements AutoCloseable {
                 .field("count", timer.count())
                 .field("mean", timer.meanMillis())
                 .field("p50", timer.percentileMillis(50))
-                .field("p99", timer.percentileMillis(99));
+                .field("p99", timer.percentileMillis(99))
+                .field("totalMillis", timer.totalMillis());
         if (!Double.isNaN(share)) {
             json.field("share", share);
         }

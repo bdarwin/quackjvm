@@ -54,7 +54,11 @@
     </section>
 
     <section aria-labelledby="statements-heading">
-      <h2 id="statements-heading">Where DuckDB's time went <span class="hint" id="statements-window">last minute</span></h2>
+      <div class="section-head">
+        <h2 id="statements-heading">Where DuckDB's time went <span class="hint" id="statements-window">last minute</span></h2>
+        <label class="toggle"><input type="checkbox" id="show-all-sql"> Show full SQL</label>
+      </div>
+      <p class="explain">Click a statement to see all of it. <span class="tag heavy">heavy</span> means it averaged 1 ms or more a call - long enough for DuckDB to run it on several threads, which is what the CPU diagnosis counts.</p>
       <div class="table-wrap">
         <table id="statements">
           <thead>

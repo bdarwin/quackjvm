@@ -58,7 +58,12 @@ spent waiting. This table shows *which* collection is choking. In the screenshot
 
 **Where DuckDB's time went.** Statements from the last minute, ranked by their share of total
 statement time. Statements that differ only in their values count as one: `IN (?, ?, ?)` and
-`IN (?, ?)` are the same statement.
+`IN (?, ?)` are the same statement. Click a statement, or tick **Show full SQL**, to see all of it laid out a
+clause per line, with its calls, mean, p50, p99 and total time, and a button to copy it - to run
+`EXPLAIN ANALYZE` on, say. Statements are kept up to 4,000 characters. A statement tagged
+**heavy** averaged 1 ms or more a call: long enough for DuckDB to run it on several threads, and
+what the CPU diagnosis counts. A light statement near the top costs by how often it runs, not by
+what it asks.
 
 **Other programs using the cores.** CPU for this process alone would miss half the story: another
 program on the machine starves DuckDB just as badly as DuckDB's own queries do. When other

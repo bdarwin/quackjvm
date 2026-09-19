@@ -67,6 +67,20 @@ public class QuackMetricsTest {
         assertTrue(QuackMetrics.shapeOf("SELECT col1 FROM \"t2\"").contains("col1"));
     }
 
+    /** Cut at 160 characters, a real report query lost everything after its select list. */
+    @Test
+    public void aLongStatementIsKeptWholeEnoughToJudge() {
+        StringBuilder sql = new StringBuilder("SELECT region");
+        for (int i = 0; i < 40; i++) {
+            sql.append(", sum(CASE WHEN month = ").append(i).append(" THEN price END) AS m").append(i);
+        }
+        sql.append(" FROM sale s JOIN region r ON r.id = s.region_id WHERE s.year = 2026 GROUP BY region");
+        String shape = QuackMetrics.shapeOf(sql.toString());
+        assertTrue(shape.length() > 1_000);
+        assertTrue(shape, shape.endsWith("JOIN region r ON r.id = s.region_id WHERE s.year = ? GROUP BY region"));
+        assertTrue(QuackMetrics.shapeOf("SELECT " + "x, ".repeat(5_000) + "y").length() <= QuackMetrics.MAX_SHAPE_LENGTH);
+    }
+
     @Test
     public void duckdbSizesAreParsed() {
         assertEquals(488.2 * 1024 * 1024, QuackMetrics.parseBytes("488.2 MiB"), 1);

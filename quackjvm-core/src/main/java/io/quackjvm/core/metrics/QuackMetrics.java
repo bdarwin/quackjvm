@@ -78,6 +78,12 @@ public final class QuackMetrics {
     /** Distinct statement shapes kept apart; beyond this they share one timer. */
     private static final int MAX_STATEMENT_SHAPES = 256;
     private static final String OTHER_STATEMENTS = "(other statements)";
+    /**
+     * Long enough to judge a statement by - its joins, its subqueries, its aggregates - and short
+     * enough that a few hundred of them stay small. Was 160, which cut real queries off before
+     * their FROM.
+     */
+    static final int MAX_SHAPE_LENGTH = 4000;
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
     private static final Pattern PLACEHOLDER_LIST = Pattern.compile("\\?(\\s*,\\s*\\?)+");
     private static final Pattern VALUES_LIST = Pattern.compile("(\\(\\?[^()]*\\))(\\s*,\\s*\\(\\?[^()]*\\))+");
@@ -174,7 +180,7 @@ public final class QuackMetrics {
         shape = NUMBER.matcher(shape).replaceAll("?");
         shape = VALUES_LIST.matcher(shape).replaceAll("$1, ...");
         shape = PLACEHOLDER_LIST.matcher(shape).replaceAll("?, ...");
-        return shape.length() > 160 ? shape.substring(0, 157) + "..." : shape;
+        return shape.length() > MAX_SHAPE_LENGTH ? shape.substring(0, MAX_SHAPE_LENGTH - 3) + "..." : shape;
     }
 
     /** Counts a failed statement under the kind of failure it was. */

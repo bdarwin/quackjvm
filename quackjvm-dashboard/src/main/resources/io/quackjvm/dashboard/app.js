@@ -246,19 +246,135 @@ function renderCollections(state) {
   body.replaceChildren(...rows);
 }
 
+// Which statements are opened up, by their text; kept across the once-a-second redraws.
+const expanded = new Set();
+let showAllSql = false;
+let lastState = null;
+
+// Clauses that start a new line when a statement is laid out.
+const BREAK = /(?:(?:LEFT|RIGHT|FULL|INNER|CROSS|SEMI|ANTI|ASOF|POSITIONAL)\s+)?(?:OUTER\s+)?JOIN\b|FROM\b|WHERE\b|GROUP\s+BY\b|ORDER\s+BY\b|HAVING\b|QUALIFY\b|WINDOW\b|LIMIT\b|OFFSET\b|UNION(?:\s+ALL)?\b|EXCEPT\b|INTERSECT\b|VALUES\b|SET\b|RETURNING\b|ON\s+CONFLICT\b|SELECT\b/iy;
+
+/** Lays a one-line statement out over several: a line per clause, subqueries indented. */
+function formatSql(sql) {
+  let out = '';
+  let depth = 0;
+  let quote = null;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    if (quote) {
+      out += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      out += c;
+      continue;
+    }
+    if (c === '(') {
+      depth++;
+      out += c;
+      if (/^\s*(SELECT|WITH)\b/i.test(sql.slice(i + 1, i + 12))) {
+        out += '\n' + '  '.repeat(depth);
+        while (sql[i + 1] === ' ') i++;
+      }
+      continue;
+    }
+    if (c === ')') {
+      depth = Math.max(0, depth - 1);
+      out += c;
+      continue;
+    }
+    if (i > 0 && /\s/.test(sql[i - 1]) && /[A-Za-z]/.test(c)) {
+      BREAK.lastIndex = i;
+      // DELETE FROM is one clause, not two.
+      // Not twice in a row: a subquery's SELECT is already on a line of its own.
+      if (BREAK.test(sql) && !/\bDELETE\s*$/i.test(out) && !/\n\s*$/.test(out)) {
+        // Copy the whole keyword, so LEFT JOIN does not break again before JOIN.
+        out = out.replace(/\s+$/, '') + '\n' + '  '.repeat(depth) + sql.slice(i, BREAK.lastIndex);
+        i = BREAK.lastIndex - 1;
+        continue;
+      }
+    }
+    out += c;
+  }
+  return out.trim();
+}
+
+function toggleStatement(shape) {
+  if (expanded.has(shape)) expanded.delete(shape);
+  else expanded.add(shape);
+  if (lastState) renderStatements(lastState);
+}
+
+function statementDetail(st, windowSeconds) {
+  const tr = el('tr', 'detail');
+  const td = el('td');
+  td.colSpan = 5;
+  const pre = el('pre', null, formatSql(st.shape));
+  const meta = el('div', 'detail-meta');
+  const stat = (label, value) => {
+    const span = el('span', null, label + ' ');
+    span.append(el('b', null, value));
+    return span;
+  };
+  meta.append(
+    stat('calls', `${Math.round(st.count).toLocaleString()} in ${Math.round(windowSeconds)} s`),
+    stat('mean', fmtMs(st.mean)), stat('p50', fmtMs(st.p50)), stat('p99', fmtMs(st.p99)),
+    stat('total', fmtMs(st.totalMillis)), stat('share of statement time', fmtPct(st.share)),
+    el('span', null, st.mean >= 1
+      ? 'Heavy: long enough per call for DuckDB to spread it over several threads.'
+      : 'Light: fast per call - cost comes from how often it runs, not from the query.'));
+  const copy = el('button', 'copy', 'Copy SQL');
+  copy.type = 'button';
+  copy.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(st.shape);
+      copy.textContent = 'Copied';
+    } catch (e) {
+      copy.textContent = 'Copy failed';
+    }
+    setTimeout(() => { copy.textContent = 'Copy SQL'; }, 1500);
+  });
+  meta.append(copy);
+  td.append(pre, meta);
+  tr.append(td);
+  return tr;
+}
+
 function renderStatements(state) {
+  lastState = state;
   const body = $('statements').tBodies[0];
-  const rows = (state.statements || []).map((st) => {
-    const tr = el('tr');
+  // A redraw must not undo a selection the user is making in an opened statement.
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && body.contains(selection.anchorNode)) return;
+  const rows = [];
+  for (const st of state.statements || []) {
+    const open = showAllSql || expanded.has(st.shape);
+    const tr = el('tr', 'statement');
+    tr.tabIndex = 0;
+    tr.setAttribute('role', 'button');
+    tr.setAttribute('aria-expanded', String(open));
+    tr.addEventListener('click', () => toggleStatement(st.shape));
+    tr.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggleStatement(st.shape);
+      }
+    });
     const share = el('td');
     share.append(bar(st.share));
     const sql = el('td', 'sql');
-    const span = el('span', null, st.shape);
-    span.title = st.shape;
-    sql.append(span);
+    const line = el('div', 'line');
+    line.append(el('span', 'chev', open ? '▾' : '▸'));
+    if (st.mean >= 1) line.append(el('span', 'tag heavy', 'heavy'));
+    line.append(el('span', 'text', st.shape));
+    sql.append(line);
     tr.append(share, cell(fmtRate(st.perSecond), 'num'), cell(fmtMs(st.mean), 'num'), cell(fmtMs(st.p99), 'num'), sql);
-    return tr;
-  });
+    rows.push(tr);
+    if (open) rows.push(statementDetail(st, state.longWindowSeconds));
+  }
   if (rows.length === 0) {
     const tr = el('tr');
     const td = cell('No statements in the last minute.', 'empty');
@@ -267,6 +383,26 @@ function renderStatements(state) {
     rows.push(tr);
   }
   body.replaceChildren(...rows);
+}
+
+function initShowAll() {
+  const box = $('show-all-sql');
+  try {
+    showAllSql = localStorage.getItem('quackjvm.showAllSql') === 'true';
+  } catch (e) {
+    showAllSql = false;
+  }
+  if (location.hash === '#full-sql') showAllSql = true;
+  box.checked = showAllSql;
+  box.addEventListener('change', () => {
+    showAllSql = box.checked;
+    try {
+      localStorage.setItem('quackjvm.showAllSql', String(showAllSql));
+    } catch (e) {
+      // Remembering it is a convenience; the page works without.
+    }
+    if (lastState) renderStatements(lastState);
+  });
 }
 
 function renderRecording(recording) {
@@ -315,4 +451,5 @@ async function poll() {
   }
 }
 
+initShowAll();
 poll();

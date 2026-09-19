@@ -10,6 +10,10 @@
   any other host (DNS rebinding), and is read-only with no endpoint that runs SQL. While it runs it records
   what it samples to `quackjvm-metrics/` as JSON Lines that DuckDB queries directly: headline
   numbers every second, and statements, collections and findings every ten; kept for seven days.
+- The dashboard shows each statement in full: click one, or tick "Show full SQL", to see it laid
+  out a clause per line with its timings and a copy button; heavy statements (1 ms or more a
+  call) are tagged. Statement shapes are now kept up to 4,000 characters rather than 160, which
+  cut real report queries off before their FROM.
 - The dashboard names the other programs on the machine when they hold a quarter of its cores or
   more - name, pid and share, never arguments - on the page and in `processes-DATE.jsonl`. Through
   `ProcessHandle` on Linux and Windows; on macOS, where Java sees no other process's CPU, through

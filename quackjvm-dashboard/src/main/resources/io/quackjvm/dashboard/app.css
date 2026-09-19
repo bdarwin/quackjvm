@@ -192,6 +192,56 @@ td.empty { color: var(--faint); text-align: center; padding: 18px; }
 .bar.wait .fill { background: var(--bar-wait); }
 .bar .pct { width: 38px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.section-head h2 { margin-bottom: 4px; }
+.toggle { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.explain { color: var(--faint); font-size: 12px; margin: 0 0 10px; }
+
+.tag {
+  display: inline-block;
+  font: 600 10px/1 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 5px;
+  border-radius: 4px;
+  vertical-align: 1px;
+}
+.tag.heavy { background: var(--warn-bg); color: var(--warn); }
+
+tr.statement { cursor: pointer; }
+tr.statement:hover td, tr.statement:focus-visible td { background: var(--surface-2); }
+tr.statement:focus-visible { outline: 2px solid var(--line); outline-offset: -2px; }
+td.sql .line { display: flex; gap: 8px; align-items: center; min-width: 0; }
+td.sql .chev { color: var(--faint); flex: none; width: 10px; }
+td.sql .tag { flex: none; }
+td.sql .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+tr.detail td { background: var(--surface-2); padding: 12px 16px 14px; }
+tr.detail pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 12px/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 420px;
+  overflow: auto;
+}
+.detail-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; margin-top: 10px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.detail-meta b { color: var(--text); font-weight: 600; }
+button.copy {
+  margin-left: auto;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button.copy:hover { background: var(--bg); }
+
 footer { max-width: 1320px; margin: 0 auto; padding: 0 24px 32px; color: var(--faint); font-size: 12px; }
 code { font-family: var(--mono); font-size: 12px; }
 .recording { margin: 0 0 6px; color: var(--muted); overflow-wrap: anywhere; }
