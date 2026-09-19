@@ -22,12 +22,14 @@ import java.util.Map;
  * SELECT ts, writesPerSecond, lockWaitShare, cpu FROM 'quackjvm-metrics/metrics-*.jsonl' ORDER BY ts;
  * </pre>
  *
- * <p>Four kinds of file, one of each per day (UTC), each line one record with a {@code ts}:</p>
+ * <p>Five kinds of file, one of each per day (UTC), each line one record with a {@code ts}:</p>
  * <ul>
  *   <li>{@code metrics-DATE.jsonl} - every second, the headline numbers the page shows</li>
  *   <li>{@code statements-DATE.jsonl} - every ten seconds, one line per statement shape that ran</li>
  *   <li>{@code collections-DATE.jsonl} - every ten seconds, one line per collection that was used</li>
  *   <li>{@code findings-DATE.jsonl} - every ten seconds, one line per cause the diagnosis found</li>
+ *   <li>{@code processes-DATE.jsonl} - when other programs hold a quarter of the machine or more,
+ *       at most every five seconds, one line per program using a notable share of it</li>
  * </ul>
  *
  * <p>Files older than the retention period are deleted when a day's files are started, so the
@@ -40,7 +42,8 @@ import java.util.Map;
 final class Recorder implements AutoCloseable {
 
     enum Kind {
-        METRICS("metrics"), STATEMENTS("statements"), COLLECTIONS("collections"), FINDINGS("findings");
+        METRICS("metrics"), STATEMENTS("statements"), COLLECTIONS("collections"), FINDINGS("findings"),
+        PROCESSES("processes");
 
         final String prefix;
 

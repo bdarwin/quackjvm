@@ -138,6 +138,29 @@ function renderFindings(state) {
   }
 }
 
+function renderOthers(state) {
+  const box = $('others');
+  const seen = state.otherProcesses || {};
+  const list = seen.processes || [];
+  if (list.length === 0) {
+    box.hidden = true;
+    return;
+  }
+  const title = el('div', 'title', 'Other programs using the cores ');
+  title.append(el('span', 'hint',
+    `they held ${fmtPct(seen.othersShare)} of the machine, seen ${Math.round((state.timestamp - seen.at) / 1000)} s ago`));
+  const ul = el('ul');
+  for (const p of list) {
+    const li = el('li');
+    const who = el('span', 'who', p.name);
+    who.title = p.name;
+    li.append(who, el('span', 'pid', 'pid ' + p.pid), bar(p.share, 'wait'));
+    ul.append(li);
+  }
+  box.replaceChildren(title, ul);
+  box.hidden = false;
+}
+
 function tile(label, value, unit, sub, series, alert, floorMax) {
   const t = el('div', 'tile' + (alert ? ' alert' : ''));
   const v = el('div', 'value', value);
@@ -163,9 +186,9 @@ function renderTiles(state) {
     tile('Write p99', fmtMs(n.writeP99), '', 'slowest 1% of write requests, lock already held', s.writeP99),
     tile('Write-lock wait', fmtPct(n.lockWaitShare), '', 'share of write time spent queueing',
       s.lockWaitShare, n.lockWaitShare >= 0.25, 1),
-    tile('CPU, this process', fmtPct(n.cpu), '',
-      `whole machine ${fmtPct(n.machineCpu)} · ${n.cores || '?'} cores · DuckDB threads ${isNum(n.duckdbThreads) ? n.duckdbThreads : '?'}`,
-      s.cpu, cpuBusy, 1),
+    tile('CPU, whole machine', fmtPct(isNum(n.machineCpu) ? n.machineCpu : n.cpu), '',
+      `this process ${fmtPct(n.cpu)} · ${n.cores || '?'} cores · DuckDB threads ${isNum(n.duckdbThreads) ? n.duckdbThreads : '?'}`,
+      s.machineCpu || s.cpu, cpuBusy, 1),
     tile('Heavy statements at once', isNum(n.heavyStatementsAtOnce) ? n.heavyStatementsAtOnce.toFixed(1) : '–', '',
       `≥ 1 ms each · ${isNum(n.statementsAtOnce) ? n.statementsAtOnce.toFixed(1) : '–'} of any size`,
       s.heavyStatements, cpuBusy && n.heavyStatementsAtOnce >= 1.5, 1),
@@ -277,6 +300,7 @@ async function poll() {
     } else {
       renderStatus(state);
       renderFindings(state);
+      renderOthers(state);
       renderTiles(state);
       renderCollections(state);
       renderStatements(state);

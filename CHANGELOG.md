@@ -10,6 +10,10 @@
   any other host (DNS rebinding), and is read-only with no endpoint that runs SQL. While it runs it records
   what it samples to `quackjvm-metrics/` as JSON Lines that DuckDB queries directly: headline
   numbers every second, and statements, collections and findings every ten; kept for seven days.
+- The dashboard names the other programs on the machine when they hold a quarter of its cores or
+  more - name, pid and share, never arguments - on the page and in `processes-DATE.jsonl`. Through
+  `ProcessHandle` on Linux and Windows; on macOS, where Java sees no other process's CPU, through
+  `/bin/ps`, at most every five seconds. `watchOtherProcesses(false)` turns it off.
 - `cpu.machine`: whole-machine CPU. The CPU diagnosis uses the busier of this process and the
   machine, and names other processes when they are what is taking the cores.
 - Metrics, on by default: `database.metrics()` records request, write-lock-wait and per-statement

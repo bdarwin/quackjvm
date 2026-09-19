@@ -43,7 +43,7 @@ so.
 **Now.** The headline numbers for the last ten seconds, each with five minutes of history:
 - reads and writes per second, and their p50 and p99 times
 - the share of write time spent queueing for a write lock
-- CPU, both this process (including DuckDB's native threads) and the whole machine
+- CPU for the whole machine, and for this process (including DuckDB's native threads)
 - how many heavy statements (1 ms or more) were running at once
 - DuckDB's memory against its limit, and bytes spilled to disk
 - conflicts per second
@@ -59,6 +59,19 @@ spent waiting. This table shows *which* collection is choking. In the screenshot
 **Where DuckDB's time went.** Statements from the last minute, ranked by their share of total
 statement time. Statements that differ only in their values count as one: `IN (?, ?, ?)` and
 `IN (?, ?)` are the same statement.
+
+**Other programs using the cores.** CPU for this process alone would miss half the story: another
+program on the machine starves DuckDB just as badly as DuckDB's own queries do. When other
+programs hold a quarter of the machine or more, the page names the busiest ones, with their pid
+and their share. On an idle machine it doesn't look at all.
+
+- **Linux and Windows:** it reads each process's CPU time through Java's `ProcessHandle`.
+- **macOS:** Java can't see other processes' CPU there (measured: of 735 processes, only itself).
+  So the dashboard runs `/bin/ps` instead, with fixed arguments and no shell, in about 40 ms, at
+  most every five seconds.
+
+It records each program's name and pid, never its arguments, since those can hold passwords.
+Turn it off with `watchOtherProcesses(false)`.
 
 ![The dashboard while twenty users run heavy aggregates](assets/dashboard-cpu.png)
 
@@ -78,6 +91,7 @@ JSON Lines, one file of each kind per day (UTC), and DuckDB reads them directly:
 | `statements-DATE.jsonl` | every 10 s | statement shape that ran: calls, total, mean, p50, p99 |
 | `collections-DATE.jsonl` | every 10 s | collection used: reads and writes with their times, lock wait, wait share |
 | `findings-DATE.jsonl` | every 10 s | cause the diagnosis found, with its evidence and advice |
+| `processes-DATE.jsonl` | when other programs hold 25% of the machine, at most every 5 s | other program using 2% or more of the machine: name, pid, share |
 
 Every line has a `ts`, which DuckDB reads as a `TIMESTAMP`. These queries were run against a
 recording of `DashboardDemo`:
@@ -127,6 +141,8 @@ The defaults are safe for a production process:
   setting or triggers any work.
 - **No data values**, on the page or in the recorded files. Numbers and quoted strings are removed from statements before they are
   recorded. The page shows `WHERE id = ?`, never `WHERE id = 42`.
+- **Other programs are named, not described.** When it lists what else is using the cores, it
+  shows each program's name and pid, never its command line.
 - **A strict page.** `Content-Security-Policy: default-src 'self'` and `X-Frame-Options: DENY`
   are set. Script and styles are served from the dashboard itself, and every value is inserted
   as text, never as markup.

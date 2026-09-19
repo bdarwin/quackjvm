@@ -69,12 +69,20 @@ public final class QuackDashboard implements AutoCloseable {
     private volatile String recordingDirectory;
     private volatile String recordingError;
     private long recordedSeconds;
+    /** Null when not watching. Used by the sampling thread only. */
+    private final OtherProcesses otherProcesses;
+    private volatile OtherProcessesSeen otherProcessesSeen;
+
+    /** What was last found about other programs, for the page. */
+    private record OtherProcessesSeen(long at, double othersShare, List<OtherProcesses.Busy> busy) {
+    }
 
     private QuackDashboard(Builder builder) {
         this.metrics = builder.metrics;
         this.title = builder.title;
         this.loopbackOnly = builder.bindAddress.isLoopbackAddress();
         this.sampler = new Sampler(metrics, (int) builder.history.toSeconds());
+        this.otherProcesses = builder.watchOtherProcesses ? new OtherProcesses() : null;
         if (builder.recordTo != null) {
             try {
                 this.recorder = new Recorder(builder.recordTo, builder.retention);
@@ -118,6 +126,7 @@ public final class QuackDashboard implements AutoCloseable {
         private Duration history = Duration.ofMinutes(5);
         private Path recordTo = Path.of("quackjvm-metrics");
         private Duration retention = Duration.ofDays(7);
+        private boolean watchOtherProcesses = true;
 
         private Builder(QuackMetrics metrics) {
             if (metrics == null) {
@@ -161,6 +170,16 @@ public final class QuackDashboard implements AutoCloseable {
          */
         public Builder recordTo(Path directory) {
             this.recordTo = directory;
+            return this;
+        }
+
+        /**
+         * Whether to name the other programs on the machine when they hold a quarter of its cores
+         * or more. On by default; costs nothing while the machine is not that busy. On macOS it
+         * runs {@code /bin/ps}, at most every five seconds. Only names and process ids are kept.
+         */
+        public Builder watchOtherProcesses(boolean watch) {
+            this.watchOtherProcesses = watch;
             return this;
         }
 
@@ -316,11 +335,15 @@ public final class QuackDashboard implements AutoCloseable {
             // A failed sample leaves a gap in the charts; stopping the sampler would freeze them.
             return;
         }
-        if (recorder == null || second == null) {
+        if (second == null) {
+            return;
+        }
+        List<OtherProcesses.Busy> busy = lookAtOtherProcesses(second);
+        if (recorder == null) {
             return;
         }
         try {
-            record(second);
+            record(second, busy);
         }
         catch (IOException | RuntimeException e) {
             // A full disk must not take the application down with it: stop recording, and say so.
@@ -335,13 +358,36 @@ public final class QuackDashboard implements AutoCloseable {
         }
     }
 
+    /** Names the other programs, if they hold enough of the machine; null if it did not look. */
+    private List<OtherProcesses.Busy> lookAtOtherProcesses(MetricsSnapshot second) {
+        if (otherProcesses == null) {
+            return null;
+        }
+        double own = second.cpuUtilisation();
+        double machine = second.gauge(QuackMetrics.CPU_MACHINE);
+        double others = Double.isNaN(own) || Double.isNaN(machine) ? Double.NaN : Math.max(0, machine - own);
+        List<OtherProcesses.Busy> busy = otherProcesses.lookIfBusy(others);
+        if (busy != null) {
+            otherProcessesSeen = new OtherProcessesSeen(System.currentTimeMillis(), others, busy);
+        }
+        return busy;
+    }
+
     /** One line a second of headline numbers; every ten, the statements, collections and findings. */
-    private void record(MetricsSnapshot second) throws IOException {
+    private void record(MetricsSnapshot second, List<OtherProcesses.Busy> busy) throws IOException {
         java.time.Instant at = second.getTakenAt();
         String ts = at.toString();
         Json line = new Json().object().field("ts", ts).field("seconds", second.getIntervalSeconds());
         headlineFields(line, second);
         recorder.write(Recorder.Kind.METRICS, at, line.end().toString());
+        if (busy != null) {
+            double others = otherProcessesSeen.othersShare();
+            for (OtherProcesses.Busy process : busy) {
+                recorder.write(Recorder.Kind.PROCESSES, at, new Json().object().field("ts", ts)
+                        .field("othersShare", others).field("name", process.name())
+                        .field("pid", process.pid()).field("share", process.share()).end().toString());
+            }
+        }
         if (++recordedSeconds % Sampler.SHORT_WINDOW == 0) {
             MetricsSnapshot window = sampler.shortWindow();
             double seconds = window.getIntervalSeconds();
@@ -390,6 +436,19 @@ public final class QuackDashboard implements AutoCloseable {
 
         json.key("now").object();
         headlineFields(json, recent);
+        json.end();
+
+        // What was last found about other programs, while it is still recent enough to matter.
+        OtherProcessesSeen seen = otherProcessesSeen;
+        json.key("otherProcesses").object().field("watching", otherProcesses != null);
+        if (seen != null && System.currentTimeMillis() - seen.at() < 30_000) {
+            json.field("at", seen.at()).field("othersShare", seen.othersShare()).key("processes").array();
+            for (OtherProcesses.Busy process : seen.busy()) {
+                json.object().field("name", process.name()).field("pid", process.pid())
+                        .field("share", process.share()).end();
+            }
+            json.endArray();
+        }
         json.end();
         collections(json, recent);
         statements(json, minute);
@@ -526,6 +585,7 @@ public final class QuackDashboard implements AutoCloseable {
         json.numbers("writeP99", points.stream().map(Sampler.Point::writeP99).toList());
         json.numbers("lockWaitShare", points.stream().map(Sampler.Point::lockWaitShare).toList());
         json.numbers("cpu", points.stream().map(Sampler.Point::cpu).toList());
+        json.numbers("machineCpu", points.stream().map(Sampler.Point::machineCpu).toList());
         json.numbers("heavyStatements", points.stream().map(Sampler.Point::heavyStatements).toList());
         json.numbers("memoryBytes", points.stream().map(Sampler.Point::memoryBytes).toList());
         json.numbers("tempBytes", points.stream().map(Sampler.Point::tempBytes).toList());

@@ -84,7 +84,8 @@ final class Sampler {
 
     /** The headline numbers of one second, kept for the charts. */
     record Point(long epochMillis, double readsPerSecond, double writesPerSecond, double readP99, double writeP99,
-                 double lockWaitShare, double cpu, double heavyStatements, double memoryBytes, double tempBytes,
+                 double lockWaitShare, double cpu, double machineCpu, double heavyStatements, double memoryBytes,
+                 double tempBytes,
                  double conflictsPerSecond) {
 
         static Point of(MetricsSnapshot interval) {
@@ -99,6 +100,7 @@ final class Sampler {
                     writes.count() == 0 ? Double.NaN : writes.percentileMillis(99),
                     waitAndWork == 0 ? 0 : waits.totalNanos() / waitAndWork,
                     interval.cpuUtilisation(),
+                    interval.gauge(QuackMetrics.CPU_MACHINE),
                     interval.statementConcurrency(Diagnosis.HEAVY_STATEMENT_MILLIS),
                     interval.gauge(QuackMetrics.DUCKDB_MEMORY),
                     interval.gauge(QuackMetrics.DUCKDB_TEMP),
