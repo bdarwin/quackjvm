@@ -4,7 +4,8 @@
  *
  *   quiet          one user reading and writing now and then - nothing to report
  *   write lock     eight threads adding objects one at a time to the same collection
- *   heavy queries  twenty users running heavy GROUP BY reports over two million rows
+ *   pivots         twenty users refreshing pivot dashboards over five million sales, and a
+ *                  wide view of sparse sensor data pivoted from ten million long rows
  *   literal SQL    queries built by pasting values into the SQL instead of binding them
  *
  * Starting a dashboard is one line; everything else here is the load.
@@ -59,18 +60,87 @@ public class DashboardDemo {
     record Phase(String name, int threads, Work work) {
     }
 
+    /** Sparse data shown wide: 40 of 2,000 possible sensors as columns, one row per record. */
+    static final String SPARSE_WIDE = sparseWide();
+
+    /** The panels of a sales dashboard, and the sparse wide view. Each takes one parameter. */
+    static final String[] PIVOTS = {
+            // Regions as columns.
+            "PIVOT (SELECT make, year, region, price FROM sale WHERE year >= ?)"
+                    + " ON region IN ('EMEA', 'AMER', 'APAC', 'LATAM', 'ANZ', 'MEA')"
+                    + " USING sum(price) GROUP BY make, year ORDER BY make, year",
+            // Months as columns, the conditional-aggregate way.
+            monthsAsColumns(),
+            // A join to a dimension, then channels as columns with two measures each.
+            "PIVOT (SELECT c.segment, c.tier, s.channel, s.price FROM sale s JOIN customer c ON c.id = s.customer"
+                    + " WHERE s.year >= ?) ON channel IN ('web', 'store', 'partner', 'phone')"
+                    + " USING sum(price) AS revenue, count(*) AS sales GROUP BY segment, tier",
+            // Top five models in each region, by a window over an aggregate.
+            "SELECT * FROM (SELECT region, model, sum(price * qty) AS revenue,"
+                    + " rank() OVER (PARTITION BY region ORDER BY sum(price * qty) DESC) AS r"
+                    + " FROM sale WHERE year >= ? GROUP BY region, model) WHERE r <= 5 ORDER BY region, r",
+            SPARSE_WIDE,
+    };
+
+    static String monthsAsColumns() {
+        StringBuilder sql = new StringBuilder("SELECT country, channel");
+        for (int month = 1; month <= 12; month++) {
+            sql.append(", sum(price * qty) FILTER (WHERE month = ").append(month).append(") AS m").append(month);
+        }
+        return sql.append(" FROM sale WHERE year = ? GROUP BY ALL ORDER BY country, channel").toString();
+    }
+
+    /**
+     * What SparseTable.viewSql writes - one max(value) FILTER per sensor shown, only those sensors'
+     * rows read, grouped by record - with a page of 100 records. Leaving out the attr IN filter
+     * makes DuckDB group all ten million rows to show 40 sensors: 320 ms instead of 40, measured.
+     */
+    static String sparseWide() {
+        StringBuilder sql = new StringBuilder("SELECT record_id");
+        StringBuilder shown = new StringBuilder();
+        for (int k = 0; k < 40; k++) {
+            sql.append(", max(value) FILTER (WHERE attr = ").append(k * 7).append(") AS \"sensor_").append(k * 7).append('"');
+            shown.append(k == 0 ? "" : ", ").append(k * 7);
+        }
+        return sql.append(" FROM reading_point WHERE record_id >= ? AND attr IN (").append(shown)
+                .append(") GROUP BY record_id ORDER BY record_id LIMIT 100").toString();
+    }
+
+    /**
+     * Five million sales with a customer dimension, and sparse sensor readings stored long - 200,000
+     * records with 50 of 2,000 sensors each, ten million rows - in SparseTable's layout.
+     */
+    static void createData(DuckDBDatabase database) {
+        database.materialize("sale").as("""
+                SELECT i AS id,
+                       ['EMEA','AMER','APAC','LATAM','ANZ','MEA'][1 + i % 6] AS region,
+                       'country' || (i % 40) AS country,
+                       ['Ford','BMW','Toyota','Honda','Tesla','Kia','Audi','Fiat','Volvo','Mazda','Seat','Skoda'][1 + (i // 7) % 12] AS make,
+                       'model' || ((i // 7) % 120) AS model,
+                       ['web','store','partner','phone'][1 + (i // 3) % 4] AS channel,
+                       2020 + (i // 11) % 7 AS year,
+                       1 + (i // 13) % 12 AS month,
+                       (i * 7919) % 200000 AS customer,
+                       10000 + (i * 7919) % 50000 AS price,
+                       1 + i % 5 AS qty
+                FROM range(5000000) t(i)""").build();
+        database.materialize("customer").as("SELECT i AS id, ['retail','fleet','gov','rental','dealer'][1 + i % 5]"
+                + " AS segment, ['gold','silver','bronze'][1 + i % 3] AS tier FROM range(200000) t(i)").build();
+        database.materialize("reading_point").as("SELECT r AS record_id, (r * 37 + k * 41) % 2000 AS attr,"
+                + " (r * k) % 1000 / 10.0 AS value FROM range(200000) a(r), range(50) b(k)").build();
+    }
+
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 8090;
         int secondsPerPhase = args.length > 1 ? Integer.parseInt(args[1]) : 30;
         int cores = Runtime.getRuntime().availableProcessors();
 
-        DuckDBDatabase database = DuckDBDatabase.builder().memoryLimit("2GB").build();
+        DuckDBDatabase database = DuckDBDatabase.builder().memoryLimit("3GB").build();
         IndexedCollection<Order> orders = database.collection(Order.ORDER_ID).name("orders")
                 .columnarLayout(ColumnarLayout.ofRecord(Order.class)).build();
         IndexedCollection<Order> refunds = database.collection(Order.ORDER_ID).name("refunds")
                 .columnarLayout(ColumnarLayout.ofRecord(Order.class)).build();
-        database.materialize("sale").as("SELECT i AS id, i % 5000 AS customer, i % 40 AS region,"
-                + " (i * 7919) % 50000 AS price FROM range(2000000) t(i)").build();
+        createData(database);
 
         QuackDashboard dashboard = QuackDashboard.builder(database.metrics())
                 .port(port).title("DashboardDemo").start();
@@ -93,11 +163,15 @@ public class DashboardDemo {
                         refunds.add(new Order(id, "c", -id));
                     }
                 }),
-                new Phase("heavy queries", 2 * cores, () ->
-                        database.query("SELECT region, count(DISTINCT customer), quantile_cont(price, 0.9)"
-                                + " FROM sale GROUP BY 1").count()),
+                new Phase("pivots", 2 * cores, () -> {
+                    // Each user refreshes one panel at random; every row is read, as a page would.
+                    String panel = PIVOTS[ThreadLocalRandom.current().nextInt(PIVOTS.length)];
+                    int year = 2020 + ThreadLocalRandom.current().nextInt(5);
+                    database.query(panel, SPARSE_WIDE.equals(panel) ? 0 : year).forEachRow(row -> {
+                    });
+                }),
                 new Phase("literal SQL", 2, () -> {
-                    int id = ThreadLocalRandom.current().nextInt(2_000_000);
+                    int id = ThreadLocalRandom.current().nextInt(5_000_000);
                     database.query("SELECT price FROM sale WHERE id = " + id).count();
                 }));
 
