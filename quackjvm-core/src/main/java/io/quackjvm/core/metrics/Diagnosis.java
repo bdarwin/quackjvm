@@ -104,7 +104,10 @@ public final class Diagnosis {
     }
 
     private static void cpu(MetricsSnapshot interval, List<Finding> findings) {
-        double busy = interval.cpuUtilisation();
+        double own = interval.cpuUtilisation();
+        double machine = interval.gauge(QuackMetrics.CPU_MACHINE);
+        // The busier of the two: DuckDB is as short of cores when another process holds them.
+        double busy = Double.isNaN(machine) ? own : Double.isNaN(own) ? machine : Math.max(own, machine);
         // Only statements heavy enough for DuckDB to run in parallel: the choke is several of those
         // each asking for every core. Sub-millisecond writes keep a machine busy too, but on one
         // thread each, and lowering DuckDB's threads would do nothing for them.
@@ -133,9 +136,13 @@ public final class Diagnosis {
                 : "";
         findings.add(new Finding(Cause.CPU, Math.min(1, busy),
                 "statements are competing for CPU",
-                String.format("CPU %.0f%% busy across %.0f cores; %.1f heavy statements running at once on average;"
-                        + " DuckDB threads = %.0f. Where the time went:%s", busy * 100, cores, concurrency, threads, top),
-                threadAdvice + "Materialize the hottest statement if it is an aggregate many users repeat, and"
+                String.format("CPU %.0f%% busy across %.0f cores (this process %.0f%%, the whole machine %.0f%%);"
+                                + " %.1f heavy statements running at once on average; DuckDB threads = %.0f."
+                                + " Where the time went:%s",
+                        busy * 100, cores, own * 100, machine * 100, concurrency, threads, top),
+                (machine - own >= 0.3 ? "Other processes on this machine are using "
+                        + String.format("%.0f%%", (machine - own) * 100) + " of the cores - see what else is running. " : "")
+                        + threadAdvice + "Materialize the hottest statement if it is an aggregate many users repeat, and"
                         + " cap how many heavy queries run at once - a semaphore in front of them trims the tail."));
     }
 

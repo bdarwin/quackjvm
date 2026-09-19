@@ -14,6 +14,7 @@ import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -63,12 +64,27 @@ public final class QuackDashboard implements AutoCloseable {
     private final Sampler sampler;
     private final boolean loopbackOnly;
     private final long startedAt = System.currentTimeMillis();
+    /** Null when not recording, or once recording has failed. Used by the sampling thread only. */
+    private Recorder recorder;
+    private volatile String recordingDirectory;
+    private volatile String recordingError;
+    private long recordedSeconds;
 
     private QuackDashboard(Builder builder) {
         this.metrics = builder.metrics;
         this.title = builder.title;
         this.loopbackOnly = builder.bindAddress.isLoopbackAddress();
         this.sampler = new Sampler(metrics, (int) builder.history.toSeconds());
+        if (builder.recordTo != null) {
+            try {
+                this.recorder = new Recorder(builder.recordTo, builder.retention);
+                this.recordingDirectory = recorder.directory().toString();
+            }
+            catch (IOException e) {
+                // The page is still worth having without the files; say why they are missing.
+                this.recordingError = "Could not record to " + builder.recordTo.toAbsolutePath() + ": " + e;
+            }
+        }
         try {
             this.server = HttpServer.create(new InetSocketAddress(builder.bindAddress, builder.port), 16);
         }
@@ -81,7 +97,7 @@ public final class QuackDashboard implements AutoCloseable {
         server.setExecutor(requestThreads);
         server.createContext("/", this::handle);
         sampler.sample();
-        samplerThread.scheduleAtFixedRate(this::sampleQuietly, 1, 1, TimeUnit.SECONDS);
+        samplerThread.scheduleAtFixedRate(this::sampleAndRecord, 1, 1, TimeUnit.SECONDS);
         server.start();
     }
 
@@ -100,6 +116,8 @@ public final class QuackDashboard implements AutoCloseable {
         private InetAddress bindAddress = InetAddress.getLoopbackAddress();
         private String title = "quackjvm";
         private Duration history = Duration.ofMinutes(5);
+        private Path recordTo = Path.of("quackjvm-metrics");
+        private Duration retention = Duration.ofDays(7);
 
         private Builder(QuackMetrics metrics) {
             if (metrics == null) {
@@ -136,6 +154,22 @@ public final class QuackDashboard implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Where to record what the dashboard samples, as JSON Lines files that DuckDB can query:
+         * {@code quackjvm-metrics} under the working directory by default. Null not to record.
+         * See the class comment for what is written.
+         */
+        public Builder recordTo(Path directory) {
+            this.recordTo = directory;
+            return this;
+        }
+
+        /** How long recorded files are kept. Seven days by default. */
+        public Builder retention(Duration retention) {
+            this.retention = retention;
+            return this;
+        }
+
         public QuackDashboard start() {
             return new QuackDashboard(this);
         }
@@ -151,11 +185,31 @@ public final class QuackDashboard implements AutoCloseable {
         return "http://" + host + ":" + port() + "/";
     }
 
+    /** Where the samples are being recorded, or null if they are not. */
+    public Path recordingDirectory() {
+        String directory = recordingDirectory;
+        return directory == null ? null : Path.of(directory);
+    }
+
     @Override
     public void close() {
         server.stop(0);
-        samplerThread.shutdownNow();
+        samplerThread.shutdown();
+        try {
+            samplerThread.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         requestThreads.shutdownNow();
+        if (recorder != null) {
+            try {
+                recorder.close();
+            }
+            catch (IOException ignored) {
+                // Nothing more can be done with a file that will not close.
+            }
+        }
     }
 
     // ---------- Requests ----------
@@ -248,13 +302,67 @@ public final class QuackDashboard implements AutoCloseable {
         }
     }
 
-    private void sampleQuietly() {
+    /** Takes a sample now, as the sampling thread does each second. For the tests. */
+    void sampleNow() {
+        sampleAndRecord();
+    }
+
+    private synchronized void sampleAndRecord() {
+        MetricsSnapshot second;
         try {
-            sampler.sample();
+            second = sampler.sample();
         }
         catch (RuntimeException e) {
             // A failed sample leaves a gap in the charts; stopping the sampler would freeze them.
+            return;
         }
+        if (recorder == null || second == null) {
+            return;
+        }
+        try {
+            record(second);
+        }
+        catch (IOException | RuntimeException e) {
+            // A full disk must not take the application down with it: stop recording, and say so.
+            recordingError = "Recording stopped: " + e;
+            try {
+                recorder.close();
+            }
+            catch (IOException ignored) {
+                // Already failing.
+            }
+            recorder = null;
+        }
+    }
+
+    /** One line a second of headline numbers; every ten, the statements, collections and findings. */
+    private void record(MetricsSnapshot second) throws IOException {
+        java.time.Instant at = second.getTakenAt();
+        String ts = at.toString();
+        Json line = new Json().object().field("ts", ts).field("seconds", second.getIntervalSeconds());
+        headlineFields(line, second);
+        recorder.write(Recorder.Kind.METRICS, at, line.end().toString());
+        if (++recordedSeconds % Sampler.SHORT_WINDOW == 0) {
+            MetricsSnapshot window = sampler.shortWindow();
+            double seconds = window.getIntervalSeconds();
+            for (TimerSnapshot timer : window.statementsByTotalTime()) {
+                Json row = new Json().object().field("ts", ts).field("seconds", seconds);
+                statementFields(row, timer, seconds, Double.NaN);
+                row.field("totalMillis", timer.totalMillis());
+                recorder.write(Recorder.Kind.STATEMENTS, at, row.end().toString());
+            }
+            forEachCollection(window, (name, fields) -> {
+                Json row = new Json().object().field("ts", ts).field("seconds", seconds);
+                fields.accept(row);
+                recorder.write(Recorder.Kind.COLLECTIONS, at, row.end().toString());
+            });
+            for (Diagnosis.Finding finding : Diagnosis.of(window)) {
+                Json row = new Json().object().field("ts", ts).field("seconds", seconds);
+                findingFields(row, finding);
+                recorder.write(Recorder.Kind.FINDINGS, at, row.end().toString());
+            }
+        }
+        recorder.flush();
     }
 
     // ---------- The state the page draws ----------
@@ -265,6 +373,7 @@ public final class QuackDashboard implements AutoCloseable {
         MetricsSnapshot minute = sampler.longWindow();
         Json json = new Json().object();
         json.field("title", title).field("timestamp", System.currentTimeMillis()).field("startedAt", startedAt);
+        json.key("recording").object().field("directory", recordingDirectory).field("error", recordingError).end();
         if (recent == null) {
             return json.field("warmingUp", true).end().toString();
         }
@@ -274,20 +383,28 @@ public final class QuackDashboard implements AutoCloseable {
         List<Diagnosis.Finding> findings = Diagnosis.of(recent);
         json.key("findings").array();
         for (Diagnosis.Finding finding : findings) {
-            json.object().field("cause", finding.cause().name()).field("severity", finding.severity())
-                    .field("headline", finding.headline()).field("evidence", finding.evidence())
-                    .field("advice", finding.advice()).end();
+            findingFields(json.object(), finding);
+            json.end();
         }
         json.endArray();
 
-        headline(json, recent);
+        json.key("now").object();
+        headlineFields(json, recent);
+        json.end();
         collections(json, recent);
         statements(json, minute);
         series(json, sampler.points());
         return json.end().toString();
     }
 
-    private static void headline(Json json, MetricsSnapshot recent) {
+    private static void findingFields(Json json, Diagnosis.Finding finding) {
+        json.field("cause", finding.cause().name()).field("severity", finding.severity())
+                .field("headline", finding.headline()).field("evidence", finding.evidence())
+                .field("advice", finding.advice());
+    }
+
+    /** The headline numbers of an interval, written into the object already open. */
+    private static void headlineFields(Json json, MetricsSnapshot recent) {
         double seconds = Math.max(1e-9, recent.getIntervalSeconds());
         TimerSnapshot reads = Sampler.total(recent, QuackMetrics.REQUEST_READ);
         TimerSnapshot writes = Sampler.total(recent, QuackMetrics.REQUEST_WRITE);
@@ -295,8 +412,7 @@ public final class QuackDashboard implements AutoCloseable {
         double waitAndWork = waits.totalNanos() + writes.totalNanos();
         long hits = recent.counter(QuackMetrics.PREPARE_HITS);
         long misses = recent.counter(QuackMetrics.PREPARE_MISSES);
-        json.key("now").object()
-                .field("readsPerSecond", reads.count() / seconds)
+        json.field("readsPerSecond", reads.count() / seconds)
                 .field("readP50", reads.count() == 0 ? Double.NaN : reads.percentileMillis(50))
                 .field("readP99", reads.count() == 0 ? Double.NaN : reads.percentileMillis(99))
                 .field("writesPerSecond", writes.count() / seconds)
@@ -304,6 +420,7 @@ public final class QuackDashboard implements AutoCloseable {
                 .field("writeP99", writes.count() == 0 ? Double.NaN : writes.percentileMillis(99))
                 .field("lockWaitShare", waitAndWork == 0 ? 0 : waits.totalNanos() / waitAndWork)
                 .field("cpu", recent.cpuUtilisation())
+                .field("machineCpu", recent.gauge(QuackMetrics.CPU_MACHINE))
                 .field("statementsAtOnce", recent.statementConcurrency())
                 .field("heavyStatementsAtOnce", recent.statementConcurrency(Diagnosis.HEAVY_STATEMENT_MILLIS))
                 .field("cores", recent.gauge(QuackMetrics.CORES))
@@ -316,11 +433,33 @@ public final class QuackDashboard implements AutoCloseable {
                 .field("errorsPerSecond", recent.counterTotal(QuackMetrics.STATEMENT_ERRORS) / seconds)
                 .field("connectionsInUse", recent.gauge(QuackMetrics.CONNECTIONS_IN_USE))
                 .field("connectionsOpenedPerSecond", recent.counter(QuackMetrics.CONNECTIONS_OPENED) / seconds)
-                .field("prepareHitRate", hits + misses == 0 ? Double.NaN : hits / (double) (hits + misses))
-                .end();
+                .field("prepareHits", hits)
+                .field("prepareMisses", misses)
+                .field("prepareHitRate", hits + misses == 0 ? Double.NaN : hits / (double) (hits + misses));
+    }
+
+    /** Receives one row: a name, and the fields to write into an object already open. */
+    private interface RowWriter {
+        void write(String name, java.util.function.Consumer<Json> fields) throws IOException;
     }
 
     private static void collections(Json json, MetricsSnapshot recent) {
+        json.key("collections").array();
+        try {
+            forEachCollection(recent, (name, fields) -> {
+                json.object();
+                fields.accept(json);
+                json.end();
+            });
+        }
+        catch (IOException impossible) {
+            throw new UncheckedIOException(impossible);
+        }
+        json.endArray();
+    }
+
+    /** Wait against work for each collection active in the interval - for the page and the files. */
+    private static void forEachCollection(MetricsSnapshot recent, RowWriter out) throws IOException {
         double seconds = Math.max(1e-9, recent.getIntervalSeconds());
         Map<String, TimerSnapshot> reads = recent.scopes(QuackMetrics.REQUEST_READ);
         Map<String, TimerSnapshot> writes = recent.scopes(QuackMetrics.REQUEST_WRITE);
@@ -328,7 +467,6 @@ public final class QuackDashboard implements AutoCloseable {
         Set<String> names = new TreeSet<>(reads.keySet());
         names.addAll(writes.keySet());
         names.addAll(waits.keySet());
-        json.key("collections").array();
         for (String name : names) {
             TimerSnapshot read = reads.getOrDefault(name, TimerSnapshot.none(name));
             TimerSnapshot write = writes.getOrDefault(name, TimerSnapshot.none(name));
@@ -337,18 +475,17 @@ public final class QuackDashboard implements AutoCloseable {
                 continue;
             }
             double waitAndWork = wait.totalNanos() + write.totalNanos();
-            json.object().field("name", name)
+            out.write(name, json -> json.field("name", name)
                     .field("readsPerSecond", read.count() / seconds)
                     .field("readP50", read.count() == 0 ? Double.NaN : read.percentileMillis(50))
                     .field("readP99", read.count() == 0 ? Double.NaN : read.percentileMillis(99))
                     .field("writesPerSecond", write.count() / seconds)
                     .field("writeP50", write.count() == 0 ? Double.NaN : write.percentileMillis(50))
                     .field("writeP99", write.count() == 0 ? Double.NaN : write.percentileMillis(99))
+                    .field("lockWaitP50", wait.count() == 0 ? Double.NaN : wait.percentileMillis(50))
                     .field("lockWaitP99", wait.count() == 0 ? Double.NaN : wait.percentileMillis(99))
-                    .field("waitShare", waitAndWork == 0 ? 0 : wait.totalNanos() / waitAndWork)
-                    .end();
+                    .field("waitShare", waitAndWork == 0 ? 0 : wait.totalNanos() / waitAndWork));
         }
-        json.endArray();
     }
 
     private static void statements(Json json, MetricsSnapshot minute) {
@@ -358,21 +495,26 @@ public final class QuackDashboard implements AutoCloseable {
         for (TimerSnapshot timer : hottest) {
             total += timer.totalNanos();
         }
-        long errors = minute.counterTotal(QuackMetrics.STATEMENT_ERRORS);
-        json.field("statementErrors", errors);
+        json.field("statementErrors", minute.counterTotal(QuackMetrics.STATEMENT_ERRORS));
         json.key("statements").array();
         for (TimerSnapshot timer : hottest.subList(0, Math.min(15, hottest.size()))) {
-            String name = timer.getName();
-            json.object()
-                    .field("shape", name.substring(QuackMetrics.STATEMENT.length() + 1, name.length() - 1))
-                    .field("perSecond", timer.count() / seconds)
-                    .field("count", timer.count())
-                    .field("mean", timer.meanMillis())
-                    .field("p99", timer.percentileMillis(99))
-                    .field("share", total == 0 ? 0 : timer.totalNanos() / (double) total)
-                    .end();
+            statementFields(json.object(), timer, seconds, total == 0 ? 0 : timer.totalNanos() / (double) total);
+            json.end();
         }
         json.endArray();
+    }
+
+    private static void statementFields(Json json, TimerSnapshot timer, double seconds, double share) {
+        String name = timer.getName();
+        json.field("shape", name.substring(QuackMetrics.STATEMENT.length() + 1, name.length() - 1))
+                .field("perSecond", timer.count() / Math.max(1e-9, seconds))
+                .field("count", timer.count())
+                .field("mean", timer.meanMillis())
+                .field("p50", timer.percentileMillis(50))
+                .field("p99", timer.percentileMillis(99));
+        if (!Double.isNaN(share)) {
+            json.field("share", share);
+        }
     }
 
     private static void series(Json json, List<Sampler.Point> points) {

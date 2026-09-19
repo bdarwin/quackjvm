@@ -8,7 +8,7 @@ import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -53,7 +53,8 @@ final class StatementCache {
     private final Connection connection;
     /** Where statement timings and cache hits are recorded, or null not to record them. */
     private final QuackMetrics metrics;
-    private final Map<String, Entry> entries = new HashMap<>();
+    /** In order of last use, least recent first, so the one to evict is at the front. */
+    private final Map<String, Entry> entries = new LinkedHashMap<>(16, 0.75f, true);
     private long hits;
     private long misses;
 
@@ -85,8 +86,9 @@ final class StatementCache {
         if (metrics != null) {
             metrics.counter(QuackMetrics.PREPARE_MISSES).increment();
         }
-        if (entry != null || entries.size() >= MAX_ENTRIES) {
-            // Already handed out and not yet closed, so this caller needs its own; or no room.
+        if (entry != null || (entries.size() >= MAX_ENTRIES && !evictLeastRecentlyUsed())) {
+            // Already handed out and not yet closed, so this caller needs its own; or every
+            // cached statement is in use and none can make room.
             PreparedStatement uncached = connection.prepareStatement(sql);
             return metrics != null ? metrics.meter(uncached, sql) : uncached;
         }
@@ -94,6 +96,28 @@ final class StatementCache {
         created.inUse = true;
         entries.put(sql, created);
         return created.proxy;
+    }
+
+    /**
+     * Makes room by closing the statement used least recently, skipping any still handed out.
+     *
+     * <p>Without this the cache stopped working for good once full. A burst of one-off statements
+     * - SQL with values written into it - took every slot, and every statement after that was
+     * prepared from scratch for the life of the connection: the dashboard showed 100% misses on a
+     * write path that repeats the same two statements.</p>
+     *
+     * @return whether a slot was freed
+     */
+    private boolean evictLeastRecentlyUsed() {
+        for (java.util.Iterator<Entry> it = entries.values().iterator(); it.hasNext(); ) {
+            Entry candidate = it.next();
+            if (!candidate.inUse) {
+                it.remove();
+                Sql.closeQuietly(candidate.statement);
+                return true;
+            }
+        }
+        return false;
     }
 
     /** How many prepares were served from the cache rather than reaching DuckDB. */

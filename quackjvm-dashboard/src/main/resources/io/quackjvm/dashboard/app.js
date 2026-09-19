@@ -150,7 +150,8 @@ function tile(label, value, unit, sub, series, alert, floorMax) {
 function renderTiles(state) {
   const n = state.now || {};
   const s = state.series || {};
-  const cpuBusy = isNum(n.cpu) && n.cpu >= 0.7;
+  const busiest = Math.max(isNum(n.cpu) ? n.cpu : 0, isNum(n.machineCpu) ? n.machineCpu : 0);
+  const cpuBusy = busiest >= 0.7;
   const memTight = (isNum(n.tempBytes) && n.tempBytes > 0)
     || (isNum(n.memoryBytes) && isNum(n.memoryLimitBytes) && n.memoryBytes >= 0.9 * n.memoryLimitBytes);
   const tiles = [
@@ -162,7 +163,8 @@ function renderTiles(state) {
     tile('Write p99', fmtMs(n.writeP99), '', 'slowest 1% of write requests, lock already held', s.writeP99),
     tile('Write-lock wait', fmtPct(n.lockWaitShare), '', 'share of write time spent queueing',
       s.lockWaitShare, n.lockWaitShare >= 0.25, 1),
-    tile('CPU', fmtPct(n.cpu), '', `of ${n.cores || '?'} cores · DuckDB threads ${isNum(n.duckdbThreads) ? n.duckdbThreads : '?'}`,
+    tile('CPU, this process', fmtPct(n.cpu), '',
+      `whole machine ${fmtPct(n.machineCpu)} · ${n.cores || '?'} cores · DuckDB threads ${isNum(n.duckdbThreads) ? n.duckdbThreads : '?'}`,
       s.cpu, cpuBusy, 1),
     tile('Heavy statements at once', isNum(n.heavyStatementsAtOnce) ? n.heavyStatementsAtOnce.toFixed(1) : '–', '',
       `≥ 1 ms each · ${isNum(n.statementsAtOnce) ? n.statementsAtOnce.toFixed(1) : '–'} of any size`,
@@ -244,6 +246,19 @@ function renderStatements(state) {
   body.replaceChildren(...rows);
 }
 
+function renderRecording(recording) {
+  const line = $('recording');
+  line.classList.toggle('failed', Boolean(recording.error));
+  if (recording.error) {
+    line.textContent = recording.error;
+  } else if (recording.directory) {
+    line.replaceChildren('Recording every second to ', el('code', null, recording.directory),
+      ' - JSON Lines, queryable with DuckDB: ', el('code', null, `SELECT * FROM '${recording.directory}/metrics-*.jsonl'`));
+  } else {
+    line.textContent = 'Not recording to disk.';
+  }
+}
+
 // ---------- Polling ----------
 
 let lastOk = 0;
@@ -256,6 +271,7 @@ async function poll() {
     lastOk = Date.now();
     $('title').textContent = state.title && state.title !== 'quackjvm' ? state.title : '';
     document.title = (state.title && state.title !== 'quackjvm' ? state.title + ' · ' : '') + 'quackjvm dashboard';
+    renderRecording(state.recording || {});
     if (state.warmingUp) {
       $('status-text').textContent = 'Collecting the first samples…';
     } else {

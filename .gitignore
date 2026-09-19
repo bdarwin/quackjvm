@@ -17,3 +17,6 @@ site/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Recorded by the dashboard when run from here
+quackjvm-metrics/

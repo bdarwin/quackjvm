@@ -39,11 +39,13 @@ final class Sampler {
         this.historySeconds = historySeconds;
     }
 
-    synchronized void sample() {
+    /** Takes a snapshot; returns the second since the last one, or null for the very first. */
+    synchronized MetricsSnapshot sample() {
         MetricsSnapshot now = metrics.snapshot();
         MetricsSnapshot previous = fine.peekLast();
-        if (previous != null) {
-            points.addLast(Point.of(now.minus(previous)));
+        MetricsSnapshot second = previous == null ? null : now.minus(previous);
+        if (second != null) {
+            points.addLast(Point.of(second));
             while (points.size() > historySeconds) {
                 points.removeFirst();
             }
@@ -58,6 +60,7 @@ final class Sampler {
                 coarse.removeFirst();
             }
         }
+        return second;
     }
 
     /** Roughly the last ten seconds, or null before there are two snapshots. */

@@ -49,19 +49,23 @@ is named first, and that a light load produces no finding at all.
 | cause | what shows it | what to change |
 |---|---|---|
 | `WRITE_LOCK` | Writes spend over a quarter of their time waiting for the collection's lock | Batch writes (`addAll`, `DuckDBBulkWriter`), or split the collection |
-| `CPU` | Cores over 70% busy, with more than 1.5 heavy (≥ 1 ms) statements running at once | `SET threads` to half the cores, cap concurrent heavy queries, materialize the hottest one |
+| `CPU` | Cores over 70% busy, in this process or across the whole machine, with more than 1.5 heavy (≥ 1 ms) statements running at once | `SET threads` to half the cores, cap concurrent heavy queries, materialize the hottest one |
 | `CONFLICTS` | Statements failing with a conflict | Keep `serializeWrites` on where writers overlap |
 | `MEMORY` | Temporary files in use, or memory at 90% of `memory_limit` | Raise `memory_limit`, or pre-aggregate the large sorts and joins |
 | `PREPARES` | Over 20% of prepares miss the statement cache | Bind values with `?` instead of writing them into the SQL |
 | `CONNECTION_CHURN` | Connections opened for over 10% of requests | Raise `maxPooledConnections` to the number of concurrent threads |
 | `ERRORS` | Other failed statements | Check the application's logs |
 
-Some causes produce symptoms that look like other causes. The rules account for three of them:
+Some causes produce symptoms that look like other causes. The rules account for four of them:
 
 - **A new connection starts with an empty statement cache.** Pool churn therefore shows up as
   prepare misses, and those misses are attributed to the churn.
 - **DuckDB's JDBC driver closes a prepared statement when it fails.** Each conflict therefore
   costs a re-prepare, and those misses aren't blamed on how the SQL was written.
+- **Another process can take the cores.** DuckDB is short of CPU either way, so the rule uses
+  whichever is busier, this process or the whole machine. It also says when the difference is
+  other processes. Measured with two applications on one machine: this process 31%, the machine
+  100%.
 - **Sub-millisecond writes can keep the machine busy** on one thread each. Lowering `threads`
   wouldn't help them, so they don't count towards `CPU`.
 
@@ -77,6 +81,7 @@ Some causes produce symptoms that look like other causes. The rules account for 
 | `connections.opened`, `connections.discarded` | counter | |
 | `connections.in_use` | gauge | |
 | `cpu.process_time_ns` | cumulative; `cpuUtilisation()` divides it by the interval | |
+| `cpu.machine` | gauge, 0 to 1: the whole machine, other processes included | |
 | `duckdb.threads`, `duckdb.memory_bytes`, `duckdb.memory_limit_bytes`, `duckdb.temp_file_bytes` | gauge, read from DuckDB at each snapshot | |
 
 Timers are log-linear histograms (eight buckets per power of two), so a percentile read from one

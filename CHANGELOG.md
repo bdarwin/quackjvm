@@ -7,7 +7,11 @@
   a live page with the diagnosis of the last ten seconds, headline numbers with five minutes of
   history, wait against work per collection, and where DuckDB's time went. Runs on the JDK's own
   HTTP server with no other dependency; listens on loopback only, refuses requests addressed to
-  any other host (DNS rebinding), and is read-only with no endpoint that runs SQL.
+  any other host (DNS rebinding), and is read-only with no endpoint that runs SQL. While it runs it records
+  what it samples to `quackjvm-metrics/` as JSON Lines that DuckDB queries directly: headline
+  numbers every second, and statements, collections and findings every ten; kept for seven days.
+- `cpu.machine`: whole-machine CPU. The CPU diagnosis uses the busier of this process and the
+  machine, and names other processes when they are what is taking the cores.
 - Metrics, on by default: `database.metrics()` records request, write-lock-wait and per-statement
   timings, conflicts, statement-cache hits, connection churn, CPU, and DuckDB's memory, spill and
   threads. `Diagnosis.of(interval)` names where quackjvm is choking - write lock, CPU, conflicts,
@@ -24,6 +28,11 @@
   locks, `serializeWrites`, and the shared-`QueryOptions` guard.
 
 ### Fixed
+- The statement cache stopped working for good once full. A burst of one-off statements (SQL with
+  values written into it) filled the 64 slots, nothing was ever evicted, and every statement after
+  that was prepared from scratch for the life of the connection. Found on the dashboard: 100%
+  misses on a write path that repeats two statements. It now evicts the least recently used
+  statement that is not in use.
 - `SparseTable.optimize()` retries when a write through another instance conflicts with it, and
   its Javadoc no longer claims that writes through other instances are unaffected. Under steady
   replaces through a second instance it can still fail after ten attempts, rolled back with

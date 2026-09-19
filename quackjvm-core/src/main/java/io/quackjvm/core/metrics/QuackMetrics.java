@@ -63,6 +63,11 @@ public final class QuackMetrics {
 
     /** CPU time this process has used, DuckDB's native threads included; see {@link MetricsSnapshot#cpuUtilisation()}. */
     public static final String CPU_TIME = "cpu.process_time_ns";
+    /**
+     * How busy the whole machine's cores were recently, 0 to 1, whoever was using them. Another
+     * process taking the cores starves DuckDB as surely as its own queries do.
+     */
+    public static final String CPU_MACHINE = "cpu.machine";
     public static final String CORES = "cpu.cores";
     public static final String HEAP_USED = "jvm.heap_used_bytes";
     public static final String DUCKDB_THREADS = "duckdb.threads";
@@ -93,6 +98,7 @@ public final class QuackMetrics {
             return runtime.totalMemory() - runtime.freeMemory();
         });
         cumulative(CPU_TIME, QuackMetrics::processCpuTime);
+        gauge(CPU_MACHINE, QuackMetrics::machineCpuLoad);
     }
 
     public static String scoped(String name, String scope) {
@@ -339,6 +345,15 @@ public final class QuackMetrics {
     }
 
     // ---------- Process gauges ----------
+
+    private static double machineCpuLoad() {
+        java.lang.management.OperatingSystemMXBean os = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        if (os instanceof com.sun.management.OperatingSystemMXBean sun) {
+            double load = sun.getCpuLoad();
+            return load < 0 ? Double.NaN : load;
+        }
+        return Double.NaN;
+    }
 
     private static long processCpuTime() {
         java.lang.management.OperatingSystemMXBean os = java.lang.management.ManagementFactory.getOperatingSystemMXBean();

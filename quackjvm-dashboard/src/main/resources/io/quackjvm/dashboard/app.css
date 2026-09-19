@@ -180,6 +180,8 @@ td.empty { color: var(--faint); text-align: center; padding: 18px; }
 
 footer { max-width: 1320px; margin: 0 auto; padding: 0 24px 32px; color: var(--faint); font-size: 12px; }
 code { font-family: var(--mono); font-size: 12px; }
+.recording { margin: 0 0 6px; color: var(--muted); overflow-wrap: anywhere; }
+.recording.failed { color: var(--bad); }
 
 @media (max-width: 640px) {
   .top { padding: 10px 16px; }
