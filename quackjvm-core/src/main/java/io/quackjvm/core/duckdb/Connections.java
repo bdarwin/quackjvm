@@ -1,5 +1,6 @@
 package io.quackjvm.core.duckdb;
 
+import io.quackjvm.core.metrics.Timer;
 import org.duckdb.DuckDBConnection;
 
 import java.lang.reflect.InvocationHandler;
@@ -34,10 +35,18 @@ public final class Connections {
      * the end of the request.
      */
     public static Connection managed(Connection target, ConnectionPool pool, Lock lockToRelease) {
+        return managed(target, pool, lockToRelease, null);
+    }
+
+    /**
+     * @param requestTimer records how long the request held the connection, from now until it is
+     *                     closed; null not to record it
+     */
+    public static Connection managed(Connection target, ConnectionPool pool, Lock lockToRelease, Timer requestTimer) {
         return (Connection) Proxy.newProxyInstance(
                 Connections.class.getClassLoader(),
                 new Class<?>[]{Connection.class, Unwrappable.class},
-                new ManagedConnectionHandler(target, pool, lockToRelease));
+                new ManagedConnectionHandler(target, pool, lockToRelease, requestTimer));
     }
 
     /** Recovers the underlying DuckDB connection from a possibly-wrapped connection. */
@@ -68,6 +77,8 @@ public final class Connections {
         private final Connection target;
         private final ConnectionPool pool;
         private final Lock lockToRelease;
+        private final Timer requestTimer;
+        private final long borrowedAt = System.nanoTime();
         private boolean released;
         /**
          * Whether anything may be pending since the last commit. Set when a statement is made -
@@ -84,10 +95,11 @@ public final class Connections {
          */
         private boolean broken;
 
-        ManagedConnectionHandler(Connection target, ConnectionPool pool, Lock lockToRelease) {
+        ManagedConnectionHandler(Connection target, ConnectionPool pool, Lock lockToRelease, Timer requestTimer) {
             this.target = target;
             this.pool = pool;
             this.lockToRelease = lockToRelease;
+            this.requestTimer = requestTimer;
         }
 
         @Override
@@ -112,11 +124,22 @@ public final class Connections {
                 // Every DDL statement goes through here, and DuckDB binds a prepared statement to
                 // the catalog as it was when prepared, so the cached statements are now suspect.
                 pool.statementCacheFor(target).clear();
+                if (pool.getMetrics() != null) {
+                    try {
+                        return pool.getMetrics().meter((java.sql.Statement) method.invoke(target, args));
+                    }
+                    catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                }
             }
             boolean isClose = "close".equals(name) && (args == null || args.length == 0);
             if (isClose) {
                 if (!released) {
                     released = true;
+                    if (requestTimer != null) {
+                        requestTimer.stop(borrowedAt);
+                    }
                     try {
                         pool.release(target, !pending, broken);
                     }

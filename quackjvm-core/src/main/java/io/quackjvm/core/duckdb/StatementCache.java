@@ -1,5 +1,8 @@
 package io.quackjvm.core.duckdb;
 
+import io.quackjvm.core.metrics.QuackMetrics;
+import io.quackjvm.core.metrics.StatementMeter;
+
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
@@ -30,6 +33,11 @@ import java.util.Map;
  * A statement handed out twice without being closed is not served from the cache, so overlapping
  * result sets on one connection each get a statement of their own.</p>
  *
+ * <p><b>A statement that fails is gone.</b> DuckDB's JDBC driver (1.5.5) closes a prepared
+ * statement when its execution fails - a conflict or a constraint violation - so the cache drops it
+ * when it comes back, and the next use prepares it again. Every failed write therefore costs a
+ * prepare as well.</p>
+ *
  * <p><b>Invalidation.</b> DuckDB resolves a prepared statement against the catalog as it stands
  * when the statement is prepared, so a cached statement outlives the table it refers to only until
  * that table is dropped or recreated. Every DDL statement quackjvm issues goes through
@@ -43,12 +51,19 @@ final class StatementCache {
     private static final int MAX_ENTRIES = 64;
 
     private final Connection connection;
+    /** Where statement timings and cache hits are recorded, or null not to record them. */
+    private final QuackMetrics metrics;
     private final Map<String, Entry> entries = new HashMap<>();
     private long hits;
     private long misses;
 
     StatementCache(Connection connection) {
+        this(connection, null);
+    }
+
+    StatementCache(Connection connection, QuackMetrics metrics) {
         this.connection = connection;
+        this.metrics = metrics;
     }
 
     /**
@@ -59,19 +74,23 @@ final class StatementCache {
         Entry entry = entries.get(sql);
         if (entry != null && !entry.inUse) {
             hits++;
+            if (metrics != null) {
+                metrics.counter(QuackMetrics.PREPARE_HITS).increment();
+            }
             entry.inUse = true;
             entry.statement.clearParameters();
             return entry.proxy;
         }
         misses++;
-        if (entry != null) {
-            // Already handed out and not yet closed; this caller needs its own.
-            return connection.prepareStatement(sql);
+        if (metrics != null) {
+            metrics.counter(QuackMetrics.PREPARE_MISSES).increment();
         }
-        if (entries.size() >= MAX_ENTRIES) {
-            return connection.prepareStatement(sql);
+        if (entry != null || entries.size() >= MAX_ENTRIES) {
+            // Already handed out and not yet closed, so this caller needs its own; or no room.
+            PreparedStatement uncached = connection.prepareStatement(sql);
+            return metrics != null ? metrics.meter(uncached, sql) : uncached;
         }
-        Entry created = new Entry(connection.prepareStatement(sql));
+        Entry created = new Entry(connection.prepareStatement(sql), sql);
         created.inUse = true;
         entries.put(sql, created);
         return created.proxy;
@@ -101,6 +120,9 @@ final class StatementCache {
      */
     void releaseAll() {
         for (Entry entry : entries.values()) {
+            if (entry.inUse && entry.meter != null) {
+                entry.meter.finish();
+            }
             entry.inUse = false;
         }
     }
@@ -108,12 +130,14 @@ final class StatementCache {
     private final class Entry {
         private final PreparedStatement statement;
         private final PreparedStatement proxy;
+        private final StatementMeter meter;
         private boolean inUse;
         /** The result set of the last executeQuery, closed when the statement is returned. */
         private java.sql.ResultSet openResultSet;
 
-        Entry(PreparedStatement statement) {
+        Entry(PreparedStatement statement, String sql) {
             this.statement = statement;
+            this.meter = metrics != null ? new StatementMeter(metrics, metrics.statementTimer(sql)) : null;
             this.proxy = (PreparedStatement) Proxy.newProxyInstance(
                     StatementCache.class.getClassLoader(),
                     new Class<?>[]{PreparedStatement.class},
@@ -121,6 +145,9 @@ final class StatementCache {
                         String name = method.getName();
                         if ("close".equals(name) && (args == null || args.length == 0)) {
                             inUse = false;
+                            if (meter != null) {
+                                meter.finish();
+                            }
                             // A real close would close this; so must we, or the caller leaks it.
                             Sql.closeQuietly(openResultSet);
                             openResultSet = null;
@@ -135,11 +162,16 @@ final class StatementCache {
                             return null;
                         }
                         Object result;
-                        try {
-                            result = method.invoke(statement, args);
+                        if (meter != null) {
+                            result = meter.invoke(statement, method, args);
                         }
-                        catch (InvocationTargetException e) {
-                            throw e.getCause();
+                        else {
+                            try {
+                                result = method.invoke(statement, args);
+                            }
+                            catch (InvocationTargetException e) {
+                                throw e.getCause();
+                            }
                         }
                         if ("executeQuery".equals(name)) {
                             openResultSet = (java.sql.ResultSet) result;

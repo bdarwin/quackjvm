@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- Metrics, on by default: `database.metrics()` records request, write-lock-wait and per-statement
+  timings, conflicts, statement-cache hits, connection churn, CPU, and DuckDB's memory, spill and
+  threads. `Diagnosis.of(interval)` names where quackjvm is choking - write lock, CPU, conflicts,
+  memory, prepares, connection churn - and what to change; each cause is produced on purpose in
+  `MetricsDiagnosisTest` and must be named first. `QuackMetrics.meter(connection)` does the same
+  for plain connections. Overhead measured within noise; `metrics(false)` turns it off.
 - `SparseTable`, `SparseBatch`, `SparseRecord`: records carrying a few of thousands of possible
   numeric data points, stored long (a name dictionary plus one row per present value) and shown
   wide on demand through `viewSql`, `view` or `materializeWide`.

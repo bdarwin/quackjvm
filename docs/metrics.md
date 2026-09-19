@@ -1,0 +1,109 @@
+# Metrics and diagnosis
+
+When quackjvm is slow, the first question is whether it is **waiting** or **working**. From the
+outside the two look the same. They have opposite fixes:
+
+- A write queueing for its collection's write lock gets faster when you batch writes.
+- A panel query slowed because DuckDB is short of CPU gets faster when each query asks for fewer threads.
+
+Every operation that can queue records its wait apart from its work. `Diagnosis` reads an interval
+of those numbers and says which cause it is, with what it saw and what to change.
+
+## Reading them
+
+A `DuckDBDatabase` records its metrics from the start. Take two snapshots and subtract them to get
+an interval:
+
+```java
+MetricsSnapshot before = database.metrics().snapshot();
+Thread.sleep(10_000);
+MetricsSnapshot interval = database.metrics().snapshot().minus(before);
+
+for (Diagnosis.Finding finding : Diagnosis.of(interval)) {
+    System.out.println(finding);
+}
+```
+
+```text
+WRITE_LOCK: writes to orders are queueing for its write lock
+    seen: 88% of write time spent waiting for the lock; 5,563 writes, wait p50 2.49 ms, p99 3.54 ms;
+          each held it 0.35 ms on average
+    do:   write fewer, larger batches - addAll(...) or a DuckDBBulkWriter take the lock once for many
+          objects. If writers never touch the same objects, serializeWrites(false) lets them run
+          together; if they do, it turns this wait into conflicts.
+```
+
+Nothing found means nothing is choking. Any single metric is also available directly:
+
+```java
+interval.timer(QuackMetrics.WRITE_LOCK_WAIT, "orders").percentileMillis(99);
+interval.statementsByTotalTime();       // where DuckDB's time went, by statement
+interval.cpuUtilisation();              // 0..1, DuckDB's native threads included
+```
+
+## What each cause looks like
+
+The load test `MetricsDiagnosisTest` produces each of these on purpose. It checks that the cause
+is named first, and that a light load produces no finding at all.
+
+| cause | what shows it | what to change |
+|---|---|---|
+| `WRITE_LOCK` | Writes spend over a quarter of their time waiting for the collection's lock | Batch writes (`addAll`, `DuckDBBulkWriter`), or split the collection |
+| `CPU` | Cores over 70% busy, with more than 1.5 heavy (≥ 1 ms) statements running at once | `SET threads` to half the cores, cap concurrent heavy queries, materialize the hottest one |
+| `CONFLICTS` | Statements failing with a conflict | Keep `serializeWrites` on where writers overlap |
+| `MEMORY` | Temporary files in use, or memory at 90% of `memory_limit` | Raise `memory_limit`, or pre-aggregate the large sorts and joins |
+| `PREPARES` | Over 20% of prepares miss the statement cache | Bind values with `?` instead of writing them into the SQL |
+| `CONNECTION_CHURN` | Connections opened for over 10% of requests | Raise `maxPooledConnections` to the number of concurrent threads |
+| `ERRORS` | Other failed statements | Check the application's logs |
+
+Some causes produce symptoms that look like other causes. The rules account for three of them:
+
+- **A new connection starts with an empty statement cache.** Pool churn therefore shows up as
+  prepare misses, and those misses are attributed to the churn.
+- **DuckDB's JDBC driver closes a prepared statement when it fails.** Each conflict therefore
+  costs a re-prepare, and those misses aren't blamed on how the SQL was written.
+- **Sub-millisecond writes can keep the machine busy** on one thread each. Lowering `threads`
+  wouldn't help them, so they don't count towards `CPU`.
+
+## What is recorded
+
+| name | kind | scope |
+|---|---|---|
+| `request.read`, `request.write` | timer, borrow to close of a request's connection | collection, or `sql` for `database.sql/query/join` |
+| `write_lock.wait` | timer | collection |
+| `statement` | timer; a query runs until its statement is closed, since streamed results are computed as they are read | the statement's shape: literals and `?` lists collapsed |
+| `statement.errors` | counter | `conflict`, `constraint`, `memory`, `other` |
+| `prepare.cache_hits`, `prepare.cache_misses` | counter | |
+| `connections.opened`, `connections.discarded` | counter | |
+| `connections.in_use` | gauge | |
+| `cpu.process_time_ns` | cumulative; `cpuUtilisation()` divides it by the interval | |
+| `duckdb.threads`, `duckdb.memory_bytes`, `duckdb.memory_limit_bytes`, `duckdb.temp_file_bytes` | gauge, read from DuckDB at each snapshot | |
+
+Timers are log-linear histograms (eight buckets per power of two), so a percentile read from one
+is within 6% of the true value. Subtracting two snapshots gives the percentiles of just the
+interval between them.
+
+## What it costs
+
+Recording a request or a statement costs a few atomic increments. Measured on single adds, primary
+key lookups and small SQL queries, with metrics on and off in alternating runs, the difference was
+inside run-to-run noise: 338 to 350 µs per add either way. So it is on by default. To turn it off:
+
+```java
+DuckDBDatabase.builder().metrics(false)
+```
+
+## Without a DuckDBDatabase
+
+Code that uses the core module with its own connections can pass them through `meter`, which
+times their statements the same way:
+
+```java
+QuackMetrics metrics = new QuackMetrics().watch(rootConnection);   // DuckDB memory and threads
+try (Connection connection = metrics.meter(rootConnection.duplicate())) {
+    ...
+}
+```
+
+This path has no request or write-lock timings, because it has no pool and no locks. CPU,
+conflicts, memory and the statement timings all work.

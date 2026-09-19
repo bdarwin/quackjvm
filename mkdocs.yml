@@ -62,6 +62,7 @@ nav:
       - Materializations: materializations.md
       - Writing data: writing.md
       - Tuning: tuning.md
+      - Metrics and diagnosis: metrics.md
   - CQEngine plugin:
       - Querying: querying.md
       - Joins across collections: joins.md

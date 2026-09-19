@@ -28,6 +28,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import io.quackjvm.core.metrics.Diagnosis;
+import io.quackjvm.core.metrics.QuackMetrics;
+import io.quackjvm.core.metrics.Timer;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -108,7 +111,13 @@ public final class DuckDBDatabase implements Closeable {
 
     private volatile boolean closed;
 
-    private DuckDBDatabase(File file, Properties properties, boolean serializeWrites, int maxPooledConnections) {
+    /** Always present; only recorded into when metrics are on. */
+    private final QuackMetrics metrics = new QuackMetrics();
+    private final boolean metricsEnabled;
+
+    private DuckDBDatabase(File file, Properties properties, boolean serializeWrites, int maxPooledConnections,
+                           boolean metricsEnabled) {
+        this.metricsEnabled = metricsEnabled;
         this.file = file;
         this.serializeWrites = serializeWrites;
         Properties effective = new Properties();
@@ -122,7 +131,11 @@ public final class DuckDBDatabase implements Closeable {
         catch (SQLException e) {
             throw new IllegalStateException("Failed to open DuckDB database: " + url, e);
         }
-        this.connectionPool = new ConnectionPool(rootConnection, maxPooledConnections);
+        this.connectionPool = new ConnectionPool(rootConnection, maxPooledConnections,
+                metricsEnabled ? metrics : null);
+        if (metricsEnabled) {
+            metrics.watch(rootConnection);
+        }
     }
 
     // ---------- Factory methods ----------
@@ -146,6 +159,7 @@ public final class DuckDBDatabase implements Closeable {
         private File file;
         private boolean serializeWrites = true;
         private int maxPooledConnections = 32;
+        private boolean metrics = true;
         private final Properties properties = new Properties();
 
         Builder() {
@@ -183,8 +197,17 @@ public final class DuckDBDatabase implements Closeable {
             return this;
         }
 
+        /**
+         * Whether to record {@link DuckDBDatabase#metrics()}. On by default: timing a request or a
+         * statement costs tens of nanoseconds, against 48 microseconds for DuckDB's cheapest query.
+         */
+        public Builder metrics(boolean metrics) {
+            this.metrics = metrics;
+            return this;
+        }
+
         public DuckDBDatabase build() {
-            return new DuckDBDatabase(file, properties, serializeWrites, maxPooledConnections);
+            return new DuckDBDatabase(file, properties, serializeWrites, maxPooledConnections, metrics);
         }
     }
 
@@ -680,8 +703,11 @@ public final class DuckDBDatabase implements Closeable {
     // ---------- Connections ----------
 
     Connection borrowConnection(boolean readRequest) {
-        return borrowConnection(readRequest, databaseWriteLock);
+        return borrowConnection(readRequest, databaseWriteLock, SQL_SCOPE);
     }
+
+    /** The scope under which requests made through {@link #sql}, {@link #query} and joins are recorded. */
+    static final String SQL_SCOPE = "sql";
 
     /**
      * @param writeLock the lock a write request should hold for its duration, or null not to
@@ -690,21 +716,45 @@ public final class DuckDBDatabase implements Closeable {
      *                  DuckDB, verified with eight threads creating, indexing and writing their
      *                  own tables at once.
      */
-    Connection borrowConnection(boolean readRequest, Lock writeLock) {
+    Connection borrowConnection(boolean readRequest, Lock writeLock, String scope) {
         if (closed) {
             throw new IllegalStateException("This DuckDBDatabase has been closed: " + this);
         }
+        Timer requestTimer = metricsEnabled
+                ? metrics.timer(readRequest ? QuackMetrics.REQUEST_READ : QuackMetrics.REQUEST_WRITE, scope)
+                : null;
         if (!serializeWrites || readRequest || writeLock == null) {
-            return Connections.managed(connectionPool.borrow(), connectionPool, null);
+            return Connections.managed(connectionPool.borrow(), connectionPool, null, requestTimer);
         }
-        writeLock.lock();
+        lock(writeLock, scope);
         try {
-            return Connections.managed(connectionPool.borrow(), connectionPool, writeLock);
+            return Connections.managed(connectionPool.borrow(), connectionPool, writeLock, requestTimer);
         }
         catch (RuntimeException e) {
             writeLock.unlock();
             throw e;
         }
+    }
+
+    /** Takes a write lock, recording how long that took under the given scope. */
+    void lock(Lock writeLock, String scope) {
+        if (!metricsEnabled) {
+            writeLock.lock();
+            return;
+        }
+        long startedAt = System.nanoTime();
+        writeLock.lock();
+        metrics.timer(QuackMetrics.WRITE_LOCK_WAIT, scope).stop(startedAt);
+    }
+
+    /**
+     * What this database has been doing: request and statement timings, write-lock waits,
+     * conflicts, the connection pool and statement cache, and DuckDB's memory and threads. Take two
+     * snapshots and subtract them for an interval, and give that to {@link Diagnosis} to be told
+     * where it is choking.
+     */
+    public QuackMetrics metrics() {
+        return metrics;
     }
 
     /** An unmanaged connection which the caller must close. */

@@ -245,7 +245,7 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
     @Override
     public Connection getConnection(Index<?> index, QueryOptions queryOptions) {
         return io.quackjvm.core.duckdb.SqlTrace.wrap(database.borrowConnection(
-                isFlagEnabled(queryOptions, READ_REQUEST), getWriteLock()));
+                isFlagEnabled(queryOptions, READ_REQUEST), getWriteLock(), collectionName));
     }
 
     /**
@@ -316,7 +316,7 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
     public void optimize() {
         Lock lock = getWriteLock();
         if (lock != null) {
-            lock.lock();
+            database.lock(lock, collectionName);
         }
         try (Connection connection = newConnection()) {
             for (IndexBulkTarget<O> indexTable : indexTables.values()) {
@@ -429,7 +429,7 @@ public class DuckDBPersistence<O, A extends Comparable<A>>
         }
         Lock lock = getWriteLock();
         if (lock != null) {
-            lock.lock();
+            database.lock(lock, collectionName);
         }
         try {
             // A dedicated connection, not a request-scoped one: the writer holds it open across

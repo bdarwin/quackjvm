@@ -1,5 +1,6 @@
 package io.quackjvm.core.duckdb;
 
+import io.quackjvm.core.metrics.QuackMetrics;
 import org.duckdb.DuckDBConnection;
 
 import java.sql.Connection;
@@ -22,6 +23,9 @@ public final class ConnectionPool {
 
     private final DuckDBConnection rootConnection;
     private final int maxIdle;
+    /** Where the pool's activity is recorded, or null not to record it. */
+    private final QuackMetrics metrics;
+    private final AtomicInteger inUse = new AtomicInteger();
     private final Deque<Connection> idle = new ConcurrentLinkedDeque<>();
     private final AtomicInteger idleCount = new AtomicInteger();
     /** One statement cache per pooled connection, kept across borrows - that is the point of it. */
@@ -31,8 +35,21 @@ public final class ConnectionPool {
     private volatile boolean closed;
 
     public ConnectionPool(DuckDBConnection rootConnection, int maxIdle) {
+        this(rootConnection, maxIdle, null);
+    }
+
+    public ConnectionPool(DuckDBConnection rootConnection, int maxIdle, QuackMetrics metrics) {
         this.rootConnection = rootConnection;
         this.maxIdle = maxIdle;
+        this.metrics = metrics;
+        if (metrics != null) {
+            metrics.gauge(QuackMetrics.CONNECTIONS_IN_USE, inUse::get);
+        }
+    }
+
+    /** Where this pool records its activity, or null. */
+    public QuackMetrics getMetrics() {
+        return metrics;
     }
 
     /** Takes a connection from the pool, or duplicates a new one if the pool is empty. */
@@ -40,10 +57,16 @@ public final class ConnectionPool {
         Connection connection = idle.pollFirst();
         if (connection != null) {
             idleCount.decrementAndGet();
+            inUse.incrementAndGet();
             return connection;
         }
         try {
-            return rootConnection.duplicate();
+            Connection opened = rootConnection.duplicate();
+            inUse.incrementAndGet();
+            if (metrics != null) {
+                metrics.counter(QuackMetrics.CONNECTIONS_OPENED).increment();
+            }
+            return opened;
         }
         catch (SQLException e) {
             throw new IllegalStateException("Failed to open a DuckDB connection", e);
@@ -52,7 +75,7 @@ public final class ConnectionPool {
 
     /** The prepared-statement cache of a connection this pool handed out. */
     StatementCache statementCacheFor(Connection connection) {
-        return statementCaches.computeIfAbsent(connection, StatementCache::new);
+        return statementCaches.computeIfAbsent(connection, c -> new StatementCache(c, metrics));
     }
 
     /**
@@ -79,6 +102,7 @@ public final class ConnectionPool {
      *               {@code Transactions} - so the connection is closed rather than pooled.
      */
     public void release(Connection connection, boolean committed, boolean broken) {
+        inUse.decrementAndGet();
         StatementCache cache = statementCaches.get(connection);
         if (cache != null) {
             cache.releaseAll();
@@ -112,6 +136,9 @@ public final class ConnectionPool {
     }
 
     private void discard(Connection connection) {
+        if (metrics != null) {
+            metrics.counter(QuackMetrics.CONNECTIONS_DISCARDED).increment();
+        }
         StatementCache cache = statementCaches.remove(connection);
         if (cache != null) {
             cache.clear();
