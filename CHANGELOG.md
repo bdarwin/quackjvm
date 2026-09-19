@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `SparseTable`, `SparseBatch`, `SparseRecord`: records carrying a few of thousands of possible
+  numeric data points, stored long (a name dictionary plus one row per present value) and shown
+  wide on demand through `viewSql`, `view` or `materializeWide`.
+- `Transactions`: transactions begun and ended with SQL, which avoid a DuckDB JDBC bug that leaves
+  a connection committing statements one at a time after a failed `commit()`.
+- Examples `CoreConcurrency` and `CqEngineConcurrency`: dashboard users and the `threads`
+  setting, your own transactions under conflict, readers during writes, per-collection write
+  locks, `serializeWrites`, and the shared-`QueryOptions` guard.
+
+### Fixed
+- `SparseTable.optimize()` retries when a write through another instance conflicts with it, and
+  its Javadoc no longer claims that writes through other instances are unaffected. Under steady
+  replaces through a second instance it can still fail after ten attempts, rolled back with
+  nothing lost; run it through the writers' own instance.
+
 ## 1.1.0
 
 **Requires `duckdb_jdbc` 1.5.5 or later.** This is the reason for the minor bump rather than a

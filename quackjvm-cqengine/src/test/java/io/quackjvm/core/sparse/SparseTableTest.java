@@ -387,6 +387,92 @@ public class SparseTableTest {
                 before + written.get(), samples.valueCount(connection));
     }
 
+    /**
+     * A replace deletes rows, and so does optimize: through two instances they conflict. Whatever
+     * the outcome of each optimize, every replace that reported success must be exactly what its
+     * record holds afterwards - a conflict may fail an operation, never half-apply one.
+     */
+    @Test(timeout = 120_000)
+    public void optimizeRacingReplacesThroughAnotherInstanceLosesNothing() throws Exception {
+        assertEveryReplaceSurvivesOptimize(SparseTable.named("sample"), false);
+    }
+
+    /** Through the same instance the lock orders them, so nothing even conflicts. */
+    @Test(timeout = 120_000)
+    public void optimizeThroughTheWritersInstanceNeverConflicts() throws Exception {
+        assertEveryReplaceSurvivesOptimize(samples, true);
+    }
+
+    private void assertEveryReplaceSurvivesOptimize(SparseTable writerInstance, boolean optimizeMustSucceed)
+            throws Exception {
+        int records = 1_000;
+        samples.append(connection, batchOf(randomData(records, 200, 20, 9)));
+        double[] expected = new double[records];
+        java.util.Arrays.fill(expected, Double.NaN);
+
+        AtomicBoolean stop = new AtomicBoolean();
+        AtomicLong replaced = new AtomicLong();
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+        ExecutorService writer = Executors.newSingleThreadExecutor();
+        CountDownLatch running = new CountDownLatch(1);
+        writer.submit(() -> {
+            try (Connection mine = connection.duplicate()) {
+                running.countDown();
+                for (int n = 0; !stop.get(); n++) {
+                    int record = n % records;
+                    try {
+                        writerInstance.replace(mine, SparseBatch.builder()
+                                .record(record).put("a", n).put("b", -n).build());
+                        expected[record] = n;
+                        replaced.incrementAndGet();
+                    }
+                    catch (IllegalStateException conflict) {
+                        // Failed loudly and rolled back; the record keeps its previous value.
+                    }
+                    Thread.sleep(1);
+                }
+            }
+            catch (Throwable e) {
+                failures.add(e);
+            }
+            return null;
+        });
+        running.await();
+        int optimized = 0;
+        try {
+            for (int i = 0; i < 5; i++) {
+                try {
+                    samples.optimize(connection);
+                    optimized++;
+                }
+                catch (IllegalStateException conflict) {
+                    if (optimizeMustSucceed) {
+                        throw conflict;
+                    }
+                }
+            }
+        }
+        finally {
+            stop.set(true);
+            writer.shutdown();
+            assertTrue(writer.awaitTermination(60, TimeUnit.SECONDS));
+        }
+
+        assertEquals("" + failures, 0, failures.size());
+        assertTrue("the writer should have replaced something during the optimizes", replaced.get() > 0);
+        if (optimizeMustSucceed) {
+            assertEquals(5, optimized);
+        }
+        for (int record = 0; record < records; record++) {
+            if (!Double.isNaN(expected[record])) {
+                SparseRecord stored = samples.read(connection, record);
+                assertEquals("record " + record + " size", 2, stored.size());
+                assertEquals("record " + record, expected[record], stored.get("a").getAsDouble(), 0);
+                assertEquals("record " + record, -expected[record], stored.get("b").getAsDouble(), 0);
+            }
+        }
+    }
+
     // ---------- Concurrency ----------
 
     /**

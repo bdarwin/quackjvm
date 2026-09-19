@@ -18,6 +18,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
@@ -66,10 +67,13 @@ import java.util.regex.Pattern;
  * <h2>Concurrency</h2>
  *
  * <p>Reads never block. Writes through one {@code SparseTable} instance are serialised with each
- * other and with {@link #optimize}. Writes through different instances are safe - the dictionary is
- * guarded by its own unique constraint, and {@link #optimize} is written so that a concurrent write
- * cannot be lost - but two transactions touching the same rows can make one of them fail with a
- * conflict, which is retried when this class owns the transaction.</p>
+ * other and with {@link #optimize}: share one instance per table. Writes through different
+ * instances are safe too - the dictionary is guarded by its own unique constraint, and
+ * {@link #optimize} is written so that a concurrent write cannot be lost - but two transactions
+ * touching the same rows make one of them fail with a conflict. Nothing is half-applied; the
+ * failed one is rolled back and, when this class owns the transaction, retried. {@link #optimize}
+ * touches every row, so through a second instance it conflicts with any {@link #replace} that
+ * lands during it, and under steady writes it can run out of retries and throw.</p>
  */
 public final class SparseTable {
 
@@ -77,6 +81,8 @@ public final class SparseTable {
     /** Beyond this many values in one IN list, look the rows up through a temporary table. */
     private static final int IN_LIST_CHUNK = 1_000;
     private static final int ATTEMPTS = 3;
+    /** More than a write gets: an optimize conflicts with every replace that lands during it. */
+    private static final int OPTIMIZE_ATTEMPTS = 10;
 
     private final String name;
     private final String attributeTable;
@@ -402,29 +408,43 @@ public final class SparseTable {
      * place only removes rows this transaction can see, so a concurrent write survives. The file
      * can grow to twice the table's size while the old rows are awaiting reuse; it does not keep
      * growing.</p>
+     *
+     * <p>A {@link #replace} through another instance that lands during it makes it fail with a
+     * conflict and roll back; it retries up to ten times, then throws. Run it through the instance
+     * your writers use and they simply wait for it instead.</p>
      */
     public void optimize(Connection connection) {
         writeLock.lock();
         String sorted = name + "__sorted";
         try {
             boolean ownTransaction = Transactions.isAutoCommit(connection);
-            try {
-                if (ownTransaction) {
-                    Transactions.begin(connection);
+            for (int attempt = 1; ; attempt++) {
+                try {
+                    if (ownTransaction) {
+                        Transactions.begin(connection);
+                    }
+                    Sql.execute(connection, "CREATE OR REPLACE TEMP TABLE " + Sql.quote(sorted) + " AS SELECT * FROM "
+                            + Sql.quote(pointTable) + " ORDER BY attr, record_id");
+                    Sql.execute(connection, "DELETE FROM " + Sql.quote(pointTable));
+                    Sql.execute(connection, "INSERT INTO " + Sql.quote(pointTable) + " SELECT * FROM " + Sql.quote(sorted));
+                    if (ownTransaction) {
+                        Transactions.commit(connection);
+                    }
+                    break;
                 }
-                Sql.execute(connection, "CREATE OR REPLACE TEMP TABLE " + Sql.quote(sorted) + " AS SELECT * FROM "
-                        + Sql.quote(pointTable) + " ORDER BY attr, record_id");
-                Sql.execute(connection, "DELETE FROM " + Sql.quote(pointTable));
-                Sql.execute(connection, "INSERT INTO " + Sql.quote(pointTable) + " SELECT * FROM " + Sql.quote(sorted));
-                if (ownTransaction) {
-                    Transactions.commit(connection);
+                catch (RuntimeException e) {
+                    if (ownTransaction) {
+                        Transactions.rollbackQuietly(connection);
+                    }
+                    // Deleting every row conflicts with any write through another instance that
+                    // deletes rows at the same moment - a replace. Nothing was changed, so trying
+                    // again is safe; a pause gives that write time to finish.
+                    if (!ownTransaction || attempt == OPTIMIZE_ATTEMPTS || !isConflict(e)) {
+                        throw new IllegalStateException("Failed to optimize " + name
+                                + (attempt > 1 ? " after " + attempt + " attempts" : ""), e);
+                    }
+                    pause(attempt);
                 }
-            }
-            catch (RuntimeException e) {
-                if (ownTransaction) {
-                    Transactions.rollbackQuietly(connection);
-                }
-                throw new IllegalStateException("Failed to optimize " + name, e);
             }
             if (ownTransaction) {
                 Sql.execute(connection, "DROP TABLE IF EXISTS " + Sql.quote(sorted));
@@ -432,6 +452,16 @@ public final class SparseTable {
         }
         finally {
             writeLock.unlock();
+        }
+    }
+
+    private static void pause(int attempt) {
+        try {
+            Thread.sleep(ThreadLocalRandom.current().nextLong(1, 10L * attempt + 1));
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while retrying", e);
         }
     }
 

@@ -50,6 +50,7 @@ cd examples
 | [`CoreTableFunction.java`](src/main/java/CoreTableFunction.java) | A plain `java.util.List` exposed as a table function, queried with SQL and joined against 200,000 stored rows with no load step - and live, so changing the list changes the next query. |
 | [`CoreTableFunctionStreaming.java`](src/main/java/CoreTableFunctionStreaming.java) | A paged "remote" feed pulled one page at a time only as DuckDB asks for rows. Named parameters, projection pushdown, and the catch: a bare `LIMIT` stops the fetching, a `WHERE` in front of it does not. |
 | [`CoreScalarFunction.java`](src/main/java/CoreScalarFunction.java) | Java functions called from SQL, in three forms, and what a call into the JVM costs per row against a built-in expression - about 4x on one thread, 15x on ten. |
+| [`CoreConcurrency.java`](src/main/java/CoreConcurrency.java) | Many threads, one connection each. Eight dashboard users over five million rows with `threads` at the default, at half the cores, and behind a semaphore; read-modify-write transactions that conflict, roll back and retry without losing a cent; `SparseTable` writes racing `optimize()`. |
 
 ### CQEngine plugin
 
@@ -60,6 +61,7 @@ cd examples
 | [`CqEngineJoins.java`](src/main/java/CqEngineJoins.java) | Two collections in one `DuckDBDatabase`: `existsIn` pushed into a SQL semi-join, `database.join(...)` for matched pairs, and `database.sql(...)` for an aggregate across both. |
 | [`CqEngineBulkWriter.java`](src/main/java/CqEngineBulkWriter.java) | `DuckDBBulkWriter` streaming half a million objects in, with the indexes populated as they pass. |
 | [`CqEngineMaterialization.java`](src/main/java/CqEngineMaterialization.java) | A windowed panel over five million rows precomputed into a table, refreshed fifteen times under four concurrent readers without one failed read, and a rollup kept current by folding in new rows. |
+| [`CqEngineConcurrency.java`](src/main/java/CqEngineConcurrency.java) | Readers unaffected by writers; two collections in one database writing in parallel; two writers on the same keys with `serializeWrites` on and off; and a `QueryOptions` shared between threads, refused instead of deadlocking. |
 
 ## Notes
 
