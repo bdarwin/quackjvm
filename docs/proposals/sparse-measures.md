@@ -95,13 +95,22 @@ the single biggest change and it is in the generated SQL, not in the storage.
 **Rollups**, optional, for many readers at once: one total per key, answering in about 1 ms, rebuilt
 in about 40 ms, or kept current as records are replaced at about 11 ms a record.
 
+## What is built
+
+Keys with named fields, the unit rule, declared orders, grouping and pivoting on any field,
+conversion through a table of factors, and writing a measure to Parquet and reading it back - see
+`MeasureTable` and `examples/src/main/java/CoreMeasures.java`. Time, and archiving by time, are not.
+
 ## Archiving
 
 Once a full publish exists at time T, everything before it can leave the live table without changing
 any answer at or after T.
 
 ```java
-measures.archive(before, directory);     // writes Parquet, partitioned by day, then deletes
+measures.export(connection, directory);          // built: dictionary, values, definition
+measures.query().from(directory).rows("a")       // built: ask the files, without reading them back
+measures.importFrom(connection, directory);      // built: read them back, matching keys by field
+measures.archive(before, directory);             // not built: the same, for writes older than a time
 ```
 
 Reading an archived time means reading those files, which the builder can do on request. The live

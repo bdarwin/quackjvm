@@ -37,6 +37,9 @@ import java.util.Map;
 public final class MeasureQuery {
 
     private final MeasureTable table;
+    /** Where to read from: the measure's own tables, or exported files. */
+    private String keySource;
+    private String valueSource;
     private final List<String> rows = new ArrayList<>();
     private String columnField;
     private final Map<String, List<String>> filters = new LinkedHashMap<>();
@@ -49,6 +52,20 @@ public final class MeasureQuery {
 
     MeasureQuery(MeasureTable table) {
         this.table = table;
+        this.keySource = Sql.quote(table.getKeyTable());
+        this.valueSource = Sql.quote(table.getValueTable());
+    }
+
+    /**
+     * Reads from files a measure was exported to, rather than from its tables - so that archived
+     * values can be asked the same questions without loading them back in.
+     *
+     * @see MeasureTable#export
+     */
+    public MeasureQuery from(java.nio.file.Path directory) {
+        this.keySource = MeasureTable.readParquet(directory, "key");
+        this.valueSource = MeasureTable.readParquet(directory, "value");
+        return this;
     }
 
     /** The fields to group by, one column each, in this order. */
@@ -117,7 +134,7 @@ public final class MeasureQuery {
         checkUnits();
         List<Object> parameters = new ArrayList<>();
         StringBuilder sql = new StringBuilder("WITH totals AS (SELECT key_id, sum(value) AS total FROM ")
-                .append(Sql.quote(table.getValueTable()));
+                .append(valueSource);
         List<String> conditions = new ArrayList<>();
         if (records != null) {
             if (records.length == 0) {
@@ -132,7 +149,7 @@ public final class MeasureQuery {
         }
         if (!filters.isEmpty()) {
             StringBuilder keys = new StringBuilder("key_id IN (SELECT id FROM ")
-                    .append(Sql.quote(table.getKeyTable())).append(" WHERE ");
+                    .append(keySource).append(" WHERE ");
             appendFilters(keys, parameters);
             conditions.add(keys.append(')').toString());
         }
@@ -160,7 +177,7 @@ public final class MeasureQuery {
                         .append(Sql.quote(value));
             }
         }
-        sql.append(" FROM totals t JOIN ").append(Sql.quote(table.getKeyTable())).append(" k ON k.id = t.key_id");
+        sql.append(" FROM totals t JOIN ").append(keySource).append(" k ON k.id = t.key_id");
         if (ratesTable != null) {
             sql.append(" JOIN ").append(Sql.quote(ratesTable)).append(" r ON r.").append(Sql.quote(fromColumn))
                     .append(" = k.").append(Sql.quote(table.getUnitField())).append(" AND r.")
@@ -222,7 +239,7 @@ public final class MeasureQuery {
         }
         List<Object> parameters = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT DISTINCT ").append(Sql.quote(columnField)).append(" FROM ")
-                .append(Sql.quote(table.getKeyTable()));
+                .append(keySource);
         Map<String, List<String>> others = new LinkedHashMap<>(filters);
         others.remove(columnField);
         if (!others.isEmpty()) {

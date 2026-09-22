@@ -85,10 +85,48 @@ public class CoreMeasures {
                 System.out.println("   refused: " + refused.getMessage());
             }
 
-            System.out.println();
+            exportAndReadBack(connection, measures);
+
             System.out.println("The SQL behind the second one, to join your own tables to:");
             System.out.println("   " + measures.query().rows("group").columns("point").where("unit", "U1")
                     .sql(connection).replace(", sum", ",\n          sum").replace(" FROM totals", "\n   FROM totals"));
+        }
+    }
+
+    /** Writing the measure to files, asking the files a question, and reading it back elsewhere. */
+    static void exportAndReadBack(DuckDBConnection connection, MeasureTable measures) throws Exception {
+        java.nio.file.Path directory = java.nio.file.Files.createTempDirectory("measure-export");
+        try {
+            long started = System.nanoTime();
+            measures.export(connection, directory);
+            long bytes = 0;
+            try (var files = java.nio.file.Files.list(directory)) {
+                for (java.nio.file.Path file : files.toList()) {
+                    bytes += java.nio.file.Files.size(file);
+                }
+            }
+            System.out.printf("Exported to Parquet in %.0f ms, %,d KB - the dictionary, the values,"
+                    + " and what the measure is%n", (System.nanoTime() - started) / 1e6, bytes / 1024);
+
+            started = System.nanoTime();
+            long rows = measures.query().from(directory).rows("group").columns("point").where("unit", "U1")
+                    .run(connection.duplicate()).count();
+            System.out.printf("The same question asked of the files, without reading them back: %.0f ms, %d rows%n",
+                    (System.nanoTime() - started) / 1e6, rows);
+
+            try (DuckDBConnection elsewhere = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
+                MeasureTable there = MeasureTable.describedBy(elsewhere, directory);
+                there.create(elsewhere);
+                started = System.nanoTime();
+                long values = there.importFrom(elsewhere, directory);
+                System.out.printf("Read back into an empty database: %,d values in %.0f ms, %,d keys%n%n",
+                        values, (System.nanoTime() - started) / 1e6, there.keyCount(elsewhere));
+            }
+        }
+        finally {
+            try (var walk = java.nio.file.Files.walk(directory)) {
+                walk.sorted(java.util.Comparator.reverseOrder()).forEach(path -> path.toFile().delete());
+            }
         }
     }
 
@@ -156,9 +194,9 @@ public class CoreMeasures {
 /*
  * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1):
  *
- * 2,000,000 values over 2,000 records and 9,000 distinct keys, written in 0.9 s
+ * 2,000,000 values over 2,000 records and 9,000 distinct keys, written in 1.0 s
  *
- * One record, its series as rows and the axis as columns   (33 rows, 11 ms)
+ * One record, its series as rows and the axis as columns   (33 rows, 10 ms)
  *         group       sub      kind        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0        s1        k1      35.8      35.8      35.8      35.8      35.8      35.8      35.8      35.8      35.9      35.9
  *            g0        s2        k1      33.8      33.8      33.8      33.8      33.8      33.8      33.8      33.8      33.9      33.9
@@ -194,17 +232,17 @@ public class CoreMeasures {
  *            k1   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56980.0   56980.0
  *            k2   54110.2   54110.2   54110.2   54110.2   54110.2   54110.2   54110.2   54110.2   54220.0   54220.0
  *
- * All three units, converted into one and added up   (20 rows, 7 ms)
+ * All three units, converted into one and added up   (20 rows, 8 ms)
  *         group        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  509440.9  509440.9
  *            g1  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  506408.6  506408.6
  *           g10  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  507307.1  507307.1
- *           g11  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  508289.4  508289.4
+ *           g11  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  508289.5  508289.4
  *           g12  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  509318.7  509318.7
  *           g13  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  506249.8  506249.8
  *    ... 14 more rows
  *
- * Or kept apart, by putting the unit in the rows   (60 rows, 8 ms)
+ * Or kept apart, by putting the unit in the rows   (60 rows, 9 ms)
  *         group      unit        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0        U1  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166946.0  166946.0
  *            g0        U2  166892.0  166892.0  166892.0  166892.0  166892.0  166892.0  166892.0  166892.0  167226.0  167226.0
@@ -216,6 +254,9 @@ public class CoreMeasures {
  *
  * Adding up different units without converting them:
  *    refused: This would add up values in different units, which is never right. Put 'unit' in rows(...) or columns(...), narrow to one with where("unit", ...), or convertTo(unit, rates).
+ * Exported to Parquet in 33 ms, 1,589 KB - the dictionary, the values, and what the measure is
+ * The same question asked of the files, without reading them back: 8 ms, 20 rows
+ * Read back into an empty database: 2,000,000 values in 30 ms, 9,000 keys
  *
  * The SQL behind the second one, to join your own tables to:
  *    WITH totals AS (SELECT key_id,

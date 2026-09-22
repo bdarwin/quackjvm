@@ -10,7 +10,14 @@
   narrows to one, puts the unit in the rows or columns, or converts them through a table of factors
   of your own. A field's values can be given an order, since "10y" sorts before "1d" as text.
   Queries total per key before joining the dictionary: 20 ms against 227 on ten million values.
-  See `docs/proposals/sparse-measures.md`; time and archiving are not built yet.
+- A measure can be written to Parquet and read back: `export` writes its dictionary, its values and
+  its definition to a directory, `describedBy` reads that definition, `importFrom` reads the files
+  into a measure - matching keys by their fields, so an export can arrive where the dictionary was
+  built in another order - and `query().from(directory)` asks the files the same questions without
+  reading them back at all. `exportFlat` writes one flat table instead, optionally split by a field,
+  for anything that does not know the layout. Measured on two million values: 33 ms to export, 8 ms
+  to answer from the files, 30 ms to read back.
+  See `docs/proposals/sparse-measures.md`; time is not built yet.
 - `quackjvm-dashboard`, a new optional module: `QuackDashboard.start(database.metrics(), 8090)` serves
   a live page with the diagnosis of the last ten seconds, headline numbers with five minutes of
   history, wait against work per collection, and where DuckDB's time went. Runs on the JDK's own
