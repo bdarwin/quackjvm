@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added
+- `MeasureTable`: values that each belong to a record and are identified by several fields - stored
+  sparsely, a row per value that exists, with each distinct key held once in a dictionary - and read
+  back grouped or pivoted by any of those fields through `query().rows(...).columns(...)`. A field
+  can be declared the unit, and then totals refuse to add values in different units unless the query
+  narrows to one, puts the unit in the rows or columns, or converts them through a table of factors
+  of your own. A field's values can be given an order, since "10y" sorts before "1d" as text.
+  Queries total per key before joining the dictionary: 20 ms against 227 on ten million values.
+  See `docs/proposals/sparse-measures.md`; time and archiving are not built yet.
 - `quackjvm-dashboard`, a new optional module: `QuackDashboard.start(database.metrics(), 8090)` serves
   a live page with the diagnosis of the last ten seconds, headline numbers with five minutes of
   history, wait against work per collection, and where DuckDB's time went. Runs on the JDK's own
