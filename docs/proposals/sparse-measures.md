@@ -97,9 +97,15 @@ in about 40 ms, or kept current as records are replaced at about 11 ms a record.
 
 ## What is built
 
-Keys with named fields, the unit rule, declared orders, grouping and pivoting on any field,
-conversion through a table of factors, and writing a measure to Parquet and reading it back - see
-`MeasureTable` and `examples/src/main/java/CoreMeasures.java`. Time, and archiving by time, are not.
+All of it except timestamps: keys with named fields, the unit rule and conversion, declared orders,
+grouping and pivoting on any field, parts and provenance, archiving a part to one self-contained
+Parquet file, querying those files where they lie, restoring them, fields added later, and archiving
+by size. See `docs/measures.md`, `MeasureTable`, and the examples `CoreMeasures.java` and
+`CoreMeasureLifecycle.java`.
+
+What is not built is the timestamped history described below - full publishes and incremental
+changes at a point in time, reading "as of", and removals. Parts cover the archiving side of it;
+`appendChanges` covers writing only what moved.
 
 ## Archiving
 

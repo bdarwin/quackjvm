@@ -60,7 +60,7 @@ public final class QueryProfile {
         if (json == null || json.isBlank()) {
             return null;
         }
-        Object parsed = ProfileJson.parse(json);
+        Object parsed = io.quackjvm.core.json.JsonReader.parse(json);
         if (!(parsed instanceof Map<?, ?> root)) {
             return null;
         }

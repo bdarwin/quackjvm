@@ -60,6 +60,7 @@ nav:
       - Storing objects: storing-objects.md
       - Aggregates and projections: aggregates.md
       - Materializations: materializations.md
+      - Measures: measures.md
       - Writing data: writing.md
       - Tuning: tuning.md
       - Metrics and diagnosis: metrics.md

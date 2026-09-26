@@ -171,7 +171,7 @@ public class QueryProfileTest {
 
     @Test
     public void profileJsonIsRead() {
-        Object parsed = ProfileJson.parse("{\"a\": [1, 2.5e3, \"x\\\"y\\u0041\"], \"b\": {\"c\": null, \"d\": true}}");
+        Object parsed = io.quackjvm.core.json.JsonReader.parse("{\"a\": [1, 2.5e3, \"x\\\"y\\u0041\"], \"b\": {\"c\": null, \"d\": true}}");
         Map<?, ?> root = (Map<?, ?>) parsed;
         assertEquals(List.of(1.0, 2500.0, "x\"yA"), root.get("a"));
         assertEquals(Boolean.TRUE, ((Map<?, ?>) root.get("b")).get("d"));

@@ -1,4 +1,4 @@
-package io.quackjvm.core.metrics;
+package io.quackjvm.core.json;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -6,20 +6,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reads the JSON that DuckDB's profiler produces into maps, lists, strings, doubles and booleans.
- * Just enough JSON for that - the core module takes no JSON library.
+ * Reads JSON into maps, lists, strings, doubles and booleans. Just enough of it for the small
+ * documents quackjvm reads - a query profile from DuckDB, a measure's definition from a Parquet
+ * file - because the core module takes no JSON library.
  */
-final class ProfileJson {
+public final class JsonReader {
 
     private final String text;
     private int at;
 
-    private ProfileJson(String text) {
+    private JsonReader(String text) {
         this.text = text;
     }
 
-    static Object parse(String text) {
-        ProfileJson reader = new ProfileJson(text);
+    public static Object parse(String text) {
+        JsonReader reader = new JsonReader(text);
         Object value = reader.value();
         reader.whitespace();
         if (reader.at != text.length()) {

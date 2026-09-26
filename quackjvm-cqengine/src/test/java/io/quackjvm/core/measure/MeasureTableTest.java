@@ -216,7 +216,7 @@ public class MeasureTableTest {
     @Test
     public void theQueryHandsBackItsSql() {
         String sql = measures.query().rows("a").columns("point").where("unit", "U1").sql(connection);
-        assertTrue(sql, sql.contains("WITH totals AS (SELECT key_id, sum(value) AS total"));
+        assertTrue(sql, sql.contains("WITH perKey AS (SELECT key_id, sum(value) AS total"));
         assertTrue(sql, sql.contains("FILTER (WHERE k.\"point\" = '5y')"));
         // Totals per key first, then the dictionary: 20 ms against 227 on ten million values.
         assertTrue(sql, sql.indexOf("GROUP BY key_id") < sql.indexOf("JOIN \"m_key\""));

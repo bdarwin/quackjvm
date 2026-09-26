@@ -10,14 +10,20 @@
   narrows to one, puts the unit in the rows or columns, or converts them through a table of factors
   of your own. A field's values can be given an order, since "10y" sorts before "1d" as text.
   Queries total per key before joining the dictionary: 20 ms against 227 on ten million values.
-- A measure can be written to Parquet and read back: `export` writes its dictionary, its values and
-  its definition to a directory, `describedBy` reads that definition, `importFrom` reads the files
-  into a measure - matching keys by their fields, so an export can arrive where the dictionary was
-  built in another order - and `query().from(directory)` asks the files the same questions without
-  reading them back at all. `exportFlat` writes one flat table instead, optionally split by a field,
-  for anything that does not know the layout. Measured on two million values: 33 ms to export, 8 ms
-  to answer from the files, 30 ms to read back.
-  See `docs/proposals/sparse-measures.md`; time is not built yet.
+- A measure now keeps parts and provenance, archives itself and restores: every write carries a part
+  label (usually a day), who wrote it and when. `archive(connection, location, part)` writes that
+  part as one self-contained Parquet file - a row per value with its fields beside it, and the
+  measure's definition in the file's metadata - removes those rows and checkpoints so the space is
+  released. `query().from(files...)` asks archived files the same questions where they lie, one day
+  or many, locally or over `s3://`; `MeasureTable.restore(connection, files...)` rebuilds the tables
+  from the files alone. `archiveWhenLargerThan(bytes)` with `onArchive(handler)` lets a measure
+  archive its oldest parts by itself and hand each file to a store of your own. `appendChanges`
+  writes only values that differ: 95% fewer rows on a re-publish where 5% changed. A field added
+  later declares what older values read as, `migrate` brings the tables up to it, and dropping a
+  field is refused rather than silently adding values together. `latestPerKey()` and
+  `writtenBy(...)` let a reader decide what two writers on one record mean.
+  Measured on two million values: 33 ms to archive, 8 ms to answer from the files, 30 ms to read
+  back. See `docs/measures.md`.
 - `quackjvm-dashboard`, a new optional module: `QuackDashboard.start(database.metrics(), 8090)` serves
   a live page with the diagnosis of the last ten seconds, headline numbers with five minutes of
   history, wait against work per collection, and where DuckDB's time went. Runs on the JDK's own
