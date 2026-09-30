@@ -133,7 +133,10 @@ public final class Rows {
     /** Maps each row onto a record and hands it to the consumer as it is read. */
     public <T> void forEachRecord(Class<T> recordType, java.util.function.Consumer<T> consumer) {
         ColumnarLayout<T> layout = ColumnarLayout.ofRecord(recordType);
-        if (ArrowSupport.isAvailable()) {
+        boolean nested = layout.getColumns().stream().anyMatch(column -> column.getNested() != null);
+        // Arrow reads columns of single values; a list, a struct or a map comes back through JDBC,
+        // which hands them over whole.
+        if (ArrowSupport.isAvailable() && !nested) {
             ArrowObjectReader<T> reader = new ArrowObjectReader<>(layout, 0);
             readThroughArrow(batch -> {
                 int rowCount = batch.getRowCount();
@@ -147,7 +150,10 @@ public final class Rows {
         readThroughJdbc(resultSet -> {
             Object[] values = new Object[columns.size()];
             for (int i = 0; i < values.length; i++) {
-                values[i] = DuckDBTypes.read(resultSet, i + 1, columns.get(i).getType());
+                ColumnarLayout.Column<T, ?> column = columns.get(i);
+                values[i] = column.getNested() == null
+                        ? DuckDBTypes.read(resultSet, i + 1, column.getType())
+                        : column.getNested().fromSql(resultSet.getObject(i + 1));
             }
             consumer.accept(layout.createObject(values));
         });

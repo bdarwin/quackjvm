@@ -15,27 +15,39 @@ public final class ColumnDef {
     private final String sqlType;
     private final String description;
     private final String unit;
+    private final NestedType nested;
 
     public ColumnDef(String name, Class<?> javaType) {
-        this(name, javaType, null, null);
+        this(name, javaType, null, null, null);
     }
 
     public ColumnDef(String name, Class<?> javaType, String description, String unit) {
+        this(name, javaType, description, unit, null);
+    }
+
+    /** @param nested what kind of many-valued column this is - LIST, STRUCT, MAP, VECTOR - or null */
+    public ColumnDef(String name, Class<?> javaType, String description, String unit, NestedType nested) {
         this.name = name;
         this.javaType = javaType;
-        this.sqlType = DuckDBTypes.sqlTypeFor(javaType);
+        this.sqlType = nested != null ? nested.sqlType() : DuckDBTypes.sqlTypeFor(javaType);
         this.description = description;
         this.unit = unit;
+        this.nested = nested;
     }
 
     /** The same column, with what it means. */
     public ColumnDef describedAs(String description) {
-        return new ColumnDef(name, javaType, description, unit);
+        return new ColumnDef(name, javaType, description, unit, nested);
     }
 
     /** The same column, with what it is measured in - "USD", "kg", "ms". */
     public ColumnDef measuredIn(String unit) {
-        return new ColumnDef(name, javaType, description, unit);
+        return new ColumnDef(name, javaType, description, unit, nested);
+    }
+
+    /** What kind of many-valued column this is, or null when it holds one value. */
+    public NestedType getNested() {
+        return nested;
     }
 
     /** What this column means, or null. */

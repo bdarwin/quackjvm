@@ -53,6 +53,8 @@ public final class TableWriter {
     private final String stagingTableName;
     private final List<ColumnDef> columns;
     private final String columnList;
+    /** Whether any column holds a list, struct, map or vector - which only the appender can write. */
+    private final boolean nested;
     private final boolean orReplace;
     private final int appenderThreshold;
     private final int stagingChunkRows;
@@ -73,6 +75,7 @@ public final class TableWriter {
         this.stagingTableName = "cqstg_" + tableName;
         this.columns = columns;
         this.columnList = renderColumnList(columns);
+        this.nested = columns.stream().anyMatch(column -> column.getNested() != null);
         this.orReplace = orReplace;
         this.appenderThreshold = appenderThreshold;
     }
@@ -196,8 +199,14 @@ public final class TableWriter {
         if (buffered.isEmpty()) {
             return new WriteResult(0, 0);
         }
-        return rows.hasNext()
-                ? writeViaStagingTable(connection, buffered, rows, deleteExistingKeys)
+        if (rows.hasNext()) {
+            return writeViaStagingTable(connection, buffered, rows, deleteExistingKeys);
+        }
+        // A prepared statement cannot bind a list, a struct or a map, so those go through the
+        // appender however few rows there are.
+        return nested
+                ? writeViaStagingTable(connection, buffered, java.util.Collections.emptyIterator(),
+                        deleteExistingKeys)
                 : writeViaPreparedStatements(connection, buffered, deleteExistingKeys);
     }
 
@@ -359,7 +368,7 @@ public final class TableWriter {
     private void appendRow(DuckDBAppender appender, Object[] row) throws SQLException {
         appender.beginRow();
         for (int i = 0; i < row.length; i++) {
-            DuckDBTypes.append(appender, row[i], columns.get(i).getJavaType());
+            DuckDBTypes.append(appender, row[i], columns.get(i));
         }
         appender.endRow();
     }

@@ -107,6 +107,17 @@ public final class DuckDBTypes {
     }
 
     /**
+     * Appends a value for one column, which may hold a list, a struct, a map or a vector.
+     */
+    public static void append(DuckDBAppender appender, Object value, ColumnDef column) throws SQLException {
+        if (column.getNested() != null) {
+            column.getNested().append(appender, value);
+            return;
+        }
+        append(appender, value, column.getJavaType());
+    }
+
+    /**
      * Appends a value to a {@link DuckDBAppender}, which is the fastest way to bulk-load DuckDB.
      */
     public static void append(DuckDBAppender appender, Object value, Class<?> javaType) throws SQLException {

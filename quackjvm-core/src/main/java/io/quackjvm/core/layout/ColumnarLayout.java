@@ -55,6 +55,7 @@ public final class ColumnarLayout<O> {
         private final Function<O, V> accessor;
         private String description;
         private String unit;
+        private io.quackjvm.core.duckdb.NestedType nested;
 
         Column(String name, Class<V> type, Function<O, V> accessor) {
             this.name = name;
@@ -70,6 +71,11 @@ public final class ColumnarLayout<O> {
         /** What this column is measured in, or null. */
         public String getUnit() {
             return unit;
+        }
+
+        /** What kind of nested value this column holds - LIST, STRUCT, MAP, VECTOR - or null. */
+        public io.quackjvm.core.duckdb.NestedType getNested() {
+            return nested;
         }
 
         public String getName() {
@@ -102,7 +108,9 @@ public final class ColumnarLayout<O> {
         }
         for (Column<O, ?> column : columns) {
             // Fail fast rather than at the first insert.
-            DuckDBTypes.sqlTypeFor(column.getType());
+            if (column.getNested() == null) {
+                DuckDBTypes.sqlTypeFor(column.getType());
+            }
         }
         this.objectType = objectType;
         this.columns = Collections.unmodifiableList(new ArrayList<>(columns));
@@ -141,7 +149,7 @@ public final class ColumnarLayout<O> {
         java.util.List<io.quackjvm.core.duckdb.ColumnDef> definitions = new ArrayList<>(columns.size());
         for (Column<O, ?> column : columns) {
             definitions.add(new io.quackjvm.core.duckdb.ColumnDef(column.getName(), column.getType(),
-                    column.getDescription(), column.getUnit()));
+                    column.getDescription(), column.getUnit(), column.getNested()));
         }
         return definitions;
     }
@@ -178,7 +186,10 @@ public final class ColumnarLayout<O> {
             parameterTypes[i] = component.getType();
             Method accessor = component.getAccessor();
             accessor.setAccessible(true);
-            columns.add(column(component.getName(), boxed(component.getType()), object -> invoke(accessor, object)));
+            Column<R, ?> mapped = newColumn(component.getName(), boxed(component.getType()),
+                    object -> invoke(accessor, object));
+            mapped.nested = NestedTypes.of(component.getGenericType(), component.getType());
+            columns.add(mapped);
         }
         Constructor<R> canonicalConstructor;
         try {
@@ -216,7 +227,10 @@ public final class ColumnarLayout<O> {
         }
         List<Column<O, ?>> columns = new ArrayList<>(fields.size());
         for (Field field : fields) {
-            columns.add(column(field.getName(), boxed(field.getType()), object -> get(field, object)));
+            Column<O, ?> mapped = newColumn(field.getName(), boxed(field.getType()),
+                    object -> get(field, object));
+            mapped.nested = NestedTypes.of(field.getGenericType(), field.getType());
+            columns.add(mapped);
         }
         Field[] fieldArray = fields.toArray(new Field[0]);
         return new ColumnarLayout<>(objectType, columns, values -> {
@@ -241,7 +255,9 @@ public final class ColumnarLayout<O> {
         }
 
         public <V> Builder<O> column(String name, Class<V> type, Function<O, V> accessor) {
-            columns.add(new Column<>(name, boxed(type), accessor::apply));
+            Column<O, ?> mapped = newColumn(name, boxed(type), accessor::apply);
+            mapped.nested = NestedTypes.of(null, type);
+            columns.add(mapped);
             return this;
         }
 
@@ -257,6 +273,46 @@ public final class ColumnarLayout<O> {
         /** What the column just added is measured in - "USD", "kg", "ms". */
         public Builder<O> unit(String unit) {
             lastColumn("unit").unit = unit;
+            return this;
+        }
+
+        /** A column holding any number of values of one type: {@code List<T>} as {@code T[]}. */
+        public <V> Builder<O> listColumn(String name, Class<?> elementType, Function<O, V> accessor) {
+            return nestedColumn(name, java.util.List.class, accessor,
+                    io.quackjvm.core.duckdb.NestedType.list(boxed(elementType)));
+        }
+
+        /** A column holding keys and values: {@code Map<K, V>} as {@code MAP(K, V)}. */
+        public <V> Builder<O> mapColumn(String name, Class<?> keyType, Class<?> valueType, Function<O, V> accessor) {
+            return nestedColumn(name, java.util.Map.class, accessor,
+                    io.quackjvm.core.duckdb.NestedType.map(boxed(keyType), boxed(valueType)));
+        }
+
+        /** A column holding a record's components by name: {@code STRUCT(a ..., b ...)}. */
+        public <V> Builder<O> structColumn(String name, Class<?> recordType, Function<O, V> accessor) {
+            return nestedColumn(name, recordType, accessor,
+                    io.quackjvm.core.duckdb.NestedType.struct(recordType));
+        }
+
+        /**
+         * A column holding exactly this many numbers: {@code FLOAT[768]} rather than {@code FLOAT[]},
+         * which is what DuckDB's array functions and any index over them need.
+         */
+        public <V> Builder<O> vectorColumn(String name, int size, Function<O, V> accessor) {
+            return vectorColumn(name, float[].class, size, accessor);
+        }
+
+        /** As {@link #vectorColumn(String, int, Function)}, for a {@code double[]}. */
+        public <V> Builder<O> vectorColumn(String name, Class<?> arrayType, int size, Function<O, V> accessor) {
+            return nestedColumn(name, arrayType, accessor,
+                    io.quackjvm.core.duckdb.NestedType.vector(arrayType, size));
+        }
+
+        private <V> Builder<O> nestedColumn(String name, Class<?> type, Function<O, V> accessor,
+                                            io.quackjvm.core.duckdb.NestedType nested) {
+            Column<O, ?> mapped = newColumn(name, type, accessor::apply);
+            mapped.nested = nested;
+            columns.add(mapped);
             return this;
         }
 
@@ -289,7 +345,7 @@ public final class ColumnarLayout<O> {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static <O, V> Column<O, V> column(String name, Class<?> type, Function<O, Object> accessor) {
+    private static <O, V> Column<O, V> newColumn(String name, Class<?> type, Function<O, Object> accessor) {
         return new Column(name, type, accessor);
     }
 
