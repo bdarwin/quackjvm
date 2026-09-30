@@ -85,6 +85,7 @@ Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 | precomputing a query | `CREATE TABLE AS`, and a refresh that breaks readers | `Materialization`, refreshed without a window where the table is missing |
 | LIST / STRUCT / MAP / ARRAY | readable, **no write path at all** | planned, via Arrow |
 | Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | not wrapped yet - runnable examples: [table function](examples/src/main/java/CoreTableFunction.java), [streaming](examples/src/main/java/CoreTableFunctionStreaming.java), [scalar](examples/src/main/java/CoreScalarFunction.java) |
+| running SQL you did not write | nothing - and worse: preparing `"DROP TABLE t; SELECT 1"` **executes the DROP** | `GuardedQuery` + `QueryPolicy`: DuckDB's own parser decides what is a query, one statement only, row and byte caps, a timeout that cancels, optional `Hardening` - **check costs 0.20 ms** |
 
 ## Objects in, answers out
 

@@ -111,6 +111,30 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
+### `io.quackjvm.core.guard.GuardedQuery` / `QueryPolicy` / `Hardening`
+
+Runs SQL that came from somewhere you do not control.
+
+```java
+GuardedQuery guard = GuardedQuery.on(connection, QueryPolicy.readOnly()
+        .timeout(Duration.ofSeconds(2))
+        .maxRows(50));
+
+GuardedResult result = guard.run(sql);   // QueryRejected / QueryTimedOut / ResultTruncated
+String why = guard.whyRejected(sql);     // null when it would be allowed
+```
+
+- `QueryPolicy.readOnly()` - five seconds, ten thousand rows, eight megabytes, EXPLAIN allowed;
+  `timeout`, `maxRows`, `maxBytes`, `allowExplain`, `allowUnverified(PIVOT)`, `hardening` return copies.
+- The statement is checked by DuckDB's parser (`json_serialize_sql`), never by preparing it - with this
+  driver, preparing a multi-statement string executes all but the last.
+- `Hardening.DATABASE` takes file, extension and network access away from **the whole database**,
+  irreversibly; `Hardening.sandbox()` opens a separate database that starts that way.
+- `GuardedResult` carries columns, SQL types, rows, elapsed time, an estimated byte count, and
+  `toText()` for something that reads text.
+
+See [Guarding queries](guarding-queries.md).
+
 ### `io.quackjvm.core.arrow.ArrowSupport`
 
 Whether the Arrow read path is usable, and why not if it is not.

@@ -67,6 +67,7 @@ nav:
       - Dashboard: dashboard.md
   - CQEngine plugin:
       - Querying: querying.md
+      - Guarding queries: guarding-queries.md
       - Joins across collections: joins.md
       - Migrating: migrating.md
   - Reference:

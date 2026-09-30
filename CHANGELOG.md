@@ -3,6 +3,20 @@
 ## Unreleased
 
 ### Added
+- `io.quackjvm.core.guard`: running SQL that came from somewhere you do not control. `GuardedQuery.on(
+  connection, QueryPolicy.readOnly()).run(sql)` checks the statement with DuckDB's own parser -
+  `json_serialize_sql`, which serializes only queries - so everything that writes, attaches, loads,
+  copies or configures is refused, a CTE with a write inside it included, and more than one statement
+  is caught by counting them rather than by looking for semicolons. It never prepares the statement to
+  find out what it is, because with this driver preparing a multi-statement string executes all but the
+  last: `prepareStatement("DROP TABLE secrets; SELECT 1")` drops the table. The row cap becomes a
+  LIMIT around the statement rather than rows read and discarded, a query that would exceed it is
+  refused rather than cut short, and the timeout cancels through `Statement.cancel()`, after which the
+  connection still works. `PIVOT` cannot be checked - DuckDB will not serialize it - so it is refused
+  unless allowed deliberately, and the javadoc says what that gives up. `Hardening.DATABASE` takes away
+  file, extension and network access, which is off by default because in DuckDB it applies to the whole
+  database and cannot be undone while it runs - `Hardening.sandbox()` is the way to have both.
+  Measured on 200,000 rows: the check alone 0.20 ms, a guarded aggregate 2.57 ms against 2.06 unguarded.
 - `MeasureRefresh`: publishing a measure over and over as refreshes rather than overwrites. A refresh
   is a point on a publisher's timeline - a timestamp it chooses and an id that makes it itself - and
   covers any number of measures, each of them either everything the publisher has or only what moved.
