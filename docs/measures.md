@@ -149,6 +149,66 @@ thousand records of a thousand values each, 5% of them changed: 36 ms to work ou
 and 95% fewer rows written - 105 KB of Parquet instead of 2,083 KB. It reads before it writes, so it
 suits one writer per record.
 
+## Refreshes: publishing the same measure over and over
+
+A refresh is a point on a publisher's timeline - a timestamp it chooses, and an id that makes it
+itself. One refresh can cover several measures, and says of each whether it is everything the
+publisher has or only what moved.
+
+```java
+MeasureRefresh.at(nineOClock, "run-2026-09-30T09:00")
+        .full(exposure, everythingExposureHas)
+        .increment(sensitivity, whatMoved)
+        .remove(coverage, 42)
+        .commit(connection);
+```
+
+- A record that appears in a refresh **replaces itself entirely**, whichever kind it came in: a key
+  it held and the refresh does not is gone.
+- A **full** set says more - the measure holds exactly what the refresh names, and records it does
+  not name are gone. An empty full set empties the measure.
+- An **increment** leaves records it does not name alone.
+- The kind is **per measure**, so a refresh that leaves a measure out leaves that measure untouched.
+  One kind for the whole refresh would empty it by omission.
+- `remove(...)` cancels what a record held. It leaves the state, not the history.
+
+### Contributions
+
+Nothing is overwritten and nothing is deleted. A change is written as cancelling the old value and
+adding the new, a removal as cancelling everything the record held, into
+`<measure>_contribution (refresh_id, record_id, key_id, value)`. The measure's own tables hold the
+state that results, and **the state is always the sum of the contributions** - which is what lets
+history be archived and cut back without the working tables growing.
+
+| what a refresh does | what it contributes |
+|---|---|
+| a value arrives at 10 | `+10` |
+| it moves to 12 | `+2` |
+| it does not move | nothing at all |
+| its key is left out of a later refresh | `-12` |
+| its record is removed | `-12` |
+
+### The timestamp, and the id
+
+The timestamp is yours: it marks the point the data belongs to, not the moment of writing, so two
+refreshes may share one - a correction of the same point, or several measures refreshed together.
+Because of that it cannot identify a refresh, and the id can: committing the same id twice applies it
+once and returns `false`, so a publisher that commits and misses the acknowledgement can simply
+publish again. Refreshes that share a timestamp are ordered by the sequence they committed in.
+
+Every measure in one refresh must have been `writtenBy` the same publisher: a timeline belongs to
+whoever is publishing it. The ledger of refreshes is one table, `measure_refresh`, shared by every
+measure in the database.
+
+### What it costs
+
+Measured on 100 records of 25 values, published 200 times to a database on disk: 4.05 ms a refresh
+against 2.04 ms to replace the same records outright and keep no history, and 2,316 KB against
+1,292 KB on disk. The state stays 2,500 values however long it runs; the contributions reach 51,999
+rows - 2,500 from the first refresh, then only what moved. Resolving the 250 keys used to take 2.1 ms
+of that until they were remembered: dictionary ids never change, so after the first refresh a
+publisher writing the same keys does no SQL for them at all. See `examples/src/main/java/CoreRefreshes.java`.
+
 ## Archiving itself
 
 ```java

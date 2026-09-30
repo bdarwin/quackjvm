@@ -3,6 +3,21 @@
 ## Unreleased
 
 ### Added
+- `MeasureRefresh`: publishing a measure over and over as refreshes rather than overwrites. A refresh
+  is a point on a publisher's timeline - a timestamp it chooses and an id that makes it itself - and
+  covers any number of measures, each of them either everything the publisher has or only what moved.
+  A record that appears replaces itself entirely; a full set also removes records it does not name;
+  `remove(...)` cancels a record. Nothing is overwritten: each refresh writes contributions saying
+  how much every value moved, so what was published can still be seen after it has gone and the state
+  is always their sum. Committing an id twice applies it once. Measured on 100 records of 25 values
+  published 200 times: 4.05 ms a refresh against 2.04 ms for a plain replace that keeps no history,
+  with the state staying 2,500 values and the contributions reaching 51,999 rows.
+- Dictionary ids are now remembered per instance, since they never change: a publisher writing the
+  same keys over and over does no SQL to resolve them after the first time, which was 2.1 ms of a
+  6.5 ms refresh of 250 keys. Writing through a definition the tables disagree with is now refused
+  outright, pointing at `migrate`, rather than quietly matching keys on the fields it does have.
+
+### Added
 - `MeasureTable`: values that each belong to a record and are identified by several fields - stored
   sparsely, a row per value that exists, with each distinct key held once in a dictionary - and read
   back grouped or pivoted by any of those fields through `query().rows(...).columns(...)`. A field

@@ -35,11 +35,11 @@ omission. A record that appears in either kind **replaces itself entirely**. A f
 that: anything it does not mention is gone. Records can also be removed explicitly.
 
 ```java
-Refresh refresh = service.refreshAt(timestamp, "run-2026-09-30T09:00");
-refresh.full(exposure, everythingExposureHas);
-refresh.increment(sensitivity, whatMoved);
-refresh.remove(coverage, 42);
-refresh.commit();
+MeasureRefresh.at(timestamp, "run-2026-09-30T09:00")
+        .full(exposure, everythingExposureHas)
+        .increment(sensitivity, whatMoved)
+        .remove(coverage, 42)
+        .commit(connection);
 ```
 
 ## Everything is a contribution
@@ -151,16 +151,22 @@ Built, in `MeasureTable` and `MeasureQuery`, with the examples `CoreMeasures` an
 conversion, declared orders, parts and provenance, archiving a part to a self-contained Parquet file,
 querying files where they lie, restoring them, fields added later, and archiving by size.
 
+Built since, in `MeasureRefresh`, with `CoreRefreshes`: **refreshes and contributions** - the refresh
+model, full and increment per measure, removals that keep the audit, contributions worked out from
+the current state, the id enforced, and the ledger. Measured on 100 records of 25 values published
+200 times to a database on disk: 4.05 ms a refresh against 2.04 ms for a plain replace that keeps no
+history, the state staying 2,500 values and the contributions reaching 51,999 rows. The 0.99 ms and
+1.87 ms in the table above were the prototype's write alone; the built path also resolves keys,
+writes the ledger row and commits to disk.
+
 To build, in this order, each with a runnable example:
 
-1. **Refreshes and contributions** - the refresh model, full and increment, removals, contributions
-   worked out from current state, the id enforced.
-2. **The two instances** - live holding current state and an outbox, archive holding the ledger, the
-   shipper between them.
-3. **Reading as of a point** - across live, archive and files, with zeros dropped.
-4. **Export, compaction and pruning** on schedules, and the manifest that ties one refresh's measures
+1. **The two instances** - live holding current state and an outbox, archive holding the ledger, the
+   shipper between them. The contributions table is the outbox; what it needs is a destination.
+2. **Reading as of a point** - across live, archive and files, with zeros dropped.
+3. **Export, compaction and pruning** on schedules, and the manifest that ties one refresh's measures
    together.
-5. **Rebuilding the live instance** from the archive.
+4. **Rebuilding the live instance** from the archive.
 
 ## What this costs you
 

@@ -70,6 +70,8 @@ public final class MeasureTable {
     private static final int ATTEMPTS = 3;
     /** Values written between two checks of whether the measure is due to be archived. */
     private static final long CHECK_EVERY = 50_000;
+    /** How many keys one instance remembers the dictionary id of. */
+    private static final int KEY_CACHE_LIMIT = 200_000;
 
     private final String name;
     private final List<String> fields;
@@ -83,9 +85,29 @@ public final class MeasureTable {
     private final ArchiveHandler archiveHandler;
     private final String keyTable;
     private final String valueTable;
+    private final String contributionTable;
     private final String sequence;
     private final ReentrantLock writeLock = new ReentrantLock(true);
+    /** Key fields to dictionary id, for keys this instance has looked up. Guarded by writeLock. */
+    private final Map<List<String>, Integer> keyIds = new KeyCache();
     private long writtenSinceCheck;
+    /** Whether the tables have been checked against this definition. Guarded by writeLock. */
+    private boolean checkedColumns;
+
+    /** The most recently used keys, bounded so that a measure with millions cannot fill the heap. */
+    private static final class KeyCache extends LinkedHashMap<List<String>, Integer> {
+
+        private static final long serialVersionUID = 1L;
+
+        private KeyCache() {
+            super(1_024, 0.75f, true);
+        }
+
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<List<String>, Integer> eldest) {
+            return size() > KEY_CACHE_LIMIT;
+        }
+    }
 
     /** Told about each part as it is archived, so its file can be moved somewhere else. */
     @FunctionalInterface
@@ -109,6 +131,7 @@ public final class MeasureTable {
         this.archiveHandler = builder.archiveHandler;
         this.keyTable = name + "_key";
         this.valueTable = name + "_value";
+        this.contributionTable = name + "_contribution";
         this.sequence = name + "_key_id";
     }
 
@@ -281,6 +304,15 @@ public final class MeasureTable {
         return valueTable;
     }
 
+    /**
+     * The contributions written by refreshes: {@code (refresh_id, record_id, key_id, value)}, where
+     * the value is how much that refresh moved the key by. Nothing here is ever changed once
+     * written - see {@link MeasureRefresh}.
+     */
+    public String getContributionTable() {
+        return contributionTable;
+    }
+
     public MeasureBatch.Builder batch() {
         return new MeasureBatch.Builder(fields);
     }
@@ -297,6 +329,9 @@ public final class MeasureTable {
         Sql.execute(connection, "CREATE TABLE IF NOT EXISTS " + Sql.quote(valueTable)
                 + " (record_id BIGINT NOT NULL, key_id INTEGER NOT NULL, value DOUBLE,"
                 + " part VARCHAR NOT NULL, written_by VARCHAR NOT NULL, written_at TIMESTAMP NOT NULL)");
+        Sql.execute(connection, "CREATE TABLE IF NOT EXISTS " + Sql.quote(contributionTable)
+                + " (refresh_id VARCHAR NOT NULL, record_id BIGINT NOT NULL, key_id INTEGER NOT NULL,"
+                + " value DOUBLE NOT NULL)");
     }
 
     /**
@@ -352,6 +387,8 @@ public final class MeasureTable {
                         + Sql.quote(keyTable));
                 Sql.execute(connection, "DROP TABLE " + Sql.quote(keyTable));
                 Sql.execute(connection, "ALTER TABLE " + Sql.quote(rebuilt) + " RENAME TO " + Sql.quote(keyTable));
+                checkedColumns = false;
+                keyIds.clear();
                 if (ownTransaction) {
                     Transactions.commit(connection);
                 }
@@ -478,6 +515,7 @@ public final class MeasureTable {
         }
         writeLock.lock();
         try {
+            ensureAgreesWithTables(connection);
             boolean ownTransaction = Transactions.isAutoCommit(connection);
             for (int attempt = 1; ; attempt++) {
                 try {
@@ -514,8 +552,155 @@ public final class MeasureTable {
         archiveIfTooLarge(connection, batch.valueCount());
     }
 
-    /** The dictionary id of each distinct key in the batch, adding any the dictionary lacks. */
+    // ---------- Refreshes ----------
+
+    /**
+     * Applies one measure's share of a refresh, inside the caller's transaction: works out what each
+     * value moved by, writes those contributions, and leaves the table holding the new state.
+     *
+     * <p>Records in the batch replace themselves entirely, whichever kind this is - a key a record
+     * held and the batch does not is cancelled. A full set says more: records not in the batch at all
+     * are cancelled too. Records in {@code removed} are cancelled whether the batch names them or
+     * not, so that what was published stays in the contributions.</p>
+     *
+     * @return how many contributions were written - values that actually moved
+     */
+    long refresh(Connection connection, MeasureBatch batch, boolean full, long[] removed, String refreshId,
+                 LocalDateTime at) throws SQLException {
+        if (!batch.getFields().equals(fields)) {
+            throw new IllegalArgumentException("That batch is for the key " + batch.getFields() + ", not " + fields);
+        }
+        ensureAgreesWithTables(connection);
+        int[] idOfKey = resolveCreating(connection, batch);
+        String incoming = Sql.quote(name + "__refreshing");
+        Sql.execute(connection, "CREATE OR REPLACE TEMP TABLE " + incoming
+                + " (record_id BIGINT, key_id INTEGER, value DOUBLE)");
+        if (batch.valueCount() > 0) {
+            try (DuckDBAppender appender = Connections.duckDB(connection)
+                    .createAppender("temp", "main", name + "__refreshing")) {
+                for (int record = 0; record < batch.recordCount(); record++) {
+                    long recordId = batch.recordId(record);
+                    for (int position = batch.valueStart(record); position < batch.valueEnd(record); position++) {
+                        appender.beginRow();
+                        appender.append(recordId);
+                        appender.append(idOfKey[batch.keyOfValue(position)]);
+                        appender.append(batch.value(position));
+                        appender.endRow();
+                    }
+                }
+                appender.flush();
+            }
+        }
+        String scope = full ? "" : " WHERE record_id IN (SELECT record_id FROM " + touched(connection, batch, removed)
+                + ")";
+        // A full outer join, so that a key only the batch has and a key only the table has both
+        // become contributions - one added, one cancelled.
+        long moved = Sql.executeUpdate(connection, "INSERT INTO " + Sql.quote(contributionTable)
+                + " SELECT " + literal(refreshId) + ", coalesce(i.record_id, v.record_id),"
+                + " coalesce(i.key_id, v.key_id), coalesce(i.value, 0) - coalesce(v.value, 0)"
+                + " FROM " + incoming + " i FULL OUTER JOIN (SELECT record_id, key_id, value FROM "
+                + Sql.quote(valueTable) + scope + ") v ON v.record_id = i.record_id AND v.key_id = i.key_id"
+                + " WHERE coalesce(i.value, 0) IS DISTINCT FROM coalesce(v.value, 0)", List.of());
+        Sql.execute(connection, "DELETE FROM " + Sql.quote(valueTable) + (full ? "" : scope));
+        if (batch.valueCount() > 0) {
+            Sql.execute(connection, "INSERT INTO " + Sql.quote(valueTable) + " SELECT record_id, key_id, value, "
+                    + literal(DEFAULT_PART) + ", " + literal(writtenBy) + ", " + literal(at.toString())
+                    + "::TIMESTAMP FROM " + incoming);
+        }
+        Sql.execute(connection, "DROP TABLE IF EXISTS " + incoming);
+        return moved;
+    }
+
+    /** The records this refresh touches: those it publishes, and those it removes. */
+    private String touched(Connection connection, MeasureBatch batch, long[] removed) throws SQLException {
+        String table = name + "__touched";
+        Sql.execute(connection, "CREATE OR REPLACE TEMP TABLE " + Sql.quote(table) + " (record_id BIGINT)");
+        try (DuckDBAppender appender = Connections.duckDB(connection).createAppender("temp", "main", table)) {
+            for (int record = 0; record < batch.recordCount(); record++) {
+                appender.beginRow();
+                appender.append(batch.recordId(record));
+                appender.endRow();
+            }
+            for (long recordId : removed) {
+                appender.beginRow();
+                appender.append(recordId);
+                appender.endRow();
+            }
+            appender.flush();
+        }
+        return Sql.quote(table);
+    }
+
+    /**
+     * Refuses to write through a definition the tables disagree with - a field added or renamed since
+     * they were made. Checked once per instance, on its first write, at the cost of one DESCRIBE.
+     *
+     * <p>Without this the disagreement is silent: a key resolved by the fields the definition does
+     * have would match some other key that happens to share them, and values would pile onto it.</p>
+     */
+    private void ensureAgreesWithTables(Connection connection) {
+        if (checkedColumns) {
+            return;
+        }
+        List<String> existing;
+        try {
+            existing = new ArrayList<>(columnsOfQuery(connection, Sql.quote(keyTable)));
+        }
+        catch (RuntimeException notThereYet) {
+            // No tables to disagree with; the write itself says what is missing.
+            return;
+        }
+        existing.remove("id");
+        if (!existing.equals(fields)) {
+            throw new IllegalStateException(keyTable + " holds " + existing + ", but this definition has " + fields
+                    + " - call migrate(connection) to bring the tables up to it, or restore into a new measure");
+        }
+        checkedColumns = true;
+    }
+
+    /** Locks this measure against other writers through this instance. */
+    void lockWrites() {
+        writeLock.lock();
+    }
+
+    void unlockWrites() {
+        writeLock.unlock();
+    }
+
+    /** How many contributions have been written to this measure, over all refreshes. */
+    public long contributionCount(Connection connection) {
+        return Sql.queryLong(connection, "SELECT count(*) FROM " + Sql.quote(contributionTable), List.of());
+    }
+
+    /**
+     * The dictionary id of each distinct key in the batch, adding any the dictionary lacks.
+     *
+     * <p>Ids never change, so those already looked up are remembered: a publisher writing the same
+     * keys over and over then does no SQL at all for them, which was measured at 2.1 ms of a 6.5 ms
+     * refresh of 250 keys. Only keys the dictionary already had are remembered - one this call is
+     * adding would be a lie if the transaction rolled back.</p>
+     */
     private int[] resolveCreating(Connection connection, MeasureBatch batch) throws SQLException {
+        int[] result = new int[batch.keyCount()];
+        List<List<String>> unknown = new ArrayList<>();
+        List<Integer> positions = new ArrayList<>();
+        for (int key = 0; key < batch.keyCount(); key++) {
+            List<String> parts = new ArrayList<>(fields.size());
+            for (int field = 0; field < fields.size(); field++) {
+                parts.add(batch.keyPart(key, field));
+            }
+            Integer known = keyIds.get(parts);
+            if (known != null) {
+                result[key] = known;
+            }
+            else {
+                unknown.add(parts);
+                positions.add(key);
+            }
+        }
+        if (unknown.isEmpty()) {
+            return result;
+        }
         String staging = name + "__keys";
         StringBuilder columns = new StringBuilder();
         for (int i = 0; i < fields.size(); i++) {
@@ -523,50 +708,55 @@ public final class MeasureTable {
         }
         Sql.execute(connection, "CREATE OR REPLACE TEMP TABLE " + Sql.quote(staging) + " (" + columns + ")");
         try (DuckDBAppender appender = Connections.duckDB(connection).createAppender("temp", "main", staging)) {
-            for (int key = 0; key < batch.keyCount(); key++) {
+            for (List<String> parts : unknown) {
                 appender.beginRow();
-                for (int field = 0; field < fields.size(); field++) {
-                    appender.append(batch.keyPart(key, field));
+                for (String part : parts) {
+                    appender.append(part);
                 }
                 appender.endRow();
             }
             // Explicit, never left to close(): DuckDB's Appender swallows a failed flush on close.
             appender.flush();
         }
-        String match = matchOn("k", "s");
-        Sql.execute(connection, "INSERT INTO " + Sql.quote(keyTable) + " SELECT nextval('" + sequence + "'), s.*"
-                + " FROM (SELECT DISTINCT * FROM " + Sql.quote(staging) + ") s WHERE NOT EXISTS (SELECT 1 FROM "
-                + Sql.quote(keyTable) + " k WHERE " + match + ")");
+        Map<List<String>, Integer> ids = idsOf(connection, staging);
+        // These the dictionary had before this call, so they are safe to remember.
+        keyIds.putAll(ids);
+        if (ids.size() < unknown.size()) {
+            Sql.execute(connection, "INSERT INTO " + Sql.quote(keyTable) + " SELECT nextval('" + sequence + "'), s.*"
+                    + " FROM " + Sql.quote(staging) + " s WHERE NOT EXISTS (SELECT 1 FROM " + Sql.quote(keyTable)
+                    + " k WHERE " + matchOn("k", "s") + ")");
+            ids = idsOf(connection, staging);
+        }
+        for (int i = 0; i < unknown.size(); i++) {
+            Integer id = ids.get(unknown.get(i));
+            if (id == null) {
+                throw new IllegalStateException("Could not add a key to the dictionary of " + name + ": "
+                        + unknown.get(i));
+            }
+            result[positions.get(i)] = id;
+        }
+        return result;
+    }
 
-        Map<List<String>, Integer> ids = new HashMap<>(batch.keyCount() * 2);
+    /** The dictionary ids of the keys staged in a temp table, by their fields. */
+    private Map<List<String>, Integer> idsOf(Connection connection, String staging) throws SQLException {
         StringBuilder select = new StringBuilder("SELECT k.id");
         for (String field : fields) {
             select.append(", k.").append(Sql.quote(field));
         }
+        Map<List<String>, Integer> ids = new HashMap<>();
         try (PreparedStatement statement = connection.prepareStatement(select + " FROM " + Sql.quote(keyTable)
-                + " k JOIN (SELECT DISTINCT * FROM " + Sql.quote(staging) + ") s ON " + match);
+                + " k JOIN " + Sql.quote(staging) + " s ON " + matchOn("k", "s"));
              ResultSet rows = statement.executeQuery()) {
             while (rows.next()) {
                 List<String> parts = new ArrayList<>(fields.size());
                 for (int field = 0; field < fields.size(); field++) {
                     parts.add(rows.getString(field + 2));
                 }
-                ids.put(List.copyOf(parts), rows.getInt(1));
+                ids.put(parts, rows.getInt(1));
             }
         }
-        int[] result = new int[batch.keyCount()];
-        for (int key = 0; key < batch.keyCount(); key++) {
-            List<String> parts = new ArrayList<>(fields.size());
-            for (int field = 0; field < fields.size(); field++) {
-                parts.add(batch.keyPart(key, field));
-            }
-            Integer id = ids.get(List.copyOf(parts));
-            if (id == null) {
-                throw new IllegalStateException("Could not add a key to the dictionary of " + name + ": " + parts);
-            }
-            result[key] = id;
-        }
-        return result;
+        return ids;
     }
 
     /** {@code k."a" = s."a" AND ...}, the join between the dictionary and another set of keys. */

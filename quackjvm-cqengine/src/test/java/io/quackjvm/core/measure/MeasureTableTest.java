@@ -214,6 +214,20 @@ public class MeasureTableTest {
     }
 
     @Test
+    public void writingThroughADefinitionTheTablesDisagreeWithIsRefused() {
+        // Same tables, a field short: without the check, keys would be matched on 'a' and 'b' alone
+        // and values would pile onto whichever key happens to share them.
+        MeasureTable stale = MeasureTable.named("m").fields("a", "b").build();
+        try {
+            stale.replace(connection, stale.batch().record(1).put(9.0, "x", "y").build());
+            fail("expected a definition the tables disagree with to be refused");
+        }
+        catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("migrate"));
+        }
+    }
+
+    @Test
     public void theQueryHandsBackItsSql() {
         String sql = measures.query().rows("a").columns("point").where("unit", "U1").sql(connection);
         assertTrue(sql, sql.contains("WITH perKey AS (SELECT key_id, sum(value) AS total"));
