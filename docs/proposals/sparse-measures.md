@@ -71,7 +71,7 @@ would rather send contributions itself can.
 | | holds | written | read for |
 |---|---|---|---|
 | **live** | current state, plus an outbox of contributions not yet shipped | one transaction per refresh | panels, as of now |
-| **archive** | every contribution, with its refresh timestamp and id | in bulk, by the shipper | history, as-of, export |
+| **history** | every contribution, with its refresh timestamp and id | in bulk, by the shipper | history, as-of, export |
 | **Parquet** | what the archive has exported | on a schedule | downstream, and archived as-of reads |
 
 The live instance stays the same size however long it runs, because it only ever holds current state:
@@ -159,14 +159,22 @@ history, the state staying 2,500 values and the contributions reaching 51,999 ro
 1.87 ms in the table above were the prototype's write alone; the built path also resolves keys,
 writes the ledger row and commits to disk.
 
+Built after that, in `MeasureHistory`, with `CoreMeasureHistory`: **the two instances** - the live
+database holding current state with the contributions as its outbox, a second database holding every
+contribution, and the shipper between them, guarded by the history's own ledger so an interrupted
+shipment can be run again and shipping one measure never strands another's rows. Contributions reach
+the history with their key fields beside them, since dictionary ids are local to the database that
+minted them and several services ship into one history. `forgetShippedRefreshes` trims the live
+ledger, the one thing that would otherwise grow for ever. Measured on 1,000 records of 50 values:
+18 ms to ship the first 50,000 contributions, single digits for an increment's 5,000, 0.7 ms with
+nothing waiting, the live database settling at 1,804 KB and the history at 1,292 KB.
+
 To build, in this order, each with a runnable example:
 
-1. **The two instances** - live holding current state and an outbox, archive holding the ledger, the
-   shipper between them. The contributions table is the outbox; what it needs is a destination.
-2. **Reading as of a point** - across live, archive and files, with zeros dropped.
-3. **Export, compaction and pruning** on schedules, and the manifest that ties one refresh's measures
+1. **Reading as of a point** - across live, history and files, with zeros dropped.
+2. **Export, compaction and pruning** on schedules, and the manifest that ties one refresh's measures
    together.
-4. **Rebuilding the live instance** from the archive.
+3. **Rebuilding the live database** from the history.
 
 ## What this costs you
 

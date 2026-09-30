@@ -12,6 +12,17 @@
   is always their sum. Committing an id twice applies it once. Measured on 100 records of 25 values
   published 200 times: 4.05 ms a refresh against 2.04 ms for a plain replace that keeps no history,
   with the state staying 2,500 values and the contributions reaching 51,999 rows.
+- `MeasureHistory`: a second database holding every contribution ever made, so the one being written
+  to holds only current state and stays the same size however long it runs. A refresh writes the state
+  and its contributions into the live database in one transaction - DuckDB allows no more than one
+  attached database per transaction - and `ship(live, measures...)` moves them in bulk, then clears
+  the outbox. A refresh's entry in the history's ledger is what says its contributions are there,
+  written in the same transaction, so an interrupted shipment can simply be run again and shipping one
+  measure never strands another's rows. Contributions arrive with their key fields beside them rather
+  than a dictionary id, so several services can ship into one history. `forgetShippedRefreshes(live,
+  keep)` trims the live ledger, which is the one thing that would otherwise grow for ever, while the
+  history keeps every refresh. Measured on 1,000 records of 50 values: 18 ms to ship the first 50,000
+  contributions, single digits for an increment's 5,000, 0.7 ms with nothing waiting.
 - Dictionary ids are now remembered per instance, since they never change: a publisher writing the
   same keys over and over does no SQL to resolve them after the first time, which was 2.1 ms of a
   6.5 ms refresh of 250 keys. Writing through a definition the tables disagree with is now refused

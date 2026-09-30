@@ -209,6 +209,70 @@ rows - 2,500 from the first refresh, then only what moved. Resolving the 250 key
 of that until they were remembered: dictionary ids never change, so after the first refresh a
 publisher writing the same keys does no SQL for them at all. See `examples/src/main/java/CoreRefreshes.java`.
 
+## Two databases: state here, history there
+
+A refresh writes the new state **and** its contributions into the live database in one transaction,
+the contributions being an outbox. A shipper moves them into a second database - the history - in
+bulk, on whatever schedule suits, and clears the outbox.
+
+```java
+MeasureHistory history = MeasureHistory.at("/var/lib/quack/history.duckdb");
+history.create(live, exposure, coverage);
+
+MeasureRefresh.at(now, "run-1").increment(exposure, batch).commit(live);   // lands in live
+history.ship(live, exposure, coverage);                                   // later, in bulk
+```
+
+The live database then holds only current state and stays the same size however long it runs, while
+history grows in a file of its own that can be exported and pruned on its own schedule.
+
+### Why two, rather than one transaction into both
+
+DuckDB refuses it:
+
+> *Attempting to write to database "history" in a transaction that has already modified database
+> "live" - a single transaction can only write to a single attached database.*
+
+So shipping is two transactions: one writes the history, the next clears what it took. That is safe in
+both directions.
+
+- **Nothing is lost.** Until it is shipped, a contribution sits in a committed table in the live
+  database. A crash before shipping loses nothing; the next shipment takes it.
+- **Nothing is counted twice.** A refresh's entry in the history's ledger is what says its
+  contributions are there, written in the same transaction as they are. A crash between the two
+  transactions leaves shipped contributions in the outbox, and the next shipment finds their entry and
+  passes over them.
+- **Shipping one measure does not strand another.** Only the measures being shipped get their ledger
+  entries, so a refresh that covered three measures can be shipped one at a time.
+
+### What the history holds
+
+Contributions arrive with their key fields beside them rather than a dictionary id, since ids are
+local to the database that minted them - so several services, each with its own live database, can
+ship into one history and their rows line up. It is also the shape a Parquet file wants, so exporting
+will be a copy rather than a join.
+
+### Forgetting refreshes in the live ledger
+
+The live ledger is what makes committing an id twice harmless, and a publisher that missed an
+acknowledgement republishes within seconds, not days. At a refresh every few milliseconds it would
+otherwise be the one thing in the live database that grows for ever:
+
+```java
+history.forgetShippedRefreshes(live, Duration.ofHours(1));
+```
+
+Only refreshes already in the history are forgotten, and the history keeps all of them.
+
+### What it costs
+
+Measured on 1,000 records of 50 values - a full set then 20 increments each moving a tenth of the
+records, shipping after every refresh: 18 ms to ship the first 50,000 contributions, single digits for
+the 5,000 of an increment, and 0.7 ms when nothing is waiting, because the shipper asks the outbox
+what it holds before looking anywhere else. The live database settled at 1,804 KB holding 50,000
+values, the history at 1,292 KB holding 149,999 contributions. See
+`examples/src/main/java/CoreMeasureHistory.java`.
+
 ## Archiving itself
 
 ```java
