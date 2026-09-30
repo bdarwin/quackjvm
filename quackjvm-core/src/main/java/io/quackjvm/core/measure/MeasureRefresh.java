@@ -35,10 +35,14 @@ import java.util.Map;
  *
  * <h2>Contributions</h2>
  *
- * <p>Nothing is overwritten. A change is written as cancelling the old value and adding the new, a
- * removal as cancelling everything the record held, so that what was published can still be seen
- * afterwards. The measure's own tables hold the state that results; the contributions are the
- * history, and the state is always their sum.</p>
+ * <p>Nothing is overwritten. In an increment, a change is written as cancelling the old value and
+ * adding the new, and a removal as cancelling everything the record held, so that what was published
+ * can still be seen afterwards. A {@link #full} set is a baseline instead: it contributes the values
+ * themselves, and whatever it does not name is simply not in it.</p>
+ *
+ * <p>The measure's own tables hold the state that results, and that state is always the sum of the
+ * contributions from the last full set onwards - which is the one rule reading as of a point in time
+ * follows, and the reason everything before a full set can be thrown away.</p>
  *
  * <h2>The timestamp, and the id</h2>
  *
@@ -56,6 +60,8 @@ public final class MeasureRefresh {
 
     /** The ledger of refreshes, shared by every measure in a database. */
     public static final String LEDGER = "measure_refresh";
+    /** How far along its timeline each publisher has taken each measure. */
+    public static final String WATERMARK = "measure_watermark";
 
     private static final String SEQUENCE = "measure_refresh_seq";
 
@@ -172,6 +178,9 @@ public final class MeasureRefresh {
                 return false;
             }
             LocalDateTime when = LocalDateTime.ofInstant(at, ZoneOffset.UTC);
+            for (MeasureTable measure : measures) {
+                checkTimeline(connection, measure, when);
+            }
             long sequence = Sql.queryLong(connection, "SELECT nextval('" + SEQUENCE + "')", List.of());
             for (MeasureTable measure : measures) {
                 Entry entry = entries.get(measure);
@@ -186,6 +195,10 @@ public final class MeasureRefresh {
                         + MeasureTable.literal(when.toString()) + "::TIMESTAMP, " + sequence + ", "
                         + MeasureTable.literal(measure.getName()) + ", " + (entry.full ? "'full'" : "'increment'")
                         + ")");
+                Sql.execute(connection, "INSERT OR REPLACE INTO " + Sql.quote(WATERMARK) + " VALUES ("
+                        + MeasureTable.literal(measure.getWrittenBy()) + ", "
+                        + MeasureTable.literal(measure.getName()) + ", "
+                        + MeasureTable.literal(when.toString()) + "::TIMESTAMP)");
             }
             if (ownTransaction) {
                 Transactions.commit(connection);
@@ -206,6 +219,36 @@ public final class MeasureRefresh {
         }
     }
 
+    /**
+     * A publisher's timeline only moves forward. A refresh dated before the last one it published of
+     * that measure is refused, because a contribution says how much a value moved from what the
+     * measure held when it was written: were an older point allowed in afterwards, reading as of a
+     * point between the two would add that movement to a state it was never measured against.
+     *
+     * <p>A correction is published at a new point, which is also the truth of it - the correction
+     * happened now. Two refreshes may share a point; those are ordered by the sequence they
+     * committed in, and their movements still chain in that order.</p>
+     */
+    private void checkTimeline(Connection connection, MeasureTable measure, LocalDateTime when) {
+        String last;
+        try (java.sql.PreparedStatement statement = connection.prepareStatement("SELECT refreshed_at FROM "
+                + Sql.quote(WATERMARK) + " WHERE writer = " + MeasureTable.literal(measure.getWrittenBy())
+                + " AND measure = " + MeasureTable.literal(measure.getName()));
+             java.sql.ResultSet rows = statement.executeQuery()) {
+            last = rows.next() ? rows.getString(1) : null;
+        }
+        catch (java.sql.SQLException e) {
+            throw new IllegalStateException("Failed to read how far '" + measure.getWrittenBy() + "' has taken "
+                    + measure.getName(), e);
+        }
+        if (last != null && LocalDateTime.parse(last.replace(' ', 'T')).isAfter(when)) {
+            throw new IllegalArgumentException("'" + measure.getWrittenBy() + "' has already published "
+                    + measure.getName() + " at " + last + ", and a timeline only moves forward - this refresh is"
+                    + " dated " + when + ". Publish the correction at a later point: it is a change made now to"
+                    + " what was said then, and reading as of a point in between must not see it.");
+        }
+    }
+
     private boolean alreadyCommitted(Connection connection) {
         return Sql.queryLong(connection, "SELECT count(*) FROM " + Sql.quote(LEDGER) + " WHERE refresh_id = "
                 + MeasureTable.literal(id), List.of()) > 0;
@@ -218,6 +261,11 @@ public final class MeasureRefresh {
                 + " (refresh_id VARCHAR NOT NULL, writer VARCHAR NOT NULL, refreshed_at TIMESTAMP NOT NULL,"
                 + " seq BIGINT NOT NULL, measure VARCHAR NOT NULL, kind VARCHAR NOT NULL,"
                 + " PRIMARY KEY (refresh_id, measure))");
+        // Kept for ever, unlike the ledger, which is trimmed: it is what says a timeline may not
+        // go backwards, and one row per publisher per measure costs nothing.
+        Sql.execute(connection, "CREATE TABLE IF NOT EXISTS " + Sql.quote(WATERMARK)
+                + " (writer VARCHAR NOT NULL, measure VARCHAR NOT NULL, refreshed_at TIMESTAMP NOT NULL,"
+                + " PRIMARY KEY (writer, measure))");
     }
 
     @Override

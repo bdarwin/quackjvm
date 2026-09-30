@@ -3,6 +3,8 @@ package io.quackjvm.core.measure;
 import io.quackjvm.core.duckdb.Sql;
 import io.quackjvm.core.duckdb.Transactions;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.time.Duration;
 import java.time.Instant;
@@ -49,6 +51,8 @@ public final class MeasureHistory {
 
     /** What the history database is attached as. */
     public static final String ALIAS = "quack_history";
+
+    private static final String PRUNED = "measure_pruned";
 
     private final String location;
     private final String alias;
@@ -235,6 +239,318 @@ public final class MeasureHistory {
                 + " r.refreshed_at < " + MeasureTable.literal(before.toString()) + "::TIMESTAMP AND EXISTS"
                 + " (SELECT 1 FROM " + refreshTable() + " h WHERE h.refresh_id = r.refresh_id"
                 + " AND h.measure = r.measure)", List.of());
+    }
+
+    // ---------- Parquet ----------
+
+    /** What one export wrote. */
+    public record Exported(List<String> files, long refreshes, long contributions) {
+    }
+
+    /**
+     * Writes contributions the history has not exported yet as Parquet, one file per day of refresh,
+     * and remembers that it has.
+     *
+     * <p>Exporting is not pruning. Downstream wants files all day, where the history can only be cut
+     * back once a later full set exists - so these are separate calls, on separate schedules.</p>
+     *
+     * <p>A file holds a row per contribution with its key fields beside it, the refresh it belongs to
+     * and when that was, and the measure's definition in the file's metadata. Anything that reads
+     * Parquet reads the rows; nothing else is needed to understand them.</p>
+     *
+     * @param location where to write: a directory, or anything DuckDB can write such as {@code s3://}
+     */
+    public Exported export(Connection live, MeasureTable measure, String location) {
+        attach(live);
+        createExportLedger(live);
+        List<String> days = pendingDays(live, measure);
+        List<String> files = new ArrayList<>();
+        long refreshes = 0;
+        long contributions = 0;
+        for (String day : days) {
+            String file = fileFor(location, measure, day);
+            String pending = pending(measure, day);
+            Sql.execute(live, "COPY (SELECT c.record_id, " + measure.fieldList("c") + ", c.value, r.refresh_id,"
+                    + " r.refreshed_at, r.writer, r.kind, r.seq FROM " + contributionTable(measure) + " c JOIN "
+                    + refreshTable() + " r ON r.refresh_id = c.refresh_id AND r.measure = "
+                    + MeasureTable.literal(measure.getName()) + " WHERE c.refresh_id IN (" + pending
+                    + ") ORDER BY r.seq) TO " + MeasureTable.literal(file) + " (FORMAT parquet, COMPRESSION zstd,"
+                    + " KV_METADATA {" + MeasureTable.METADATA_KEY + ": "
+                    + MeasureTable.literal(measure.definitionJson(day)) + "})");
+            contributions += Sql.queryLong(live, "SELECT count(*) FROM " + contributionTable(measure)
+                    + " WHERE refresh_id IN (" + pending + ")", List.of());
+            refreshes += Sql.executeUpdate(live, "INSERT INTO " + exportTable() + " SELECT "
+                    + MeasureTable.literal(measure.getName()) + ", refresh_id, " + MeasureTable.literal(day) + ", "
+                    + MeasureTable.literal(file) + ", now()::TIMESTAMP FROM (" + pending + ")", List.of());
+            files.add(file);
+        }
+        return new Exported(files, refreshes, contributions);
+    }
+
+    /**
+     * Folds a day's exported files into one, and deletes the originals.
+     *
+     * <p>Only days that are finished, so that a consumer reading files as they appear is never
+     * disturbed. Measured: 18 ms for a day, and a day as 17 files was 737 KB and 18.6 ms to query
+     * where one compacted file was 579 KB and 14.6 ms.</p>
+     *
+     * @return the file now holding the day, or null if there was nothing to do
+     */
+    public String compact(Connection live, MeasureTable measure, String location, String day) {
+        if (location.contains("://")) {
+            throw new IllegalArgumentException("Compaction deletes the files it replaces, which only works on a"
+                    + " local path - compact there and upload the result");
+        }
+        Path directory = Path.of(location, "measure=" + measure.getName(), "part=" + safe(day));
+        List<String> existing = new ArrayList<>();
+        try (var files = Files.list(directory)) {
+            files.filter(path -> path.toString().endsWith(".parquet")).map(Path::toString).sorted()
+                    .forEach(existing::add);
+        }
+        catch (java.io.IOException noDirectory) {
+            return null;
+        }
+        if (existing.size() < 2) {
+            return null;
+        }
+        Path into = directory.resolve("compacting-" + System.currentTimeMillis() + ".parquet.tmp");
+        Sql.execute(live, "COPY (SELECT * FROM " + MeasureTable.readParquet(existing) + " ORDER BY seq) TO "
+                + MeasureTable.literal(into.toString()) + " (FORMAT parquet, COMPRESSION zstd, KV_METADATA {"
+                + MeasureTable.METADATA_KEY + ": " + MeasureTable.literal(measure.definitionJson(day)) + "})");
+        String file = fileFor(location, measure, day);
+        try {
+            Files.move(into, Path.of(file));
+            for (String replaced : existing) {
+                Files.delete(Path.of(replaced));
+            }
+        }
+        catch (java.io.IOException e) {
+            throw new IllegalStateException("Failed to put the compacted file in place of " + existing, e);
+        }
+        Sql.execute(live, "UPDATE " + exportTable() + " SET file = " + MeasureTable.literal(file) + " WHERE measure = "
+                + MeasureTable.literal(measure.getName()) + " AND part = " + MeasureTable.literal(day));
+        return file;
+    }
+
+    /**
+     * Drops contributions the history has exported and no longer needs: everything before the last
+     * full set.
+     *
+     * <p>Back to the last full set and no further, because that is what the live database can be
+     * rebuilt from - and what reading as of any later point needs. A refresh that has not been
+     * exported is never dropped.</p>
+     *
+     * @return how many contributions were dropped
+     */
+    public long prune(Connection live, MeasureTable measure) {
+        attach(live);
+        createExportLedger(live);
+        String name = MeasureTable.literal(measure.getName());
+        long dropped = Sql.executeUpdate(live, "DELETE FROM " + contributionTable(measure) + " WHERE refresh_id IN ("
+                + " SELECT r.refresh_id FROM " + refreshTable() + " r WHERE r.measure = " + name
+                + " AND r.seq < (SELECT coalesce(max(seq), 0) FROM " + refreshTable() + " WHERE measure = " + name
+                + " AND kind = 'full') AND EXISTS (SELECT 1 FROM " + exportTable() + " e WHERE e.measure = " + name
+                + " AND e.refresh_id = r.refresh_id))", List.of());
+        if (dropped > 0) {
+            Sql.execute(live, "CREATE TABLE IF NOT EXISTS " + prunedTable()
+                    + " (measure VARCHAR NOT NULL PRIMARY KEY, seq BIGINT NOT NULL)");
+            Sql.execute(live, "INSERT OR REPLACE INTO " + prunedTable() + " SELECT " + name
+                    + ", coalesce(max(r.seq), 0) FROM " + refreshTable() + " r WHERE r.measure = " + name
+                    + " AND r.seq < (SELECT coalesce(max(seq), 0) FROM " + refreshTable() + " WHERE measure = "
+                    + name + " AND kind = 'full')");
+        }
+        try {
+            // Until the history checkpoints, what was deleted still holds its blocks.
+            Sql.execute(live, "CHECKPOINT " + Sql.quote(alias));
+        }
+        catch (RuntimeException busy) {
+            // Someone is reading it; a later checkpoint releases the space instead.
+        }
+        return dropped;
+    }
+
+    /**
+     * Refuses a point in time whose contributions this history has pruned, rather than answering with
+     * what is left - which would be a wrong number that looks right.
+     *
+     * @param filesSql the exported files the query is also reading, which may hold it, or null
+     */
+    void checkNotPruned(Connection live, MeasureTable measure, Instant at, String filesSql) {
+        if (Sql.queryLong(live, "SELECT count(*) FROM duckdb_tables() WHERE database_name = "
+                + MeasureTable.literal(alias) + " AND table_name = " + MeasureTable.literal(PRUNED), List.of()) == 0) {
+            return;
+        }
+        String name = MeasureTable.literal(measure.getName());
+        String when = MeasureTable.literal(LocalDateTime.ofInstant(at, ZoneOffset.UTC).toString()) + "::TIMESTAMP";
+        long baseline = Sql.queryLong(live, "SELECT coalesce(max(seq), 0) FROM " + refreshTable()
+                + " WHERE measure = " + name + " AND kind = 'full' AND refreshed_at <= " + when, List.of());
+        long pruned = Sql.queryLong(live, "SELECT coalesce(max(seq), 0) FROM " + prunedTable()
+                + " WHERE measure = " + name, List.of());
+        if (baseline > pruned || baseline == 0) {
+            return;
+        }
+        // The files were written before anything was pruned, so the full set this point reads from
+        // being in them means everything after it is too.
+        if (filesSql != null && Sql.queryLong(live, "SELECT count(*) FROM " + filesSql + " WHERE seq = " + baseline,
+                List.of()) > 0) {
+            return;
+        }
+        throw new IllegalStateException(measure.getName() + " as of " + at + " has been pruned from the history"
+                + (filesSql != null ? ", and the files given do not hold it either"
+                : " - it is in the exported files: pass them to from(...) alongside asOf(...)"));
+    }
+
+    /** The files this history has written for a measure, oldest day first. */
+    public List<String> exportedFiles(Connection live, MeasureTable measure) {
+        attach(live);
+        createExportLedger(live);
+        List<String> files = new ArrayList<>();
+        try (java.sql.PreparedStatement statement = live.prepareStatement("SELECT DISTINCT part, file FROM "
+                + exportTable() + " WHERE measure = " + MeasureTable.literal(measure.getName())
+                + " ORDER BY part, file");
+             java.sql.ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                files.add(rows.getString(2));
+            }
+        }
+        catch (java.sql.SQLException e) {
+            throw new IllegalStateException("Failed to read what has been exported", e);
+        }
+        return files;
+    }
+
+    // ---------- Rebuilding the live database ----------
+
+    /**
+     * Rebuilds a measure's state in the live database from the history: the sum of the contributions
+     * from the last full set onwards, as of a point in time.
+     *
+     * <p>The history is the record; the live database is a cache of the current state, and this is how
+     * it comes back - after a corruption, a bad deploy, or a definition that changed. Refuses while
+     * anything is still waiting in the outbox, since that would be thrown away: ship it first.</p>
+     *
+     * @return how many values the measure now holds
+     */
+    public long rebuild(Connection live, MeasureTable measure, Instant at) {
+        attach(live);
+        long waiting = measure.contributionCount(live);
+        if (waiting > 0) {
+            throw new IllegalStateException(waiting + " contributions are still in " + measure.getName()
+                    + "'s outbox; ship them before rebuilding, or they would be lost");
+        }
+        measure.create(live);
+        String name = MeasureTable.literal(measure.getName());
+        String when = MeasureTable.literal(LocalDateTime.ofInstant(at, ZoneOffset.UTC).toString()) + "::TIMESTAMP";
+        String staging = Sql.quote(measure.getName() + "__rebuilding");
+        boolean ownTransaction = Transactions.isAutoCommit(live);
+        measure.lockWrites();
+        try {
+            if (ownTransaction) {
+                Transactions.begin(live);
+            }
+            Sql.execute(live, "CREATE OR REPLACE TEMP TABLE " + staging + " AS WITH since AS ("
+                    + " SELECT coalesce(max(seq), 0) AS seq FROM " + refreshTable() + " WHERE measure = " + name
+                    + " AND kind = 'full' AND refreshed_at <= " + when + "), included AS (SELECT r.refresh_id FROM "
+                    + refreshTable() + " r, since s WHERE r.measure = " + name + " AND r.refreshed_at <= " + when
+                    + " AND r.seq >= s.seq) SELECT record_id, " + measure.fieldList(null) + ", sum(value) AS value"
+                    + " FROM " + contributionTable(measure)
+                    + " WHERE refresh_id IN (SELECT refresh_id FROM included) GROUP BY record_id, "
+                    + measure.fieldList(null) + " HAVING sum(value) <> 0");
+            Sql.execute(live, "DELETE FROM " + Sql.quote(measure.getValueTable()));
+            Sql.execute(live, "INSERT INTO " + Sql.quote(measure.getKeyTable()) + " SELECT nextval('"
+                    + measure.getName() + "_key_id'), s.* FROM (SELECT DISTINCT " + measure.fieldList(null)
+                    + " FROM " + staging + ") s WHERE NOT EXISTS (SELECT 1 FROM "
+                    + Sql.quote(measure.getKeyTable()) + " k WHERE " + measure.matchOn("k", "s") + ")");
+            long values = Sql.executeUpdate(live, "INSERT INTO " + Sql.quote(measure.getValueTable())
+                    + " SELECT f.record_id, k.id, f.value, " + MeasureTable.literal(MeasureTable.DEFAULT_PART) + ", "
+                    + MeasureTable.literal(measure.getWrittenBy()) + ", now()::TIMESTAMP FROM " + staging
+                    + " f JOIN " + Sql.quote(measure.getKeyTable()) + " k ON " + measure.matchOn("k", "f"), List.of());
+            Sql.execute(live, "DROP TABLE IF EXISTS " + staging);
+            if (ownTransaction) {
+                Transactions.commit(live);
+            }
+            return values;
+        }
+        catch (RuntimeException e) {
+            if (ownTransaction) {
+                Transactions.rollbackQuietly(live);
+            }
+            throw new IllegalStateException("Failed to rebuild " + measure.getName() + " from " + location, e);
+        }
+        finally {
+            measure.unlockWrites();
+        }
+    }
+
+    /** Rebuilds the measure as it stands now. */
+    public long rebuild(Connection live, MeasureTable measure) {
+        return rebuild(live, measure, Instant.now().plusSeconds(1));
+    }
+
+    // ---------- Internals ----------
+
+    /** The days of refresh that have contributions not yet exported, oldest first. */
+    private List<String> pendingDays(Connection live, MeasureTable measure) {
+        String name = MeasureTable.literal(measure.getName());
+        List<String> days = new ArrayList<>();
+        try (java.sql.PreparedStatement statement = live.prepareStatement("SELECT DISTINCT"
+                + " strftime(r.refreshed_at, '%Y-%m-%d') AS day FROM " + refreshTable() + " r WHERE r.measure = "
+                + name + " AND EXISTS (SELECT 1 FROM " + contributionTable(measure) + " c"
+                + " WHERE c.refresh_id = r.refresh_id) AND NOT EXISTS (SELECT 1 FROM " + exportTable() + " e"
+                + " WHERE e.measure = " + name + " AND e.refresh_id = r.refresh_id) ORDER BY day");
+             java.sql.ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                days.add(rows.getString(1));
+            }
+        }
+        catch (java.sql.SQLException e) {
+            throw new IllegalStateException("Failed to read what is waiting to be exported", e);
+        }
+        return days;
+    }
+
+    /** The refreshes of one day that have contributions not yet exported. */
+    private String pending(MeasureTable measure, String day) {
+        String name = MeasureTable.literal(measure.getName());
+        return "SELECT r.refresh_id FROM " + refreshTable() + " r WHERE r.measure = " + name
+                + " AND strftime(r.refreshed_at, '%Y-%m-%d') = " + MeasureTable.literal(day)
+                + " AND NOT EXISTS (SELECT 1 FROM " + exportTable() + " e WHERE e.measure = " + name
+                + " AND e.refresh_id = r.refresh_id)";
+    }
+
+    /** {@code <location>/measure=<name>/part=<day>/<writer>-<when>.parquet} */
+    private String fileFor(String location, MeasureTable measure, String day) {
+        String trimmed = location.endsWith("/") ? location.substring(0, location.length() - 1) : location;
+        String directory = trimmed + "/measure=" + measure.getName() + "/part=" + safe(day);
+        if (!location.contains("://")) {
+            try {
+                Files.createDirectories(Path.of(directory));
+            }
+            catch (java.io.IOException e) {
+                throw new IllegalStateException("Could not make the directory " + directory, e);
+            }
+        }
+        return directory + "/" + safe(measure.getWrittenBy()) + "-" + System.currentTimeMillis() + ".parquet";
+    }
+
+    private static String safe(String text) {
+        return text.isEmpty() ? "none" : text.replaceAll("[^A-Za-z0-9._=-]", "_");
+    }
+
+    private void createExportLedger(Connection live) {
+        Sql.execute(live, "CREATE TABLE IF NOT EXISTS " + exportTable()
+                + " (measure VARCHAR NOT NULL, refresh_id VARCHAR NOT NULL, part VARCHAR NOT NULL,"
+                + " file VARCHAR NOT NULL, exported_at TIMESTAMP NOT NULL, PRIMARY KEY (measure, refresh_id))");
+    }
+
+    /** How far a measure has been pruned: reading as of a point at or before this is refused. */
+    public String prunedTable() {
+        return Sql.quote(alias) + "." + Sql.quote(PRUNED);
+    }
+
+    /** What has been exported, and to which file. */
+    public String exportTable() {
+        return Sql.quote(alias) + "." + Sql.quote("measure_export");
     }
 
     /** How many refreshes the history holds. */

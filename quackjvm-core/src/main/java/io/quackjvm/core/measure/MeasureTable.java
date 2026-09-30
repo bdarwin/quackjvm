@@ -559,9 +559,13 @@ public final class MeasureTable {
      * value moved by, writes those contributions, and leaves the table holding the new state.
      *
      * <p>Records in the batch replace themselves entirely, whichever kind this is - a key a record
-     * held and the batch does not is cancelled. A full set says more: records not in the batch at all
-     * are cancelled too. Records in {@code removed} are cancelled whether the batch names them or
-     * not, so that what was published stays in the contributions.</p>
+     * held and the batch does not is cancelled. Records in {@code removed} are cancelled whether the
+     * batch names them or not, so that what was published stays in the contributions.</p>
+     *
+     * <p>A full set is different in kind: it is a baseline, so it contributes the values themselves
+     * rather than what they moved by, and whatever it does not name is simply not in it. Reading as of
+     * a later point therefore starts at the last full set and needs nothing older - which is also what
+     * makes everything older safe to throw away.</p>
      *
      * @return how many contributions were written - values that actually moved
      */
@@ -591,16 +595,27 @@ public final class MeasureTable {
                 appender.flush();
             }
         }
-        String scope = full ? "" : " WHERE record_id IN (SELECT record_id FROM " + touched(connection, batch, removed)
-                + ")";
-        // A full outer join, so that a key only the batch has and a key only the table has both
-        // become contributions - one added, one cancelled.
-        long moved = Sql.executeUpdate(connection, "INSERT INTO " + Sql.quote(contributionTable)
-                + " SELECT " + literal(refreshId) + ", coalesce(i.record_id, v.record_id),"
-                + " coalesce(i.key_id, v.key_id), coalesce(i.value, 0) - coalesce(v.value, 0)"
-                + " FROM " + incoming + " i FULL OUTER JOIN (SELECT record_id, key_id, value FROM "
-                + Sql.quote(valueTable) + scope + ") v ON v.record_id = i.record_id AND v.key_id = i.key_id"
-                + " WHERE coalesce(i.value, 0) IS DISTINCT FROM coalesce(v.value, 0)", List.of());
+        long moved;
+        String scope = "";
+        if (full) {
+            // A full set is a baseline, so it contributes the values themselves rather than what they
+            // moved by. That is what lets everything before it be thrown away: reading as of a later
+            // point starts from the last full set and needs nothing older. A key the set does not
+            // name is simply absent from it, which is how it comes to be gone.
+            moved = Sql.executeUpdate(connection, "INSERT INTO " + Sql.quote(contributionTable)
+                    + " SELECT " + literal(refreshId) + ", record_id, key_id, value FROM " + incoming, List.of());
+        }
+        else {
+            scope = " WHERE record_id IN (SELECT record_id FROM " + touched(connection, batch, removed) + ")";
+            // A full outer join, so that a key only the batch has and a key only the table has both
+            // become contributions - one added, one cancelled.
+            moved = Sql.executeUpdate(connection, "INSERT INTO " + Sql.quote(contributionTable)
+                    + " SELECT " + literal(refreshId) + ", coalesce(i.record_id, v.record_id),"
+                    + " coalesce(i.key_id, v.key_id), coalesce(i.value, 0) - coalesce(v.value, 0)"
+                    + " FROM " + incoming + " i FULL OUTER JOIN (SELECT record_id, key_id, value FROM "
+                    + Sql.quote(valueTable) + scope + ") v ON v.record_id = i.record_id AND v.key_id = i.key_id"
+                    + " WHERE coalesce(i.value, 0) IS DISTINCT FROM coalesce(v.value, 0)", List.of());
+        }
         Sql.execute(connection, "DELETE FROM " + Sql.quote(valueTable) + (full ? "" : scope));
         if (batch.valueCount() > 0) {
             Sql.execute(connection, "INSERT INTO " + Sql.quote(valueTable) + " SELECT record_id, key_id, value, "
@@ -760,7 +775,7 @@ public final class MeasureTable {
     }
 
     /** {@code k."a" = s."a" AND ...}, the join between the dictionary and another set of keys. */
-    private String matchOn(String left, String right) {
+    String matchOn(String left, String right) {
         StringBuilder match = new StringBuilder();
         for (int i = 0; i < fields.size(); i++) {
             match.append(i == 0 ? "" : " AND ").append(left).append('.').append(Sql.quote(fields.get(i)))

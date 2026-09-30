@@ -273,6 +273,75 @@ what it holds before looking anywhere else. The live database settled at 1,804 K
 values, the history at 1,292 KB holding 149,999 contributions. See
 `examples/src/main/java/CoreMeasureHistory.java`.
 
+## Reading as of a point in time
+
+```java
+measures.query().asOf(nineOClock, history).rows("group").columns("point").run(connection);
+```
+
+One rule: **the state at T is the sum of the contributions from the last full set at or before T, up
+to T.** A full set is a baseline - it contributes the values themselves rather than what they moved
+by - so reading needs nothing older than the last one, and everything older can be thrown away.
+
+- A point **between two refreshes** reads as the earlier one.
+- Keys whose contributions cancel out are left out, as a key with no value would be. `showZeros()`
+  keeps them.
+- It reads the history **and whatever is still in the outbox**, so a point a moment ago answers the
+  same whether the shipper has run or not, and a contribution in both is counted once.
+- Every field is still rows or columns, and the unit rule still holds.
+
+### A timeline only moves forward
+
+A refresh dated before the last one that publisher gave that measure is refused. A contribution says
+how much a value moved from what the measure held *when it was written*; letting an older point in
+afterwards would add that movement to a state it was never measured against, and a read in between
+would be wrong. A correction is published at a later point - which is the truth of it: the correction
+happened now. Two refreshes may share a point, and are then ordered by the sequence they committed in.
+
+A high-water mark per publisher per measure is kept for this, and is never trimmed - one row each.
+
+## Export, compact, prune
+
+Three separate calls on separate schedules, because downstream wants files all day while the history
+can only be cut back once a later full set exists.
+
+```java
+history.export(live, exposure, "s3://bucket/lake");   // a file per day of refresh, nothing removed
+history.compact(live, exposure, lake, "2026-09-28");  // a finished day's files become one
+history.prune(live, exposure);                        // drop what is exported and before the last full set
+```
+
+- **export** writes contributions it has not written before: a row per contribution with its key
+  fields, the refresh it belongs to, when that was, who wrote it, and the measure's definition in the
+  file's Parquet metadata. Anything that reads Parquet reads the rows.
+- **compact** folds a day into one file and deletes the originals, so it needs a local path - compact
+  there and upload. Only finished days, so a consumer reading files as they appear is undisturbed.
+- **prune** drops exported contributions from before the last full set, then checkpoints so the space
+  is released. Anything not exported is never dropped.
+
+### The files answer as of a point too
+
+Because each row carries its refresh, an exported file reads as of a point exactly as the history
+does:
+
+```java
+measures.query().asOf(monday, history).from(mondaysFiles).rows("group").columns("point");
+```
+
+A point the history has pruned is **refused rather than answered wrong**, and the message says where
+it has gone. Pass the files alongside and it answers again; a refresh in both is counted once.
+
+## Rebuilding the live database
+
+The history is the record; the live database is a cache of the current state.
+
+```java
+history.rebuild(live, exposure);              // as it stands now
+history.rebuild(live, exposure, monday);      // or as it stood then
+```
+
+Refused while anything is still in the outbox, since that would be thrown away - ship it first.
+
 ## Archiving itself
 
 ```java

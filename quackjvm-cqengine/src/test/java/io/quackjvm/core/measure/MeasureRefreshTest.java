@@ -122,7 +122,9 @@ public class MeasureRefreshTest {
                 .record(3).put(10, "x", "5y").build()).commit(connection);
 
         assertEquals(List.of("3 x/5y=10.0"), state());
-        assertEquals(List.of("3 x/5y=10.0", "4 x/5y=7.0", "4 x/5y=-7.0"), contributions());
+        // The second full set is a baseline: it says what record 3 holds, and says nothing of record
+        // 4 at all. Reading from it alone gives the state, which is what lets the rest be dropped.
+        assertEquals(List.of("3 x/5y=10.0", "4 x/5y=7.0", "3 x/5y=10.0"), contributions());
     }
 
     @Test
@@ -157,6 +159,24 @@ public class MeasureRefreshTest {
                 + " FULL OUTER JOIN " + Sql.quote(measures.getValueTable()) + " v"
                 + " ON v.record_id = c.record_id AND v.key_id = c.key_id"
                 + " WHERE coalesce(c.total, 0) IS DISTINCT FROM coalesce(v.value, 0)", List.of()));
+    }
+
+    @Test
+    public void aFullSetIsABaselineRatherThanADifference() throws Exception {
+        MeasureRefresh.at(NINE, "r1").full(measures, batch(3, 10, 20)).commit(connection);
+        MeasureRefresh.at(TEN, "r2").full(measures, measures.batch()
+                .record(3).put(1, "x", "5y").build()).commit(connection);
+
+        // Not 1 - 12: the values themselves, so nothing before this refresh is needed to read it.
+        assertEquals(List.of("3 x/5y=1.0"), contributionsOf("r2"));
+        assertEquals(List.of("3 x/5y=1.0"), state());
+    }
+
+    /** The contributions of one refresh alone. */
+    private List<String> contributionsOf(String refreshId) throws Exception {
+        return rows("SELECT c.record_id, k.a || '/' || k.point, c.value FROM "
+                + Sql.quote(measures.getContributionTable()) + " c JOIN " + Sql.quote(measures.getKeyTable())
+                + " k ON k.id = c.key_id WHERE c.refresh_id = '" + refreshId + "' ORDER BY 1, 2");
     }
 
     @Test
@@ -238,6 +258,38 @@ public class MeasureRefreshTest {
         catch (IllegalArgumentException e) {
             assertTrue(e.getMessage(), e.getMessage().contains("svc_b"));
         }
+    }
+
+    @Test
+    public void aTimelineOnlyMovesForward() throws Exception {
+        MeasureRefresh.at(TEN, "r1").full(measures, batch(3, 10, 20)).commit(connection);
+        try {
+            MeasureRefresh.at(NINE, "r2").increment(measures, batch(3, 11, 20)).commit(connection);
+            fail("expected a refresh dated before the last one to be refused");
+        }
+        catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("only moves forward"));
+        }
+        // Nothing of it was written, and the measure stands where it did.
+        assertEquals(List.of("3 x/10y=20.0", "3 x/5y=10.0"), state());
+        assertEquals(2, measures.contributionCount(connection));
+    }
+
+    @Test
+    public void twoMeasuresKeepTheirOwnPlaceOnTheTimeline() throws Exception {
+        MeasureRefresh.at(TEN, "r1").full(measures, batch(3, 10, 20)).commit(connection);
+        // 'other' has not been published at all yet, so nine o'clock is still ahead of nothing.
+        assertTrue(MeasureRefresh.at(NINE, "r2").full(other, other.batch()
+                .record(3).put(1, "x").build()).commit(connection));
+    }
+
+    @Test
+    public void aCorrectionAtTheSamePointIsAllowed() throws Exception {
+        MeasureRefresh.at(NINE, "r1").full(measures, batch(3, 10, 20)).commit(connection);
+        assertTrue(MeasureRefresh.at(NINE, "r2").increment(measures, measures.batch()
+                .record(3).put(11, "x", "5y").put(20, "x", "10y").build()).commit(connection));
+
+        assertEquals(List.of("3 x/10y=20.0", "3 x/5y=11.0"), state());
     }
 
     @Test

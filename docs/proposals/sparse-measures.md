@@ -169,12 +169,25 @@ ledger, the one thing that would otherwise grow for ever. Measured on 1,000 reco
 18 ms to ship the first 50,000 contributions, single digits for an increment's 5,000, 0.7 ms with
 nothing waiting, the live database settling at 1,804 KB and the history at 1,292 KB.
 
-To build, in this order, each with a runnable example:
+Built after that, with `CoreMeasureTimeline`: **reading as of a point**, **export, compaction and
+pruning**, and **rebuilding the live database**. Two things the building changed in the design:
 
-1. **Reading as of a point** - across live, history and files, with zeros dropped.
-2. **Export, compaction and pruning** on schedules, and the manifest that ties one refresh's measures
-   together.
-3. **Rebuilding the live database** from the history.
+- **A full set contributes the values themselves, not differences.** It has to: a baseline is what
+  makes reading from it alone correct, and therefore what makes everything older safe to drop. The
+  first draft of this treated every refresh alike and a later full set came out as a delta against
+  the state, which made a read from it negative.
+- **A publisher's timeline only moves forward.** A contribution says how much a value moved from what
+  the measure held when it was written, so a refresh dated before the last one would be added to a
+  state it was never measured against. Refused, with a high-water mark per publisher per measure that
+  survives trimming. A correction is published at a later point, which is the truth of it.
+
+Exported files carry the refresh each row belongs to, so they answer as of a point exactly as the
+history does, and a point the history has pruned is refused with a message saying where it is rather
+than answered wrong.
+
+The manifest that would have tied one refresh's measures together turned out to be unnecessary: the
+ledger travels inside every file, as the refresh id, its timestamp, its writer and its kind beside
+every row, which is what makes a file readable with nothing else in hand.
 
 ## What this costs you
 

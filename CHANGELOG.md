@@ -23,6 +23,22 @@
   keep)` trims the live ledger, which is the one thing that would otherwise grow for ever, while the
   history keeps every refresh. Measured on 1,000 records of 50 values: 18 ms to ship the first 50,000
   contributions, single digits for an increment's 5,000, 0.7 ms with nothing waiting.
+- Reading a measure as of a point in time: `query().asOf(at, history)` sums the contributions from the
+  last full set at or before that point, across the history and whatever is still in the outbox, so a
+  recent point answers the same whether the shipper has run or not. A full set now contributes the
+  values themselves rather than differences - it is a baseline, which is what makes reading from it
+  alone correct and everything older safe to drop. Keys that cancel out are left out unless
+  `showZeros()`. A refresh dated before the last one a publisher gave that measure is refused, because
+  a contribution is measured against the state at the time it was written; corrections are published
+  at a later point.
+- `MeasureHistory` now exports, compacts and prunes, and rebuilds the live database. `export` writes
+  contributions not written before as one Parquet file per day of refresh, each row carrying its
+  refresh and each file the measure's definition; `compact` folds a finished day into one file;
+  `prune` drops exported contributions from before the last full set and checkpoints. Exported files
+  answer as of a point exactly as the history does - `asOf(at, history).from(files...)` - and a point
+  the history has pruned is refused with a message saying where it is rather than answered wrong.
+  `rebuild` puts the live state back from the history, as it stands or as it stood, and refuses while
+  anything is still waiting in the outbox.
 - Dictionary ids are now remembered per instance, since they never change: a publisher writing the
   same keys over and over does no SQL to resolve them after the first time, which was 2.1 ms of a
   6.5 ms refresh of 250 keys. Writing through a definition the tables disagree with is now refused
