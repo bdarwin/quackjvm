@@ -1,157 +1,171 @@
-# Sparse measures: composite keys, time, and archiving (proposal)
+# Measures: refreshes, contributions, and two instances (design)
 
-`SparseTable` as it stands identifies each value by one flat name, and offers one wide view with a
-column per name. That fits a few hundred names. The workload it is meant for is different:
+A measure holds values that each belong to a record and are identified by several fields. What makes
+it awkward is not the shape of one value but the life of the whole thing:
 
-- Thousands of records, each carrying hundreds to thousands of values.
-- Each value identified by several coordinates - a few text parts plus one point along an axis.
-- Thousands of distinct keys across the table, so "a column per key" is thousands of columns.
-- One record can hold two values for the same key, in different units.
-- Values change over time, sometimes as a complete re-publish, sometimes as only what changed.
-- Values can disappear, not only change.
-- History has to be kept, but not in the live table forever.
+- Thousands of records, each carrying hundreds to thousands of values, and thousands of distinct keys.
+- Publishers refresh them anywhere from every few milliseconds to once a day.
+- A refresh is sometimes everything a publisher has, sometimes only what moved.
+- Records appear and disappear, and what was published must stay auditable afterwards.
+- Downstream consumers read Parquet continuously, not only when a day ends.
+- History must not make the working database heavy, and must be restorable when someone asks for it.
 
-This proposal reshapes `SparseTable` around that. Everything here was measured first; the numbers
-are at the end.
+What follows is the design we settled on, with the numbers that decided each part. What exists today
+is listed near the end; the rest is to build.
 
-## Defining a measure
+## The model
 
-One table per measure. The parts are fixed when it is defined.
+**A measure** is a table per measure, its fields fixed when it is defined. One field may be the unit;
+a field may declare the order its values come out in. None of that changes here - see
+[Measures](../measures.md).
 
-```java
-SparseTable measures = SparseTable.named("measures")
-        .withKey("a", "b", "c")     // text parts identifying a series
-        .withAxis("point")          // one text part, laid out as columns
-        .withUnit("unit")           // part of the identity; never summed across
-        .appendMode();              // or replaceMode(), the default
-```
+**A refresh** is a point on a publisher's timeline: `(writer, timestamp, id)`.
 
-- **Every part is text**, numbers included. The columns are fixed, so nothing is gained by typing them.
-- **The axis** is the part that becomes columns. Each axis value may carry a sort position; without
-  one, columns come out in text order, which is already right for dates written `2026-10-29`.
-- **The unit** is part of what identifies a value, because one record can hold the same key in two
-  units. It carries one rule, below.
-- **Records** are identified by a unique id and nothing else. Anything else known about a record
-  belongs in your own table; every query can hand back its SQL to join against.
+- The **timestamp** is yours. It marks the point the data belongs to, so two refreshes may share one:
+  a correction for the same point, or several measures refreshed together. It cannot be assumed
+  unique - `Instant.now()` repeats the previous value in most iterations of a tight loop, and DuckDB
+  keeps microseconds rather than nanoseconds.
+- The **id** is required, and recorded. A publisher that commits, misses the acknowledgement and
+  republishes is then ignored rather than applied twice - which matters, because contributions add up.
+- A hidden **commit sequence** orders refreshes that share a timestamp, so reads are deterministic.
 
-### Never add different units
-
-A total across two units is a wrong number that looks right. So `totals()` refuses to run unless the
-unit is either grouped by or filtered to a single value:
+**Within a refresh, each measure is full or an increment.** The kind is per measure, not per refresh:
+a refresh that leaves a measure out leaves it untouched, where a per-refresh kind would empty it by
+omission. A record that appears in either kind **replaces itself entirely**. A full set says more than
+that: anything it does not mention is gone. Records can also be removed explicitly.
 
 ```java
-measures.totals().rows("a", "unit").columns("point")     // fine: grouped by unit
-measures.totals().where("unit", "U1").rows("a")          // fine: one unit
-measures.totals().rows("a").columns("point")             // refused
+Refresh refresh = service.refreshAt(timestamp, "run-2026-09-30T09:00");
+refresh.full(exposure, everythingExposureHas);
+refresh.increment(sensitivity, whatMoved);
+refresh.remove(coverage, 42);
+refresh.commit();
 ```
 
-## Storage
+## Everything is a contribution
+
+A change is stored as "cancel the old, add the new"; a removal as "cancel everything". Nothing is
+overwritten and nothing is deleted, so the audit trail stands.
 
 ```
-measures_key                                          measures_value
-id | a | b | c | point      | unit | point_order      record_id | [ts] | key_id | value | kind
----+---+---+---+------------+------+------------      ----------+------+--------+-------+------
- 0 | x | y | z | 2026-10-29 | U1   |          1              42 | ...  |      0 |  1.25 | ...
- 1 | x | y | z | 2026-10-29 | U2   |          1              42 | ...  |      1 |  0.97 | ...
+09:00  full        record 3:  5y +10,  10y +20            state: 5y=10, 10y=20
+09:15  increment   record 3:  5y  +2,  10y -20,  30y +5   state: 5y=12, 10y=0,  30y=5
+09:30  increment   record 3 removed:  5y -12, 30y -5      state: all zero, history intact
 ```
 
-The dictionary gains a column per key part; it stays small (9,000 rows in the measured case), which
-is why parsing coordinates out of a flat name costs almost nothing today - and why doing it properly
-costs nothing either. The values table keeps its narrow shape: the `ts` and `kind` columns exist only
-in append mode.
+Reading is then one rule:
 
-## Writing
+> **the state as of T = the sum of contributions from the last full set at or before T, up to T**
 
-| mode | call | meaning |
-|---|---|---|
-| replace | `replace(batch)` | these records' values become exactly this. No history. |
-| append | `publishFull(batch, at)` | the record's complete set of values at that timestamp |
-| append | `publishChanges(batch, at)` | only the values that changed at that timestamp |
+There is no second mode for "state" measures against "additive" ones: a measure with no full sets
+sums everything, which is the same rule. Keys that cancel to zero are dropped unless `showZeros()`.
 
-A change can also be a removal. `batch.record(42).remove("x", "y", "z", "2026-10-29", "U1")` writes a
-marker row, so that reading as of a later time knows the value is gone rather than unchanged.
+Measured on 525,000 rows: summing is 15.8 ms where keeping the newest row per key with a window is
+24.5 ms - and the sum is the one that stays right when the same value arrives twice.
 
-## Reading
+quackjvm works out the contributions, since it knows what a record currently holds. A publisher that
+would rather send contributions itself can.
 
-Every question has the same shape: which parts become rows, the axis (or time) becomes the columns,
-filters, and a point in time.
+## Two instances
 
-```java
-measures.view().records(42).asOf(t).rows("a", "b", "c").columns("point")
-measures.totals().asOf(t).where("unit", "U1").rows("a").columns("point")
-measures.totals().between(t1, t2).rows("a").columns("time")
-measures.totals().change(t1, t2).rows("a").columns("point")
-measures.totals().rows("a").columns("point").sql()        // to join your own tables to
-```
+| | holds | written | read for |
+|---|---|---|---|
+| **live** | current state, plus an outbox of contributions not yet shipped | one transaction per refresh | panels, as of now |
+| **archive** | every contribution, with its refresh timestamp and id | in bulk, by the shipper | history, as-of, export |
+| **Parquet** | what the archive has exported | on a schedule | downstream, and archived as-of reads |
 
-**As of a timestamp** means: take the record's latest full publish at or before it, apply every
-change after that up to it, keep the newest value for each key, and drop the keys whose newest row is
-a removal.
+The live instance stays the same size however long it runs, because it only ever holds current state:
+measured at 1,548 KB holding 500,000 values after 600 refreshes.
 
-**Totals compute per key first.** Adding up 10.2M values per key gives 9,000 rows, and only then is
-the dictionary joined and the columns laid out: 20 ms against 227 ms for the obvious order. This is
-the single biggest change and it is in the generated SQL, not in the storage.
+**Why two, and why an outbox.** DuckDB refuses to write to two attached databases in one transaction:
 
-**Rollups**, optional, for many readers at once: one total per key, answering in about 1 ms, rebuilt
-in about 40 ms, or kept current as records are replaced at about 11 ms a record.
+> *"Attempting to write to database "archive" in a transaction that has already modified database
+> "live" - a single transaction can only write to a single attached database."*
 
-## What is built
+So a refresh cannot land in both atomically. Instead it writes the new state **and** its contributions
+into the live instance in one transaction, the contributions going to an outbox table. A background
+**shipper** moves the outbox into the archive instance and clears it. Nothing can be lost: until the
+shipper runs, the contributions sit in a committed table. Nothing is applied twice: the shipper skips
+refresh ids the archive already holds, which is also what makes a retry after a crash safe.
 
-All of it except timestamps: keys with named fields, the unit rule and conversion, declared orders,
-grouping and pivoting on any field, parts and provenance, archiving a part to one self-contained
-Parquet file, querying those files where they lie, restoring them, fields added later, and archiving
-by size. See `docs/measures.md`, `MeasureTable`, and the examples `CoreMeasures.java` and
-`CoreMeasureLifecycle.java`.
+That gives asynchronous archiving without the usual risk of it, and the schedule is yours - every
+second or every hour.
 
-What is not built is the timestamped history described below - full publishes and incremental
-changes at a point in time, reading "as of", and removals. Parts cover the archiving side of it;
-`appendChanges` covers writing only what moved.
-
-## Archiving
-
-Once a full publish exists at time T, everything before it can leave the live table without changing
-any answer at or after T.
-
-```java
-measures.export(connection, directory);          // built: dictionary, values, definition
-measures.query().from(directory).rows("a")       // built: ask the files, without reading them back
-measures.importFrom(connection, directory);      // built: read them back, matching keys by field
-measures.archive(before, directory);             // not built: the same, for writes older than a time
-```
-
-Reading an archived time means reading those files, which the builder can do on request. The live
-database file does not shrink when rows are deleted; DuckDB reuses the space.
-
-## Measured
-
-On this machine (10 cores, DuckDB 1.5.5), before building anything:
+**Costs, measured:**
 
 | | |
 |---|---|
-| totals by two parts, axis as 30 columns, 10.2M values: join first | 227 ms |
-| the same, totalling per key first | **20 ms** |
-| the same, from a per-key rollup (9,000 rows, built in 15 ms) | 7 ms |
-| one record, axis as columns | 7-12 ms |
-| keeping the rollup current per replaced record (1,000 values) | 10.7 ms; matched a rebuild to 5e-11 after 200 replaces |
-| 39M value rows over 200 timestamps, full publish every 20th | 238 MB |
-| one record as of a timestamp (full + changes on top) | 5.2 ms |
-| totals across 2,000 records as of a timestamp | 42 ms |
-| flushing 23.4M rows to Parquet, partitioned by day | 382 ms, 27 MB (this data compresses unusually well) |
-| one record as of an archived timestamp, from Parquet | 40 ms, or 12 ms reading only that day |
-| live and archived together, latest per key | 290 ms |
+| a refresh of 1 record (25 values), live alone | 0.73 ms |
+| the same, with its contributions in the outbox | 0.99 ms (+36%) |
+| a refresh of 100 records (2,500 values), with outbox | 1.87 ms (+77%) |
+| shipping 250,000 contributions to the archive, in bulk | 25 ms |
+| clearing the outbox afterwards | 5 ms |
+| shipping the same refreshes again (nothing added) | 6 ms |
+| the same shipment row by row over JDBC instead | 20,657 ms - never do this |
 
-## What it costs to build
+The second instance costs nothing in interference: with four readers and a writer working flat out on
+the live instance, moving 500,000 rows every second changed reads from 1,406/s to 1,409/s, and moved
+the p99 by less than two runs with no move at all differ from each other.
 
-- `SparseBatch` takes key parts rather than one name, and gains removals.
-- `SparseTable` gains the definition (parts, axis, unit, mode), the dictionary columns, the write
-  modes, and the query builder that generates all the SQL above.
-- The flat-name API released in 1.1.0's notes but not yet in a release goes away. A flat name is the
-  same thing as a key with one part, so a table defined `withKey("name")` behaves as before.
+## Parquet, and downstream
 
-## Open
+Publishing files is separate from pruning the archive. Downstream needs files all day; pruning can
+only happen once a later full set exists. So three operations, not one:
 
-- **Whether `between(...)` should put time in the rows or the columns by default.** Columns reads
-  better for a handful of timestamps, rows for hundreds.
-- **Whether removals need to be visible in a view** - shown as an empty cell, which they will be, or
-  distinguishable from "never had a value".
-- **Whether the rollup should be maintained automatically** or left for the caller to refresh.
+1. **Export** - the archive writes new contributions as Parquet on a schedule. Downstream sees them
+   promptly; nothing is removed anywhere.
+2. **Compact** - a finished day's files are folded into one. Measured: 18 ms for a day; a day as 17
+   files was 737 KB and 18.6 ms to query, where the one compacted file was 579 KB and 14.6 ms. Only
+   completed days are compacted, so a consumer reading files as they appear is never disturbed.
+3. **Prune** - the archive drops what it has exported and no longer needs, keeping back to the last
+   full set.
+
+A file is a row per contribution with its key fields beside it, plus `record_id`, `value`, and the
+refresh timestamp, id and writer - and the measure's definition in the file's Parquet key-value
+metadata. Anything that reads Parquet reads the rows without that metadata; quackjvm uses it to
+rebuild the table. Paths stay `measure=.../part=.../writer-when.parquet` so a lake can prune by them.
+
+At millisecond cadence a file per refresh is impossible - 86 million files a day - so files roll by
+time or size and carry many refreshes each. Downstream latency is the roll interval.
+
+**S3 and the like** work as they are: `archive(...)` writes to `s3://`, and a query reads only the
+byte ranges it needs. Measured against a local HTTP server: a count, a group-by and the metadata all
+answered without pulling the file down.
+
+## Rebuilding the live instance
+
+The archive is the truth; the live instance is a cache of the current state. It can be dropped and
+rebuilt by replaying the archive from the last full set - after a corruption, a bad deploy, or a
+change of definition. That is why the archive keeps back to the last full set, and why export must
+not prune past it.
+
+The live instance keeps **no window of history**. A window would double the read paths and add a
+retention knob to save time on a question the archive already answers in 24.5 ms for a whole panel
+and 1.8 ms for one record, and the outbox covers the newest contributions anyway. If a panel proves
+that too slow, the window can be added then, with the measurement that justifies it.
+
+## What exists today
+
+Built, in `MeasureTable` and `MeasureQuery`, with the examples `CoreMeasures` and
+`CoreMeasureLifecycle`: fields and the dictionary, any field as rows or columns, the unit rule and
+conversion, declared orders, parts and provenance, archiving a part to a self-contained Parquet file,
+querying files where they lie, restoring them, fields added later, and archiving by size.
+
+To build, in this order, each with a runnable example:
+
+1. **Refreshes and contributions** - the refresh model, full and increment, removals, contributions
+   worked out from current state, the id enforced.
+2. **The two instances** - live holding current state and an outbox, archive holding the ledger, the
+   shipper between them.
+3. **Reading as of a point** - across live, archive and files, with zeros dropped.
+4. **Export, compaction and pruning** on schedules, and the manifest that ties one refresh's measures
+   together.
+5. **Rebuilding the live instance** from the archive.
+
+## What this costs you
+
+- **Every refresh writes twice** - the state and its contribution. Measured above: +36% to +77%.
+- **History grows** with every refresh; full sets are what let it be cut back.
+- **Two files to operate** rather than one, and a shipper to schedule.
+- **Publishing needs the current state** to work out a contribution, so a publisher that wants to
+  skip that has to send contributions itself.
