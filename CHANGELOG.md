@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Added
+- Nested columns, written as well as read: `LIST`, `STRUCT`, `MAP` and fixed-size `ARRAY`. A record's
+  own types are enough - `List<String>` becomes `VARCHAR[]`, `Map<String,Integer>` becomes
+  `MAP(VARCHAR, INTEGER)`, a nested record becomes a `STRUCT`, `float[]` becomes `FLOAT[]` - and
+  `Rows.records` reads them back as what they were, nulls and empties included. `ColumnarLayout.Builder`
+  gained `listColumn`, `mapColumn`, `structColumn` and `vectorColumn(name, size, ...)`, the last being
+  how to declare `FLOAT[768]`, which is what DuckDB's array functions need. `TableWriter` writes a table
+  with nested columns through the appender however few rows there are, because a prepared statement
+  cannot bind a list. **This needed no Arrow**: the roadmap said the write path would require it, and in
+  1.5.5 the appender takes a `Collection`, a `Map`, `beginStruct`/`endStruct` and a `float[]`, which
+  `CoreNestedTypes` measures. One level of nesting is supported and two is refused when the layout is
+  built, naming what to do instead. `FLOAT[768]` writes at 29,000 rows a second, 85 MB/s.
 - `io.quackjvm.core.udf`: a Java method called from SQL. `Udfs.register(connection, name, returnType,
   argumentTypes..., method)` for one, two or three arguments - three being more than
   `java.util.function` offers, so there is an `Fn3`. `register` never calls the method with a null and

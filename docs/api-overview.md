@@ -111,6 +111,25 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
+### `io.quackjvm.core.duckdb.NestedType`
+
+Columns that hold more than one value. Usually you never name this: a record's own types are enough.
+
+```java
+record Doc(Integer id, List<String> tags, Map<String, Integer> counts, Owner owner, float[] embedding) {}
+ColumnarLayout.ofRecord(Doc.class);       // VARCHAR[], MAP(VARCHAR, INTEGER), STRUCT(...), FLOAT[]
+
+ColumnarLayout.builder(Doc.class)
+        .listColumn("tags", String.class, Doc::tags)
+        .vectorColumn("embedding", 768, Doc::embedding)    // FLOAT[768]
+```
+
+- Written through the appender - no Arrow, no extra dependency - and read back by `Rows.records`.
+- One level of nesting; a list of structs is refused when the layout is built.
+- `FLOAT[768]` at 29,000 rows a second, 85 MB/s.
+
+See [Nested types](nested-types.md).
+
 ### `io.quackjvm.core.udf.Udfs`
 
 A Java method called from SQL.

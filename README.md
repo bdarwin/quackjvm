@@ -83,7 +83,7 @@ Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 | storing Java objects | write your own row mapping | `ColumnarLayout` maps records, beans or explicit accessors to typed columns |
 | bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
 | precomputing a query | `CREATE TABLE AS`, and a refresh that breaks readers | `Materialization`, refreshed without a window where the table is missing |
-| LIST / STRUCT / MAP / ARRAY | readable, **no write path at all** | planned, via Arrow |
+| LIST / STRUCT / MAP / ARRAY | writable through the appender since 1.5, but every value mapped by hand | a record's own types become the columns - `List<String>` to `VARCHAR[]`, a nested record to a STRUCT, `Map<K,V>` to MAP, `float[]` to `FLOAT[768]` - written and read back, **no Arrow needed**, 85 MB/s |
 | Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | `LiveTables.register(connection, "car", cars, layout)`: a collection queried and joined as a table, projection pushed down, **1M objects joined to 200k stored rows in 40.6 ms with no load step**; `Udfs.register(...)` for a Java method in SQL, nulls decided, **7.1 ns a row** |
 | running SQL you did not write | nothing - and worse: preparing `"DROP TABLE t; SELECT 1"` **executes the DROP** | `GuardedQuery` + `QueryPolicy`: DuckDB's own parser decides what is a query, one statement only, row and byte caps, a timeout that cancels, optional `Hardening` - **check costs 0.20 ms** |
 
@@ -328,7 +328,7 @@ DuckDB's JDBC driver is the bottleneck, and specifically:
 | columnar / vectorised reads | the chunk is already in the JVM, but `DuckDBVector` is package-private, so you read it one boxed value at a time - about 250 ns per value |
 | Arrow export and import | exposed, both directions, and 17x faster than row-by-row JDBC (measured: 1M rows x 4 columns, 602 ms -> 36 ms) |
 | LIST / STRUCT / MAP / ARRAY reads | work |
-| LIST / STRUCT / MAP / ARRAY writes | **absent** - the appender's native entry points are scalars only, and the new table functions cannot express them either |
+| LIST / STRUCT / MAP / ARRAY writes | **present in 1.5.5** - the appender takes a `Collection`, a `Map`, `beginStruct`/`endStruct` and a `float[]`; measured, and used by `ColumnarLayout`, so no Arrow is needed after all |
 | Java UDFs | **shipped in 1.5** - `DuckDBFunctions.scalarFunction()` |
 | table functions | **shipped in 1.5** - `DuckDBFunctions.tableFunction()`, raw: you implement `bind`, `init` and `apply` and write into vectors by hand |
 
@@ -343,8 +343,9 @@ So the roadmap for `quackjvm-core`, roughly in order of leverage:
    sees. What is missing is the glue: `ColumnarLayout` already knows how to turn an object into
    columns, so an `Iterable<O>` should become a table without anyone writing a `bind`/`init`/`apply`
    by hand.
-3. **Nested types**, read and write. The write path needs Arrow regardless, since the appender
-   cannot express them.
+3. ~~**Nested types**, read and write.~~ Done, and not as expected: the 1.5.5 appender writes
+   LIST, STRUCT, MAP and fixed ARRAY natively, so no Arrow was needed. See
+   [Nested types](docs/nested-types.md).
 
 ## Java version, and why not native
 
