@@ -140,9 +140,15 @@ change of definition. That is why the archive keeps back to the last full set, a
 not prune past it.
 
 The live instance keeps **no window of history**. A window would double the read paths and add a
-retention knob to save time on a question the archive already answers in 24.5 ms for a whole panel
-and 1.8 ms for one record, and the outbox covers the newest contributions anyway. If a panel proves
-that too slow, the window can be added then, with the measurement that justifies it.
+retention knob, where the live state already answers "now" directly - which is what panels ask - and
+the history answers the rest.
+
+Built and measured, the history's side of that came out dearer than the prototype suggested: over
+1,050,000 contributions, a whole panel as of a point is 68-96 ms against 22-31 ms from the live state,
+and one record is 35-47 ms against 29-34. The prototype's 24.5 ms and 1.8 ms were a leaner query over
+half as many rows on a quieter machine. It does not change the decision - as-of reads are for history,
+not for panels - but it does mean a panel that wants a point in the past will want a rollup of its
+own, measured then.
 
 ## What exists today
 

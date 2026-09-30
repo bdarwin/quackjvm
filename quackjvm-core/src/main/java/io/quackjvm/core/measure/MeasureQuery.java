@@ -321,12 +321,16 @@ public final class MeasureQuery {
         }
         // The history, and whatever is still in the outbox - skipping outbox rows whose refresh has
         // been shipped, which is what a crash between the shipper's two transactions leaves behind.
+        String onRecords = records == null ? "" : records.length == 0 ? " AND false"
+                : " AND record_id IN " + inList(records);
         sql.append("src AS (SELECT ").append(fields).append(", record_id, value FROM ").append(contributions)
-                .append(" WHERE refresh_id IN (SELECT refresh_id FROM included)")
+                .append(" WHERE refresh_id IN (SELECT refresh_id FROM included)").append(onRecords)
                 .append(" UNION ALL SELECT ").append(fromDictionary).append(", c.record_id, c.value FROM ")
                 .append(Sql.quote(table.getContributionTable())).append(" c JOIN ")
                 .append(Sql.quote(table.getKeyTable())).append(" d ON d.id = c.key_id")
-                .append(" WHERE c.refresh_id IN (SELECT refresh_id FROM included) AND NOT EXISTS (SELECT 1 FROM ")
+                .append(" WHERE c.refresh_id IN (SELECT refresh_id FROM included)")
+                .append(onRecords.replace(" record_id", " c.record_id"))
+                .append(" AND NOT EXISTS (SELECT 1 FROM ")
                 .append(history.refreshTable()).append(" h WHERE h.refresh_id = c.refresh_id AND h.measure = ")
                 .append(measure).append(")");
         if (files != null) {
@@ -339,23 +343,13 @@ public final class MeasureQuery {
             sql.append(" UNION ALL SELECT ").append(fromFiles).append(", record_id, value FROM ")
                     .append(MeasureTable.readParquet(files))
                     .append(" f WHERE f.refresh_id IN (SELECT refresh_id FROM included)")
+                    .append(onRecords.replace(" record_id", " f.record_id"))
                     .append(" AND NOT EXISTS (SELECT 1 FROM ").append(contributions)
                     .append(" h WHERE h.refresh_id = f.refresh_id)");
         }
         sql.append("), ");
 
         List<String> conditions = new ArrayList<>();
-        if (records != null) {
-            if (records.length == 0) {
-                conditions.add("false");
-            }
-            else {
-                conditions.add("record_id IN " + Sql.placeholders(records.length));
-                for (long record : records) {
-                    parameters.add(record);
-                }
-            }
-        }
         if (!filters.isEmpty()) {
             StringBuilder fieldFilters = new StringBuilder();
             appendFilters(fieldFilters, parameters, filters);
@@ -569,6 +563,15 @@ public final class MeasureQuery {
         throw new IllegalStateException("This would add up values in different units, which is never right."
                 + " Put '" + unit + "' in rows(...) or columns(...), narrow to one with where(\"" + unit
                 + "\", ...), or convertTo(unit, rates).");
+    }
+
+    /** Record ids written into the SQL, since they are numbers of our own and there are few of them. */
+    private static String inList(long[] values) {
+        StringBuilder list = new StringBuilder("(");
+        for (int i = 0; i < values.length; i++) {
+            list.append(i == 0 ? "" : ", ").append(values[i]);
+        }
+        return list.append(')').toString();
     }
 
     /** A value from the dictionary, as a SQL string - it can hold a quote. */

@@ -290,6 +290,26 @@ by - so reading needs nothing older than the last one, and everything older can 
   same whether the shipper has run or not, and a contribution in both is counted once.
 - Every field is still rows or columns, and the unit rule still holds.
 
+### What an as-of read costs
+
+Measured on a history of 1,050,000 contributions - 1,000 records of 50 values, a full set then 200
+increments each moving a tenth - on a busy machine, so the shape rather than the digits:
+
+| | |
+|---|---|
+| a whole panel from the live state | 22-31 ms |
+| the same as of a point | 68-96 ms |
+| one record from the live state | 29-34 ms |
+| one record as of a point | 35-47 ms |
+
+So **read the live state for now, and as-of for history**: summing a million contributions costs about
+three times reading the state that was kept for exactly that reason. A point in the middle of the
+history costs a little less than the newest one, since there is less to add up.
+
+Carrying each refresh's sequence number on every contribution, so that a read could skip row groups by
+range, was built and measured: 63 ms against 67 for an older point, no better for the newest, 8 bytes
+a row and 13% more history on disk. Declined.
+
 ### A timeline only moves forward
 
 A refresh dated before the last one that publisher gave that measure is refused. A contribution says

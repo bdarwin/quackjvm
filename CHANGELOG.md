@@ -39,6 +39,12 @@
   the history has pruned is refused with a message saying where it is rather than answered wrong.
   `rebuild` puts the live state back from the history, as it stands or as it stood, and refuses while
   anything is still waiting in the outbox.
+- As-of reads filter by record in each source rather than after adding them up. Measured on 1,050,000
+  contributions: a whole panel as of a point is 68-96 ms against 22-31 ms from the live state, one
+  record 35-47 ms against 29-34 - so read the state for now and the history for history. Carrying each
+  refresh's sequence number on every contribution, to skip row groups by range, was built and measured
+  at 63 ms against 67 for an older point, no better for the newest, 8 bytes a row and 13% more history
+  on disk: declined.
 - Dictionary ids are now remembered per instance, since they never change: a publisher writing the
   same keys over and over does no SQL to resolve them after the first time, which was 2.1 ms of a
   6.5 ms refresh of 250 keys. Writing through a definition the tables disagree with is now refused

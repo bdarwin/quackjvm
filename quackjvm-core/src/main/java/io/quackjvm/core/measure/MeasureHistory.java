@@ -110,6 +110,9 @@ public final class MeasureHistory {
             for (String field : measure.getFields()) {
                 fields.append(Sql.quote(field)).append(" VARCHAR NOT NULL, ");
             }
+            // Deliberately without the refresh's sequence number on each row: carrying it would let a
+            // read as of a point skip row groups by range, which measured 63 ms against 67 for an older
+            // point, no better for the newest one, 8 bytes a row and 13% more history on disk. Declined.
             Sql.execute(live, "CREATE TABLE IF NOT EXISTS " + contributionTable(measure)
                     + " (refresh_id VARCHAR NOT NULL, record_id BIGINT NOT NULL, " + fields
                     + "value DOUBLE NOT NULL)");
