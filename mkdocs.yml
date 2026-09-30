@@ -72,6 +72,7 @@ nav:
       - Live tables: live-tables.md
       - Java functions in SQL: udfs.md
       - Nested types: nested-types.md
+      - Vector similarity: vectors.md
       - Joins across collections: joins.md
       - Migrating: migrating.md
   - Reference:

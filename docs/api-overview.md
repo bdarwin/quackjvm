@@ -111,6 +111,23 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
+### `io.quackjvm.core.vector.VectorSearch`
+
+The rows whose vector is nearest a given one.
+
+```java
+VectorSearch search = VectorSearch.on(connection, "note", "embedding").identifiedBy("id");
+List<VectorSearch.Match> nearest = search.topK(query, 10, "topic = ?", "weather");
+String sql = search.sql(query, 10, null);
+String whyNoIndex = search.createIndex();     // null when an HNSW index was created
+```
+
+- `Metric.COSINE` (default), `EUCLIDEAN` or `INNER_PRODUCT`, all built in - no extension, no network.
+- The column must be a fixed-size array; a `FLOAT[]` is refused, pointing at `vectorColumn`.
+- Exact top-10: 15.8 ms over 10,000 x 768, 109.1 ms over 100,000 x 768, 40.8 ms over 1,000,000 x 128.
+
+See [Vector similarity](vectors.md).
+
 ### `io.quackjvm.core.duckdb.NestedType`
 
 Columns that hold more than one value. Usually you never name this: a record's own types are enough.

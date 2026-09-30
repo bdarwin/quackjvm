@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- `io.quackjvm.core.vector.VectorSearch`: the rows whose vector is nearest a given one.
+  `VectorSearch.on(connection, table, column).identifiedBy("id").topK(query, 10, "topic = ?", "news")`,
+  by cosine similarity, Euclidean distance or inner product, with `sql(...)` for joining your own
+  tables to it. It uses DuckDB's built-in array functions, so **no extension, no network and no file
+  access** - it works on a database hardened by the guard. A `FLOAT[]` column is refused with a message
+  pointing at `vectorColumn`, and a query of the wrong length names both lengths. Measured, top-10:
+  15.8 ms over 10,000 vectors of 768 dimensions, 109.1 ms over 100,000, 40.8 ms over 1,000,000 of 128.
+  `createIndex()` builds an HNSW index when the `vss` extension is already installed and says why it
+  cannot when it is not - which is the case on the machine these numbers come from, so **the index path
+  is written and detected but not measured**, and the docs say so.
 - Nested columns, written as well as read: `LIST`, `STRUCT`, `MAP` and fixed-size `ARRAY`. A record's
   own types are enough - `List<String>` becomes `VARCHAR[]`, `Map<String,Integer>` becomes
   `MAP(VARCHAR, INTEGER)`, a nested record becomes a `STRUCT`, `float[]` becomes `FLOAT[]` - and

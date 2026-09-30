@@ -86,6 +86,7 @@ Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 | LIST / STRUCT / MAP / ARRAY | writable through the appender since 1.5, but every value mapped by hand | a record's own types become the columns - `List<String>` to `VARCHAR[]`, a nested record to a STRUCT, `Map<K,V>` to MAP, `float[]` to `FLOAT[768]` - written and read back, **no Arrow needed**, 85 MB/s |
 | Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | `LiveTables.register(connection, "car", cars, layout)`: a collection queried and joined as a table, projection pushed down, **1M objects joined to 200k stored rows in 40.6 ms with no load step**; `Udfs.register(...)` for a Java method in SQL, nulls decided, **7.1 ns a row** |
 | running SQL you did not write | nothing - and worse: preparing `"DROP TABLE t; SELECT 1"` **executes the DROP** | `GuardedQuery` + `QueryPolicy`: DuckDB's own parser decides what is a query, one statement only, row and byte caps, a timeout that cancels, optional `Hardening` - **check costs 0.20 ms** |
+| vector similarity | `array_cosine_similarity` and friends are built in, but you write the query, the cast and the ordering | `VectorSearch.on(...).topK(query, 10, filter, params)`: **exact top-10 over a million 128-dimension vectors in 40.8 ms**, no extension, HNSW used when `vss` is installed |
 
 ## Objects in, answers out
 
