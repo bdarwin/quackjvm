@@ -333,17 +333,16 @@ DuckDB's JDBC driver is the bottleneck, and specifically:
 | Java UDFs | **shipped in 1.5** - `DuckDBFunctions.scalarFunction()` |
 | table functions | **shipped in 1.5** - `DuckDBFunctions.tableFunction()`, raw: you implement `bind`, `init` and `apply` and write into vectors by hand |
 
-So the roadmap for `quackjvm-core`, roughly in order of leverage:
+So the roadmap for `quackjvm-core`, roughly in order of leverage - two of the three are now done, and
+the third turned out not to need what it was supposed to need:
 
 1. **Arrow-backed reads.** Replaces per-value `getObject` calls with columnar batches. Fixes the
    largest remaining cost in the CQEngine plugin - rebuilding objects from columns - and is the
    foundation for everything else.
-2. **Java collections as DuckDB tables.** DuckDB 1.5 shipped table functions, and they work: a
-   plain `java.util.List` registered as one, queried with SQL and **joined against 200,000 stored
-   rows in 4.4 ms with no load step** - and live, so mutating the list changes what the next query
-   sees. What is missing is the glue: `ColumnarLayout` already knows how to turn an object into
-   columns, so an `Iterable<O>` should become a table without anyone writing a `bind`/`init`/`apply`
-   by hand.
+2. ~~**Java collections as DuckDB tables.**~~ Done: `LiveTables.register(connection, "car", cars,
+   layout)` turns an `Iterable<O>` into a table, with the projection pushed down and nothing written
+   anywhere - **1,000,000 objects joined to 200,000 stored rows in 40.6 ms, against 479 ms to load
+   them first**. See [Live tables](docs/live-tables.md).
 3. ~~**Nested types**, read and write.~~ Done, and not as expected: the 1.5.5 appender writes
    LIST, STRUCT, MAP and fixed ARRAY natively, so no Arrow was needed. See
    [Nested types](docs/nested-types.md).
