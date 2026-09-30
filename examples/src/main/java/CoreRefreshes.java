@@ -34,6 +34,11 @@ import java.util.List;
 public class CoreRefreshes {
 
     static final Instant NINE = Instant.parse("2026-09-30T09:00:00Z");
+    /**
+     * The order the measure declares for its points. A query() uses it by itself; these two print
+     * with SQL of their own, to show what is actually in the tables, so they say it here.
+     */
+    static final String POINT_ORDER = "array_position(['5y', '10y', '30y'], k.point)";
 
     public static void main(String[] args) throws Exception {
         try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
@@ -81,7 +86,7 @@ public class CoreRefreshes {
                     + " c.value FROM " + Sql.quote(exposure.getContributionTable()) + " c"
                     + " JOIN " + Sql.quote(exposure.getKeyTable()) + " k ON k.id = c.key_id"
                     + " JOIN " + Sql.quote(MeasureRefresh.LEDGER) + " r ON r.refresh_id = c.refresh_id"
-                    + " AND r.measure = 'exposure' ORDER BY r.seq, c.record_id, key");
+                    + " AND r.measure = 'exposure' ORDER BY r.seq, c.record_id, " + POINT_ORDER);
 
             System.out.printf("%nThe state is the sum of the contributions: %s%n", agrees(connection, exposure));
 
@@ -174,7 +179,7 @@ public class CoreRefreshes {
         }
         try (PreparedStatement statement = connection.prepareStatement("SELECT v.record_id,"
                 + " k.\"group\" || ' ' || k.point, v.value FROM " + Sql.quote(measure.getValueTable()) + " v JOIN "
-                + Sql.quote(measure.getKeyTable()) + " k ON k.id = v.key_id ORDER BY 1, 2");
+                + Sql.quote(measure.getKeyTable()) + " k ON k.id = v.key_id ORDER BY 1, " + POINT_ORDER);
              ResultSet rows = statement.executeQuery()) {
             boolean any = false;
             while (rows.next()) {
@@ -215,19 +220,19 @@ public class CoreRefreshes {
  *
  * A day on one publisher's timeline
  * ---------------------------------
- * 09:00  full       3: g1 10y=20.0,  3: g1 5y=10.0,  4: g2 5y=7.0
- * 09:15  increment  3: g1 30y=5.0,  3: g1 5y=12.0,  4: g2 5y=7.0
- * 09:30  remove 4   3: g1 30y=5.0,  3: g1 5y=12.0
+ * 09:00  full       3: g1 5y=10.0,  3: g1 10y=20.0,  4: g2 5y=7.0
+ * 09:15  increment  3: g1 5y=12.0,  3: g1 30y=5.0,  4: g2 5y=7.0
+ * 09:30  remove 4   3: g1 5y=12.0,  3: g1 30y=5.0
  *
  * What each refresh contributed
  * -----------------------------
  * refresh_id  kind        record_id   key         value       
- * run-09:00   full        3           g1 10y      20.0        
  * run-09:00   full        3           g1 5y       10.0        
+ * run-09:00   full        3           g1 10y      20.0        
  * run-09:00   full        4           g2 5y       7.0         
+ * run-09:15   increment   3           g1 5y       2.0         
  * run-09:15   increment   3           g1 10y      -20.0       
  * run-09:15   increment   3           g1 30y      5.0         
- * run-09:15   increment   3           g1 5y       2.0         
  * run-09:30   increment   4           g2 5y       -7.0        
  *
  * The state is the sum of the contributions: yes
@@ -236,16 +241,16 @@ public class CoreRefreshes {
  *
  * At some scale: 100 records of 25 values, published 200 times, on disk
  * --------------------------------------------------------------------
- * replacing the records outright, keeping no history: median 2.04 ms, p99 6.06 ms, 2,500 values of state, 0 contributions, 1,292 KB on disk
- * the same as refreshes, with the contributions:      median 5.09 ms, p99 9.77 ms, 2,500 values of state, 51,999 contributions, 2,828 KB on disk, sum agrees: yes
+ * replacing the records outright, keeping no history: median 2.09 ms, p99 6.12 ms, 2,500 values of state, 0 contributions, 1,292 KB on disk
+ * the same as refreshes, with the contributions:      median 5.05 ms, p99 9.65 ms, 2,500 values of state, 51,999 contributions, 2,828 KB on disk, sum agrees: yes
  *
  * The state does not grow: 2,500 values after 200 refreshes, because only the current one is kept.
  * The contributions do: 2,500 from the first refresh, then only what moved, which is why they are
  * what gets archived and cut back rather than living in the working database for ever.
  *
- * Refreshing costs about three times a plain replace of the same records for the contributions, the
- * ledger row, and knowing what each value moved by. Of that, resolving 250 keys used to take 2.1 ms
- * until they were remembered: ids never change, so the second refresh onwards does no SQL for them.
+ * Refreshing costs about twice a plain replace of the same records, for the contributions, the ledger
+ * row, and knowing what each value moved by. Of that, resolving 250 keys used to take 2.1 ms until
+ * they were remembered: ids never change, so the second refresh onwards does no SQL for them.
  *
  * The first refresh is a full set, and a full set contributes the values themselves rather than what
  * they moved by - it is a baseline. Everything after it is a difference, which is why the state here

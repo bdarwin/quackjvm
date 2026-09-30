@@ -110,6 +110,11 @@ public class CoreMeasureHistory {
                         Files.size(historyFile) / 1024);
                 System.out.printf("%,d contributions were shipped in all, and the live database holds none of them%n",
                         shipped);
+                // The history is smaller than the live database despite holding three times the rows:
+                // it is written once in bulk and never updated, where the live state is rewritten every
+                // refresh, and its dictionary and outbox churn.
+                System.out.println("(the history is the smaller file, though it holds three times the rows:"
+                        + " it is written once in bulk and never rewritten)");
 
                 // A contribution in the history carries its fields, so nothing else is needed to read
                 // it - no dictionary, and no knowledge of which service wrote it.
@@ -171,29 +176,30 @@ public class CoreMeasureHistory {
  *
  * Refresh into the live database, with its contributions in the outbox
  *    full set of 50,000 values: 55 ms
- *    each increment:          median 9.3 ms, p99 14.8 ms
+ *    each increment:          median 9.0 ms, p99 14.0 ms
  * Shipping the outbox into the history
- *    the first, 50,000 contributions: 19 ms
- *    the rest:                        median 5.5 ms, p99 6.0 ms
+ *    the first, 50,000 contributions: 18 ms
+ *    the rest:                        median 5.4 ms, p99 5.8 ms
  *
- * Shipping again with nothing to ship: 0.4 ms, 0 contributions
+ * Shipping again with nothing to ship: 0.5 ms, 0 contributions
  *
  * live:     50,000 values of state, 0 in the outbox, 2,316 KB on disk
  * history:  150,000 contributions over 21 refreshes, 1,292 KB on disk
  * 150,000 contributions were shipped in all, and the live database holds none of them
+ * (the history is the smaller file, though it holds three times the rows: it is written once in bulk and never rewritten)
  *
  * What the history holds, for one key of one record:
- *    run-0    2026-09-30 08:37:39.0  +10.0
- *    run-7    2026-09-30 08:37:46.0  +7.0
- *    run-17   2026-09-30 08:37:56.0  +10.0
+ *    run-0    2026-09-30 12:48:44.0  +10.0
+ *    run-7    2026-09-30 12:48:51.0  +7.0
+ *    run-17   2026-09-30 12:49:01.0  +10.0
  *
  * Forgetting shipped refreshes in the live ledger: 21 gone, 21 still in the history
  *
  * The live database holds 50,000 values and nothing else, however many refreshes have been through
- * it; the history holds all 150,000 contributions, in a file of its own that can be pruned on its
- * own schedule. Shipping is bulk: 18 ms for the first 50,000 contributions, single digits for the
- * 5,000 of an increment, and under a millisecond when there is nothing waiting, because the shipper
- * asks the outbox what it holds before it looks at anything else.
+ * it; the history holds all 150,000 contributions, in a file of its own that can be pruned on its own
+ * schedule. Shipping is bulk: 18 ms for the first 50,000 contributions, single digits for the 5,000 of
+ * an increment, and under a millisecond when there is nothing waiting, because the shipper asks the
+ * outbox what it holds before it looks at anything else.
  *
  * Refreshes carry their own timestamps, so the ones printed above are an hour before the run - and
  * forgetting them in the live ledger leaves the history untouched: the ledger is only there so that
