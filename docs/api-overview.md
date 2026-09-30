@@ -111,6 +111,25 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
+### `io.quackjvm.core.udf.Udfs`
+
+A Java method called from SQL.
+
+```java
+Udfs.register(connection, "region_of", String.class, String.class, Countries::regionOf);
+Udfs.register(connection, "with_tax", Double.class, Double.class, Double.class, (p, r) -> p * (1 + r));
+Udfs.registerNullable(connection, "or_unknown", String.class, String.class, t -> t == null ? "?" : t);
+Udfs.registerDouble(connection, "vat", (double price) -> price * 1.2);   // no boxing
+```
+
+- One, two or three arguments. `register` answers a null argument with a null result without calling the
+  method; `registerNullable` passes nulls through.
+- `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java vectors cannot carry them
+  in 1.5.5.
+- 2,000,000 rows of `price * 1.2`: 0.5 ns a row in SQL, 7.1 ns unboxed, 12.0 ns boxed.
+
+See [Java functions in SQL](udfs.md).
+
 ### `io.quackjvm.core.live.LiveTables` / `LiveTable`
 
 Java objects queried as a table, with no load step.

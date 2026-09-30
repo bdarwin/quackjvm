@@ -70,6 +70,7 @@ nav:
       - Guarding queries: guarding-queries.md
       - Catalog: catalog.md
       - Live tables: live-tables.md
+      - Java functions in SQL: udfs.md
       - Joins across collections: joins.md
       - Migrating: migrating.md
   - Reference:

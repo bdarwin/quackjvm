@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- `io.quackjvm.core.udf`: a Java method called from SQL. `Udfs.register(connection, name, returnType,
+  argumentTypes..., method)` for one, two or three arguments - three being more than
+  `java.util.function` offers, so there is an `Fn3`. `register` never calls the method with a null and
+  answers a null argument with a null result; `registerNullable` passes nulls through both ways; either
+  may return null. Types are the ones `DuckDBTypes` maps, with `UUID`, `byte[]` and `LocalTime` refused
+  at registration because DuckDB's Java vectors have no accessor for them in 1.5.5. `registerDouble`,
+  `registerInt` and `registerLong` take primitive lambdas and do not box. Measured on 2,000,000 rows of
+  `price * 1.2`: 0.5 ns a row in SQL, 7.1 ns unboxed through a UDF, 12.0 ns boxed - the same as writing
+  the callback by hand, so the wrapper is free, and a reminder that a UDF is for what SQL cannot say.
 - `io.quackjvm.core.live`: Java objects queried as a table. `LiveTables.register(connection, "car",
   cars, layout)` puts a `ColumnarLayout` and a collection behind a DuckDB table function with a view
   over it, so SQL says `car`, joins work, and nothing is copied or kept in step - add an object and the
