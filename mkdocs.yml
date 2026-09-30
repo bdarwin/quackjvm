@@ -75,7 +75,7 @@ nav:
       - Buffered writing (proposal): proposals/write-buffer.md
       - Managed materializations: proposals/materializations.md
       - Pre-aggregation vs caching: proposals/result-cache.md
-      - Sparse measures (proposal): proposals/sparse-measures.md
+      - Measures: refreshes and archiving (design): proposals/sparse-measures.md
 
 markdown_extensions:
   - abbr
