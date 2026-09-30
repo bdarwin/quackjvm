@@ -3,6 +3,20 @@
 ## Unreleased
 
 ### Added
+- `io.quackjvm.core.live`: Java objects queried as a table. `LiveTables.register(connection, "car",
+  cars, layout)` puts a `ColumnarLayout` and a collection behind a DuckDB table function with a view
+  over it, so SQL says `car`, joins work, and nothing is copied or kept in step - add an object and the
+  next query sees it. Projection pushdown is on, so a query about one column never touches the others'
+  accessors; the scan is single-threaded because a Java `Iterable` cannot be split safely;
+  `LiveTables.snapshot` copies once for a query that must see one state, and `unregister()` takes the
+  name away. Types: everything `DuckDBTypes` maps except `UUID`, `byte[]` and `LocalTime`, which
+  DuckDB's Java chunk writer cannot write in 1.5.5 and which are refused at registration with the
+  column named. Measured on 1,000,000 objects: a group-by 463.9 ms live against 2.4 ms stored, a join
+  to 200,000 stored rows 40.6 ms live against 2.7 ms stored, and 479.1 ms to load them - so live wins
+  for a query or two and for data that changes, loading wins the moment the same rows are asked about
+  again.
+- `Catalog.tables()` now lists views as well as tables, since a view is a table to whatever is reading
+  - a live table is one.
 - `io.quackjvm.core.catalog`: what is in the database and what it means. `Catalog.of(connection)`
   gives `tables()`, `describe(table)` - columns with their SQL type, the Java type quackjvm maps them
   to, nullability, a description and a unit - and `profile(table)`, which is `SUMMARIZE` plus an exact

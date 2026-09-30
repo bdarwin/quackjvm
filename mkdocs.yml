@@ -69,6 +69,7 @@ nav:
       - Querying: querying.md
       - Guarding queries: guarding-queries.md
       - Catalog: catalog.md
+      - Live tables: live-tables.md
       - Joins across collections: joins.md
       - Migrating: migrating.md
   - Reference:

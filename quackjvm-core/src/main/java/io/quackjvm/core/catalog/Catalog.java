@@ -38,6 +38,16 @@ import java.util.List;
  */
 public final class Catalog {
 
+    /**
+     * Tables and views together, with a view's row count left unknown. {@code AND true} is there so
+     * that a caller can append {@code AND name = ...} to it.
+     */
+    private static final String NAMES = "SELECT name, comment, rows FROM ("
+            + " SELECT table_name AS name, comment, estimated_size AS rows FROM duckdb_tables()"
+            + " WHERE database_name = current_database()"
+            + " UNION ALL SELECT view_name AS name, comment, NULL AS rows FROM duckdb_views()"
+            + " WHERE database_name = current_database() AND internal = false) WHERE true";
+
     private final Connection connection;
 
     private Catalog(Connection connection) {
@@ -50,11 +60,16 @@ public final class Catalog {
 
     // ---------- reading ----------
 
-    /** Every table in the database, with its columns, in name order. */
+    /**
+     * Every table and view in the database, with its columns, in name order.
+     *
+     * <p>Views are included because a view is a table to whatever is reading: a live table over Java
+     * objects is one, and so is anything else built to be queried. A view's row count is unknown
+     * rather than estimated.</p>
+     */
     public List<TableInfo> tables() {
         List<TableInfo> tables = new ArrayList<>();
-        for (String[] row : query("SELECT table_name, comment, estimated_size FROM duckdb_tables()"
-                + " WHERE database_name = current_database() ORDER BY table_name", 3)) {
+        for (String[] row : query(NAMES + " ORDER BY 1", 3)) {
             Comments comment = Comments.parse(row[1]);
             tables.add(new TableInfo(row[0], comment.description(), rowsOf(row[2]), columnsOf(row[0], null)));
         }
@@ -71,8 +86,7 @@ public final class Catalog {
      * so a column the layout does not have is left with a null Java type rather than guessed.
      */
     public TableInfo describe(String table, ColumnarLayout<?> layout) {
-        List<String[]> rows = query("SELECT table_name, comment, estimated_size FROM duckdb_tables()"
-                + " WHERE database_name = current_database() AND table_name = " + literal(table), 3);
+        List<String[]> rows = query(NAMES + " AND name = " + literal(table), 3);
         if (rows.isEmpty()) {
             throw new IllegalArgumentException("No table named '" + table + "'. " + namesForMessage());
         }
@@ -82,11 +96,10 @@ public final class Catalog {
         return new TableInfo(table, description, rowsOf(rows.get(0)[2]), columnsOf(table, layout));
     }
 
-    /** The names of the tables, for an error message or a prompt. */
+    /** The names of the tables and views, for an error message or a prompt. */
     public List<String> tableNames() {
         List<String> names = new ArrayList<>();
-        for (String[] row : query("SELECT table_name FROM duckdb_tables() WHERE database_name = current_database()"
-                + " ORDER BY table_name", 1)) {
+        for (String[] row : query(NAMES + " ORDER BY 1", 1)) {
             names.add(row[0]);
         }
         return names;

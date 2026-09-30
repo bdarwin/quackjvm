@@ -111,6 +111,25 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
+### `io.quackjvm.core.live.LiveTables` / `LiveTable`
+
+Java objects queried as a table, with no load step.
+
+```java
+LiveTable table = LiveTables.register(connection, "car", cars, ColumnarLayout.ofRecord(Car.class));
+LiveTables.snapshot(connection, "car", cars, layout);          // a copy, for one consistent state
+LiveTables.register(connection, "car", () -> cache.rows(), layout);   // whatever is current
+table.unregister();
+```
+
+- A DuckDB table function plus a view, so SQL says `car`. Projection pushdown is on; the scan is
+  single-threaded.
+- `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java chunk writer cannot
+  write them in 1.5.5.
+- 1,000,000 objects: join to 200,000 stored rows in 40.6 ms, against 479 ms to load them first.
+
+See [Live tables](live-tables.md).
+
 ### `io.quackjvm.core.catalog.Catalog`
 
 What is in the database, and what it means.
