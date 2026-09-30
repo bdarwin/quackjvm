@@ -53,11 +53,23 @@ public final class ColumnarLayout<O> {
         private final String name;
         private final Class<V> type;
         private final Function<O, V> accessor;
+        private String description;
+        private String unit;
 
         Column(String name, Class<V> type, Function<O, V> accessor) {
             this.name = name;
             this.type = type;
             this.accessor = accessor;
+        }
+
+        /** What this column means, or null. Written into the database as a comment. */
+        public String getDescription() {
+            return description;
+        }
+
+        /** What this column is measured in, or null. */
+        public String getUnit() {
+            return unit;
         }
 
         public String getName() {
@@ -76,8 +88,15 @@ public final class ColumnarLayout<O> {
     private final Class<O> objectType;
     private final List<Column<O, ?>> columns;
     private final RowFactory<O> rowFactory;
+    private final String description;
 
     private ColumnarLayout(Class<O> objectType, List<Column<O, ?>> columns, RowFactory<O> rowFactory) {
+        this(objectType, columns, rowFactory, null);
+    }
+
+    private ColumnarLayout(Class<O> objectType, List<Column<O, ?>> columns, RowFactory<O> rowFactory,
+                           String description) {
+        this.description = description;
         if (columns.isEmpty()) {
             throw new IllegalArgumentException("A columnar layout must have at least one column: " + objectType);
         }
@@ -94,6 +113,21 @@ public final class ColumnarLayout<O> {
         return objectType;
     }
 
+    /** What a table of these objects holds, or null. Written into the database as a comment. */
+    public String getDescription() {
+        return description;
+    }
+
+    /** The column of this name, or null. */
+    public Column<O, ?> getColumn(String name) {
+        for (Column<O, ?> column : columns) {
+            if (column.getName().equals(name)) {
+                return column;
+            }
+        }
+        return null;
+    }
+
     public List<Column<O, ?>> getColumns() {
         return columns;
     }
@@ -106,7 +140,8 @@ public final class ColumnarLayout<O> {
     public java.util.List<io.quackjvm.core.duckdb.ColumnDef> toColumnDefs() {
         java.util.List<io.quackjvm.core.duckdb.ColumnDef> definitions = new ArrayList<>(columns.size());
         for (Column<O, ?> column : columns) {
-            definitions.add(new io.quackjvm.core.duckdb.ColumnDef(column.getName(), column.getType()));
+            definitions.add(new io.quackjvm.core.duckdb.ColumnDef(column.getName(), column.getType(),
+                    column.getDescription(), column.getUnit()));
         }
         return definitions;
     }
@@ -199,6 +234,7 @@ public final class ColumnarLayout<O> {
         private final Class<O> objectType;
         private final List<Column<O, ?>> columns = new ArrayList<>();
         private RowFactory<O> rowFactory;
+        private String description;
 
         Builder(Class<O> objectType) {
             this.objectType = objectType;
@@ -207,6 +243,34 @@ public final class ColumnarLayout<O> {
         public <V> Builder<O> column(String name, Class<V> type, Function<O, V> accessor) {
             columns.add(new Column<>(name, boxed(type), accessor::apply));
             return this;
+        }
+
+        /**
+         * What the column just added means. Written into the database as a comment on that column, so
+         * that whatever reads the schema finds it - see {@link io.quackjvm.core.catalog.Catalog}.
+         */
+        public Builder<O> describing(String description) {
+            lastColumn("describing").description = description;
+            return this;
+        }
+
+        /** What the column just added is measured in - "USD", "kg", "ms". */
+        public Builder<O> unit(String unit) {
+            lastColumn("unit").unit = unit;
+            return this;
+        }
+
+        /** What a table of these objects holds. Written as a comment on the table. */
+        public Builder<O> describingTable(String description) {
+            this.description = description;
+            return this;
+        }
+
+        private Column<O, ?> lastColumn(String what) {
+            if (columns.isEmpty()) {
+                throw new IllegalStateException(what + "(...) describes the column before it, so add a column first");
+            }
+            return columns.get(columns.size() - 1);
         }
 
         /** How to rebuild an object from the column values, in the order the columns were added. */
@@ -220,7 +284,7 @@ public final class ColumnarLayout<O> {
                 throw new IllegalStateException("A rowFactory is required to rebuild " + objectType.getName()
                         + " from its columns");
             }
-            return new ColumnarLayout<>(objectType, columns, rowFactory);
+            return new ColumnarLayout<>(objectType, columns, rowFactory, description);
         }
     }
 

@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Added
+- `io.quackjvm.core.catalog`: what is in the database and what it means. `Catalog.of(connection)`
+  gives `tables()`, `describe(table)` - columns with their SQL type, the Java type quackjvm maps them
+  to, nullability, a description and a unit - and `profile(table)`, which is `SUMMARIZE` plus an exact
+  row count and a few rows, as typed records with a `toText()` for whatever reads text. Descriptions
+  and units are stored in the database as DuckDB comments, so they survive in a file database and can
+  be read with plain SQL; a unit is kept by writing the pair as a small JSON object, and a comment
+  written by anything else is read as a plain description. `ColumnarLayout.Builder` gained
+  `describing(...)`, `unit(...)` and `describingTable(...)`, `ColumnDef` gained `describedAs(...)` and
+  `measuredIn(...)`, and `TableWriter.createTable` writes them onto the table it creates. Measured:
+  `describe` 1 ms whatever the table holds, `profile` 34 ms at a million rows and 307 ms at ten
+  million - which is why the cached variant that was considered was left out rather than built.
 - `io.quackjvm.core.guard`: running SQL that came from somewhere you do not control. `GuardedQuery.on(
   connection, QueryPolicy.readOnly()).run(sql)` checks the statement with DuckDB's own parser -
   `json_serialize_sql`, which serializes only queries - so everything that writes, attaches, loads,

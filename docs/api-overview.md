@@ -111,6 +111,28 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
+### `io.quackjvm.core.catalog.Catalog`
+
+What is in the database, and what it means.
+
+```java
+Catalog catalog = Catalog.of(connection);
+
+List<TableInfo> tables = catalog.tables();
+TableInfo car = catalog.describe("car", layout);   // layout optional: fills in Java types
+Profile profile = catalog.profile("car", 5);       // SUMMARIZE + row count + 5 rows
+
+catalog.describeColumn("car", "price", "what it sold for", "USD");
+catalog.apply("car", layout);                      // writes everything the layout says
+```
+
+- `TableInfo` / `ColumnInfo` / `Profile` / `ColumnProfile` are records, each with `toText()`.
+- Descriptions and units are stored as DuckDB comments - `COMMENT ON` - not in a registry of ours.
+- `describe` reads metadata only: 1 ms whatever the table holds. `profile` is a full scan: 307 ms at
+  ten million rows.
+
+See [Catalog](catalog.md).
+
 ### `io.quackjvm.core.guard.GuardedQuery` / `QueryPolicy` / `Hardening`
 
 Runs SQL that came from somewhere you do not control.
