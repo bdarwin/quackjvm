@@ -93,32 +93,29 @@ public class CoreMeasures {
         }
     }
 
-    /** Writing the measure to files, asking the files a question, and reading it back elsewhere. */
+    /** Archiving the measure to a file, asking the file a question, and reading it back elsewhere. */
     static void exportAndReadBack(DuckDBConnection connection, MeasureTable measures) throws Exception {
         java.nio.file.Path directory = java.nio.file.Files.createTempDirectory("measure-export");
         try {
             long started = System.nanoTime();
-            measures.export(connection, directory);
-            long bytes = 0;
-            try (var files = java.nio.file.Files.list(directory)) {
-                for (java.nio.file.Path file : files.toList()) {
-                    bytes += java.nio.file.Files.size(file);
-                }
-            }
-            System.out.printf("Exported to Parquet in %.0f ms, %,d KB - the dictionary, the values,"
+            // One self-contained Parquet file: a row per value with its fields beside it, and the
+            // measure's definition in the file's metadata. The rows leave the live table with it.
+            String file = measures.archive(connection, directory.toString(), MeasureTable.DEFAULT_PART);
+            long bytes = java.nio.file.Files.size(java.nio.file.Path.of(file));
+            System.out.printf("Archived to Parquet in %.0f ms, %,d KB - the values with their fields,"
                     + " and what the measure is%n", (System.nanoTime() - started) / 1e6, bytes / 1024);
 
             started = System.nanoTime();
-            long rows = measures.query().from(directory).rows("group").columns("point").where("unit", "U1")
+            long rows = measures.query().from(file).rows("group").columns("point").where("unit", "U1")
                     .run(connection.duplicate()).count();
-            System.out.printf("The same question asked of the files, without reading them back: %.0f ms, %d rows%n",
+            System.out.printf("The same question asked of the file, without reading it back: %.0f ms, %d rows%n",
                     (System.nanoTime() - started) / 1e6, rows);
 
             try (DuckDBConnection elsewhere = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
-                MeasureTable there = MeasureTable.describedBy(elsewhere, directory);
-                there.create(elsewhere);
+                // Nothing here knows the measure: its definition is read out of the file.
+                MeasureTable there = MeasureTable.describedBy(elsewhere, file);
                 started = System.nanoTime();
-                long values = there.importFrom(elsewhere, directory);
+                long values = there.restore(elsewhere, java.util.List.of(file));
                 System.out.printf("Read back into an empty database: %,d values in %.0f ms, %,d keys%n%n",
                         values, (System.nanoTime() - started) / 1e6, there.keyCount(elsewhere));
             }
@@ -192,11 +189,11 @@ public class CoreMeasures {
 }
 
 /*
- * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1):
+ * What it printed, on this machine (10 cores, DuckDB 1.5.5):
  *
- * 2,000,000 values over 2,000 records and 9,000 distinct keys, written in 1.0 s
+ * 2,000,000 values over 2,000 records and 9,000 distinct keys, written in 0.9 s
  *
- * One record, its series as rows and the axis as columns   (33 rows, 10 ms)
+ * One record, its series as rows and the axis as columns   (33 rows, 12 ms)
  *         group       sub      kind        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0        s1        k1      35.8      35.8      35.8      35.8      35.8      35.8      35.8      35.8      35.9      35.9
  *            g0        s2        k1      33.8      33.8      33.8      33.8      33.8      33.8      33.8      33.8      33.9      33.9
@@ -226,7 +223,7 @@ public class CoreMeasures {
  *            1y  666093.0  666051.8  665872.7  665903.3  666144.9
  *    ... 4 more rows
  *
- * One group only, by kind   (3 rows, 5 ms)
+ * One group only, by kind   (3 rows, 6 ms)
  *          kind        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            k0   55268.9   55268.9   55268.9   55268.9   55268.9   55268.9   55268.9   55268.9   55382.2   55382.2
  *            k1   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56980.0   56980.0
@@ -237,12 +234,12 @@ public class CoreMeasures {
  *            g0  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  509440.9  509440.9
  *            g1  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  506408.6  506408.6
  *           g10  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  507307.1  507307.1
- *           g11  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  508289.5  508289.4
+ *           g11  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  508289.4  508289.5
  *           g12  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  509318.7  509318.7
  *           g13  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  506249.8  506249.8
  *    ... 14 more rows
  *
- * Or kept apart, by putting the unit in the rows   (60 rows, 9 ms)
+ * Or kept apart, by putting the unit in the rows   (60 rows, 8 ms)
  *         group      unit        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0        U1  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166946.0  166946.0
  *            g0        U2  166892.0  166892.0  166892.0  166892.0  166892.0  166892.0  166892.0  166892.0  167226.0  167226.0
@@ -254,22 +251,28 @@ public class CoreMeasures {
  *
  * Adding up different units without converting them:
  *    refused: This would add up values in different units, which is never right. Put 'unit' in rows(...) or columns(...), narrow to one with where("unit", ...), or convertTo(unit, rates).
- * Exported to Parquet in 33 ms, 1,589 KB - the dictionary, the values, and what the measure is
- * The same question asked of the files, without reading them back: 8 ms, 20 rows
- * Read back into an empty database: 2,000,000 values in 30 ms, 9,000 keys
+ * Archived to Parquet in 290 ms, 5,857 KB - the values with their fields, and what the measure is
+ * The same question asked of the file, without reading it back: 14 ms, 20 rows
+ * Read back into an empty database: 2,000,000 values in 394 ms, 9,000 keys
  *
  * The SQL behind the second one, to join your own tables to:
- *    WITH totals AS (SELECT key_id,
- *           sum(value) AS total FROM "measure_value" WHERE key_id IN (SELECT id FROM "measure_key" WHERE "unit" IN ('U1')) GROUP BY key_id) SELECT k."group",
- *           sum(t.total) FILTER (WHERE k."point" = '1d') AS "1d",
- *           sum(t.total) FILTER (WHERE k."point" = '1w') AS "1w",
- *           sum(t.total) FILTER (WHERE k."point" = '1m') AS "1m",
- *           sum(t.total) FILTER (WHERE k."point" = '3m') AS "3m",
- *           sum(t.total) FILTER (WHERE k."point" = '6m') AS "6m",
- *           sum(t.total) FILTER (WHERE k."point" = '1y') AS "1y",
- *           sum(t.total) FILTER (WHERE k."point" = '2y') AS "2y",
- *           sum(t.total) FILTER (WHERE k."point" = '5y') AS "5y",
- *           sum(t.total) FILTER (WHERE k."point" = '10y') AS "10y",
- *           sum(t.total) FILTER (WHERE k."point" = '30y') AS "30y"
- *    FROM totals t JOIN "measure_key" k ON k.id = t.key_id GROUP BY k."group" ORDER BY k."group"
+ *    WITH perKey AS (SELECT key_id,
+ *           sum(value) AS total FROM "measure_value" WHERE key_id IN (SELECT id FROM "measure_key" WHERE "unit" IN ('U1')) GROUP BY key_id), totals AS (SELECT d."group", d."sub", d."kind", d."point", d."unit", t.total FROM perKey t JOIN "measure_key" d ON d.id = t.key_id) SELECT k."group",
+ *           sum(k.total) FILTER (WHERE k."point" = '1d') AS "1d",
+ *           sum(k.total) FILTER (WHERE k."point" = '1w') AS "1w",
+ *           sum(k.total) FILTER (WHERE k."point" = '1m') AS "1m",
+ *           sum(k.total) FILTER (WHERE k."point" = '3m') AS "3m",
+ *           sum(k.total) FILTER (WHERE k."point" = '6m') AS "6m",
+ *           sum(k.total) FILTER (WHERE k."point" = '1y') AS "1y",
+ *           sum(k.total) FILTER (WHERE k."point" = '2y') AS "2y",
+ *           sum(k.total) FILTER (WHERE k."point" = '5y') AS "5y",
+ *           sum(k.total) FILTER (WHERE k."point" = '10y') AS "10y",
+ *           sum(k.total) FILTER (WHERE k."point" = '30y') AS "30y"
+ *    FROM totals k GROUP BY k."group" ORDER BY k."group"
+ *
+ * The archive is one self-contained file: every row carries its key fields, and the measure's
+ * definition travels in the file's metadata, which is why a database that has never heard of the
+ * measure can read it back. That costs more than the earlier two-file export did - 5,857 KB against
+ * 1,589, 290 ms against 33 - and buys files anything can read, where they lie, with nothing else in
+ * hand.
  */

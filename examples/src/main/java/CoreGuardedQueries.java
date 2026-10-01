@@ -65,7 +65,7 @@ public class CoreGuardedQueries {
                     "INSERT INTO car VALUES (1, 'x', 1.0)",
                     "WITH x AS (DELETE FROM car RETURNING *) SELECT count(*) FROM x",
                     "SELECT 1; DROP TABLE car",
-                    "SELECT 1 /* hidden */; DROP TABLE car",
+                    "SELECT 1 -- hidden\n; DROP TABLE car",
                     "ATTACH ':memory:' AS other",
                     "COPY car TO '/tmp/stolen.csv'",
                     "INSTALL httpfs",
@@ -248,7 +248,7 @@ public class CoreGuardedQueries {
  *    INSERT INTO car VALUES (1, 'x', 1.0)                       INSERT is not a query, so it will not be run.
  *    WITH x AS (DELETE FROM car RETURNING *) SELECT count(...   WITH is not a query, so it will not be run.
  *    SELECT 1; DROP TABLE car                                   SELECT is not a query, so it will not be run.
- *    SELECT 1 /* hidden */; DROP TABLE car                      SELECT is not a query, so it will not be run.
+ *    SELECT 1 -- hidden ; DROP TABLE car                        SELECT is not a query, so it will not be run.
  *    ATTACH ':memory:' AS other                                 ATTACH is not a query, so it will not be run.
  *    COPY car TO '/tmp/stolen.csv'                              COPY is not a query, so it will not be run.
  *    INSTALL httpfs                                             INSTALL is not a query, so it will not be run.
@@ -271,9 +271,9 @@ public class CoreGuardedQueries {
  *
  * What the check costs
  * --------------------
- *    guarded:   2.61 ms
- *    unguarded: 2.06 ms
- *    the check alone, without running anything: 0.18 ms
+ *    guarded:   2.59 ms
+ *    unguarded: 2.07 ms
+ *    the check alone, without running anything: 0.19 ms
  *
  * Hardening: taking the way out away as well
  * ------------------------------------------
