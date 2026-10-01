@@ -14,7 +14,7 @@
  *   mvn -q generate-resources
  *   java --enable-native-access=ALL-UNNAMED \
  *        -cp "$(cat target/classpath.txt)" \
- *        src/main/java/CoreMeasureParquet.java
+ *        src/main/java/CoreMeasureParquet.java [directory-to-keep-the-files-in]
  */
 
 import com.sun.net.httpserver.HttpServer;
@@ -34,7 +34,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 public class CoreMeasureParquet {
@@ -43,7 +42,10 @@ public class CoreMeasureParquet {
     static final Instant TUESDAY = Instant.parse("2026-09-29T09:00:00Z");
 
     public static void main(String[] args) throws Exception {
-        Path directory = Files.createTempDirectory("measure-parquet");
+        // Kept after the run, so the files can be opened: pass a directory, or one is made under the temp dir.
+        Path directory = args.length > 0 ? Files.createDirectories(Path.of(args[0]).toAbsolutePath())
+                : Files.createTempDirectory("measure-parquet");
+        System.out.println("Everything is written under " + directory + " (kept when the run ends)\n");
         Path lake = directory.resolve("lake");
         HttpServer server = null;
         try (DuckDBConnection live = (DuckDBConnection) DriverManager.getConnection(
@@ -83,6 +85,8 @@ public class CoreMeasureParquet {
                 System.out.printf("   %-62s %,d bytes%n", file.substring(lake.toString().length() + 1),
                         Files.size(Path.of(file)));
             }
+            System.out.println("\n   in full:");
+            files.forEach(file -> System.out.println("   " + file));
 
             System.out.println("\nWhat a file holds - asked with plain SQL, nothing of quackjvm's involved");
             System.out.println("----------------------------------------------------------------------");
@@ -169,10 +173,8 @@ public class CoreMeasureParquet {
             if (server != null) {
                 server.stop(0);
             }
-            try (var walk = Files.walk(directory)) {
-                walk.sorted(Comparator.reverseOrder()).forEach(path -> path.toFile().delete());
-            }
         }
+        System.out.println("\nThe parquet files are still there: " + lake);
     }
 
     /** A static file server over the lake directory, on a free port. */
