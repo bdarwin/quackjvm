@@ -351,6 +351,17 @@ measures.query().asOf(monday, history).from(mondaysFiles).rows("group").columns(
 A point the history has pruned is **refused rather than answered wrong**, and the message says where
 it has gone. Pass the files alongside and it answers again; a refresh in both is counted once.
 
+### Reading the files, and reading the history as history
+
+`examples/src/main/java/CoreMeasureParquet.java` is the file side on its own: what a file holds, the
+five-line SQL that turns contributions into a state at a point - so a reader with nothing but DuckDB
+and the files gets the same answers - the same file read over HTTP by byte range, and a database that
+has never heard of the measure reading its definition out of the file's metadata.
+
+`examples/src/main/java/CoreMeasureAuditTrail.java` reads the history as history: one record hour by
+hour, who changed what and by how much, what moved between two points, and which refreshes touched a
+record - plain queries over the two history tables.
+
 ## Rebuilding the live database
 
 The history is the record; the live database is a cache of the current state.
