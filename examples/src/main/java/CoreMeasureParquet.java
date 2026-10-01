@@ -125,17 +125,22 @@ public class CoreMeasureParquet {
 
             System.out.println("\nOver HTTP, where the files lie - nothing is downloaded whole");
             System.out.println("-----------------------------------------------------------");
-            server = serve(lake);
-            int port = server.getAddress().getPort();
             try (Connection remote = DriverManager.getConnection("jdbc:duckdb:")) {
-                Sql.execute(remote, "LOAD httpfs");
-                String url = "http://127.0.0.1:" + port + "/" + files.get(0).substring(lake.toString().length() + 1);
-                System.out.println("   " + url);
-                long started = System.nanoTime();
-                print(remote, "SELECT kind, count(*) AS rows, round(sum(abs(value)), 1) AS moved FROM read_parquet('"
-                        + url + "') GROUP BY 1 ORDER BY 1", "   %-10s %3s %8s");
-                System.out.printf("   %.0f ms, reading only the byte ranges the query needed%n",
-                        (System.nanoTime() - started) / 1e6);
+                String unavailable = loadHttpfs(remote);
+                if (unavailable != null) {
+                    System.out.println("   skipped: " + unavailable);
+                }
+                else {
+                    server = serve(lake);
+                    int port = server.getAddress().getPort();
+                    String url = "http://127.0.0.1:" + port + "/" + files.get(0).substring(lake.toString().length() + 1);
+                    System.out.println("   " + url);
+                    long started = System.nanoTime();
+                    print(remote, "SELECT kind, count(*) AS rows, round(sum(abs(value)), 1) AS moved FROM read_parquet('"
+                            + url + "') GROUP BY 1 ORDER BY 1", "   %-10s %3s %8s");
+                    System.out.printf("   %.0f ms, reading only the byte ranges the query needed%n",
+                            (System.nanoTime() - started) / 1e6);
+                }
             }
 
             System.out.println("\nInto a database that has never heard of the measure");
@@ -171,6 +176,25 @@ public class CoreMeasureParquet {
     }
 
     /** A static file server over the lake directory, on a free port. */
+    /** Loads httpfs, installing it once if need be; the reason it cannot be had, or null. */
+    static String loadHttpfs(Connection connection) {
+        try {
+            Sql.execute(connection, "LOAD httpfs");
+            return null;
+        }
+        catch (Exception notInstalled) {
+            try {
+                Sql.execute(connection, "INSTALL httpfs");
+                Sql.execute(connection, "LOAD httpfs");
+                return null;
+            }
+            catch (Exception offline) {
+                return "the httpfs extension is not installed and could not be downloaded (needs the network once: "
+                        + "INSTALL httpfs). Everything else here works without it.";
+            }
+        }
+    }
+
     static HttpServer serve(Path root) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
