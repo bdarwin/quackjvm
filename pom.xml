@@ -10,8 +10,11 @@
     <packaging>pom</packaging>
 
     <name>quackjvm</name>
-    <description>Making DuckDB's capabilities available to the JVM efficiently: columnar storage for
-        Java objects, and a CQEngine persistence plugin built on it.</description>
+    <description>An embedded analytical engine for the JVM, built on DuckDB. Java objects become typed
+        columns and are asked questions in SQL - aggregates, pivots, joins - without being rebuilt.
+        Guarded read-only execution for SQL you did not write, catalog introspection, Java collections
+        queried as tables, Java functions in SQL, nested types, vector search, and sparse measures with
+        history. Includes a CQEngine persistence plugin built on the same storage.</description>
     <url>https://github.com/bdarwin/quackjvm</url>
 
     <licenses>

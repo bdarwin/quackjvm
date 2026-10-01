@@ -4,7 +4,7 @@
 [![Docs](https://img.shields.io/badge/docs-bdarwin.github.io%2Fquackjvm-blue.svg)](https://bdarwin.github.io/quackjvm/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-98%20passing-brightgreen.svg)](#building-and-benchmarking)
+[![Tests](https://img.shields.io/badge/tests-422%20passing-brightgreen.svg)](#building-and-benchmarking)
 
 **An embedded analytical engine for the JVM, built on [DuckDB](https://duckdb.org/).**
 

@@ -1,5 +1,5 @@
 site_name: quackjvm
-site_description: An embedded analytical engine for the JVM, built on DuckDB. Java objects as typed columns, questions answered in SQL, Arrow columnar reads.
+site_description: An embedded analytical engine for the JVM, built on DuckDB. Java objects as typed columns, questions answered in SQL, Arrow columnar reads, guarded SQL, live collections as tables, nested types and vector search.
 site_url: https://bdarwin.github.io/quackjvm/
 repo_url: https://github.com/bdarwin/quackjvm
 repo_name: bdarwin/quackjvm
