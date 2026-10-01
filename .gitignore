@@ -20,3 +20,4 @@ site/
 
 # Recorded by the dashboard when run from here
 quackjvm-metrics/
+.claude/review-probes/
