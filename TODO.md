@@ -39,7 +39,7 @@ module.
 
 ## 1. Critical
 
-### C7. The PIVOT opt-in path executes a smuggled second statement
+### C1. The PIVOT opt-in path executes a smuggled second statement
 `quackjvm-core/.../guard/internal/SqlScanner.java:109-112` ends a `--` comment only at `\n`;
 DuckDB's lexer also ends it at `\r`. **CONFIRMED** - `guard/Probe.java pivot`.
 
@@ -56,7 +56,7 @@ with `\r`, `\r\n` and a bare `\n`. The deeper point stands: the PIVOT path is th
 trusts a scanner instead of the parser, and the javadoc already says so - consider whether it should
 exist at all.
 
-### C6. `LiveTableFunction.SOURCES` is JVM-global and keyed by function name, so live tables leak across databases and the sandbox promise is false
+### C2. `LiveTableFunction.SOURCES` is JVM-global and keyed by function name, so live tables leak across databases and the sandbox promise is false
 `quackjvm-core/.../live/LiveTableFunction.java:43` (static map), `:62-67` (bind looks up whatever
 string the SQL passed), `:186` (put overwrites), `:207-209` (forget removes globally),
 `LiveTable.java:60-67`. **CONFIRMED** - `guard/Probe.java live`.
@@ -74,7 +74,7 @@ Tokens from other databases are unguessable, re-registration gets a new token, a
 cannot kill a newer one. Also remove the `SOURCES` entry if `CREATE VIEW` throws (`:186-201` leaves
 it). Document that the function's string argument is not an API.
 
-### C7. A failed bulk flush leaves the index tables holding rows for objects that were never stored
+### C3. A failed bulk flush leaves the index tables holding rows for objects that were never stored
 `quackjvm-cqengine/.../persistence/DuckDBBulkWriter.java:110-117` (flush order), `:138-159`
 (`closeQuietly`). **CONFIRMED** - `cqengine/Probe3.java`.
 
@@ -92,7 +92,7 @@ last successful object flush; on failure, close everything without flushing the 
 a failed flush discards the whole unflushed chunk. Mind DuckDB's automatic mid-chunk flushes: index
 rows for a key are only valid once `objectAppender.flush()` has returned.
 
-### C6. Two publishers shipping the same measure into one history: a shared refresh id silently destroys the second publisher's data
+### C4. Two publishers shipping the same measure into one history: a shared refresh id silently destroys the second publisher's data
 `quackjvm-core/.../measure/MeasureHistory.java:104-107` (history ledger PK is `(refresh_id, measure)`,
 no writer), `:159-164`, `:186-189`. **CONFIRMED** - `measures/Probe.java` scenario D.
 
@@ -107,7 +107,7 @@ Fix: key the history by `(writer, refresh_id, measure)` - ledger PK, both `NOT E
 `ship` must never delete an outbox row whose entry it has not confirmed is in the history **for this
 writer**.
 
-### C7. The "sum from the last full set" rule has no writer dimension, so two writers of one measure give wrong state and wrong as-of answers
+### C5. The "sum from the last full set" rule has no writer dimension, so two writers of one measure give wrong state and wrong as-of answers
 `MeasureTable.java:600-619` (a full set is `DELETE FROM <m>_value` with no writer filter; an
 increment's delta is computed against the whole table), `MeasureQuery.java:301-312` and
 `MeasureHistory.java:454-458` (`since`/`included` are per measure), `MeasureRefresh.java:232-250`
@@ -159,7 +159,7 @@ cache by database identity.
 
 ## 2. Major
 
-### M11. The guard lets statements that configure, write and reach the network through, contrary to "everything that configures is refused"
+### M1. The guard lets statements that configure, write and reach the network through, contrary to "everything that configures is refused"
 `GuardedQuery` javadoc `:34-37`, `docs/guarding-queries.md:17-29`. **CONFIRMED** - `guard/Probe.java funcs`.
 
 On an unhardened database, through `QueryPolicy.readOnly()`: `SELECT * FROM checkpoint()` and
@@ -176,7 +176,7 @@ side-effecting table functions (`checkpoint`, `force_checkpoint`, `enable_loggin
 `Hardening` a SELECT can checkpoint, read any file and reach the network, putting the hardened sandbox
 first rather than last.
 
-### M12. The byte cap is fooled by every non-scalar value
+### M2. The byte cap is fooled by every non-scalar value
 `GuardedQuery.java:243-257` counts 32 bytes for anything that is not String, `byte[]`, Number or
 Boolean - and the driver returns `DuckDBArray`, `DuckDBStruct`, `Map` and `DuckDBBlobResult` (not
 `byte[]`). **CONFIRMED.** With `maxBytes(1024)`: `SELECT list(range) FROM range(2000000)` → one row,
@@ -187,7 +187,7 @@ Fix: size `java.sql.Array` by `getArray()` length × element size (already mater
 `DuckDBBlobResult` by its length, `Map`/`Struct` recursively; and say in the docs that the cap is
 measured after a row is materialised, so one huge value always lands on the heap first.
 
-### M13. `Catalog`, `VectorSearch` and `TableWriter` ignore schemas
+### M3. `Catalog`, `VectorSearch` and `TableWriter` ignore schemas
 `Catalog.java:45-49` (filters database, not schema), `:199-203` (`duckdb_columns()` by name only),
 `:119-121`; `VectorSearch.java:241-242`; `TableWriter.java:109-110, 171`. **CONFIRMED.** With
 `main.car(id, make, price)` and `s2.car(other, thing)`, `describe("car")` returns five columns and
@@ -197,7 +197,7 @@ says no such table while DuckDB resolves `CAR`.
 Fix: filter on `schema_name = current_schema()` or accept `schema.table`; carry `schema` in
 `TableInfo`; decide and document case handling.
 
-### M9. `Rows.of` closes the connection it is given, and two documented examples run it twice on one connection
+### M4. `Rows.of` closes the connection it is given, and two documented examples run it twice on one connection
 `Rows.java:59-64, 93-95, 204-206, 220-222`; `docs/live-tables.md:9-10`; `LiveTables` javadoc.
 **CONFIRMED.** After `Rows.of(c, ...).records(...)`, `c.isClosed()` is true; the second `Rows.of(c,
 ...)` fails "Connection was closed", and closing a `LiveTable` on that connection fails too. The
@@ -206,7 +206,7 @@ tests pass because they use `connection.duplicate()`.
 Fix: either stop closing the caller's connection (the surprising choice, and a behaviour change), or
 make every example and doc use `connection.duplicate()` and say why. Pick one and apply it everywhere.
 
-### M10. A trailing `;` defeats the LIMIT wrapper, silently
+### M5. A trailing `;` defeats the LIMIT wrapper, silently
 `GuardedQuery.java:174-181`. **CONFIRMED.** `SELECT * FROM (\nSELECT ... ;\n) AS quackjvm_guarded
 LIMIT n` does not parse, `capped` stays false, and the statement runs unwrapped with the cap applied
 as rows arrive - the "rows are built anyway" case the docs say is avoided; with an `ORDER BY`, DuckDB
@@ -216,7 +216,7 @@ Fix: strip the trailing terminator before wrapping - the parser has already said
 and `SqlScanner.isBlankTail` exists - and fail loudly, or at least record, when the wrapper does not
 parse rather than falling back in silence. Test that `"SELECT ...;"` is capped.
 
-### M11. `FilterQuery` through a `DuckDBIndex` fails past 1,024 matching keys
+### M6. `FilterQuery` through a `DuckDBIndex` fails past 1,024 matching keys
 `DuckDBIndexCore.java:431-457` (`matchingKeys` streams the index table) and `:551-568`
 (`fetchObjects` runs another statement on the same connection). **CONFIRMED** - `cqengine/Probe2.java filter`.
 
@@ -230,7 +230,7 @@ Fix: do not interleave - drain the matching keys first (bounded by the match cou
 on-heap filter does anyway), or page the index scan by key like `ObjectTable.readPage`, or fetch on a
 second pooled connection (reads are MVCC). Test with > 1,024 matches.
 
-### M12. `in(...)` with ~10,000 values, or any statement with a ~5 KB string literal, throws `StackOverflowError` whenever metrics are on - the default
+### M7. `in(...)` with ~10,000 values, or any statement with a ~5 KB string literal, throws `StackOverflowError` whenever metrics are on - the default
 `quackjvm-core/.../metrics/QuackMetrics.java:93-96, 194-200` (`'(?:[^']|'')*'` and
 `\?(\s*,\s*\?)+` run over the whole SQL before the 4,000-char truncation), same pattern in
 `QueryProfile.java:25, 131-134`; reached from `SqlPredicate.render` (one `?` per value, no cap) and
@@ -243,7 +243,7 @@ Fix: cap the input length before any regex (64 KB, then truncate); make the quot
 `SqlPredicate`: above ~1,000 values use a temp table or a single LIST parameter with
 `list_contains`. Test with a 1 MB literal and with 10,000 values.
 
-### M13. `bulkWriter()` unlocks the write lock twice when an index appender fails to open, and leaks the connection when the object table fails
+### M8. `bulkWriter()` unlocks the write lock twice when an index appender fails to open, and leaks the connection when the object table fails
 `DuckDBPersistence.java:426-445`, `DuckDBBulkWriter.java:69-83, 138-159`. **CONFIRMED** -
 `Probe doubleunlock`. Known since the Sonar pass.
 
@@ -368,7 +368,7 @@ write-flagged request) is never released. Wrap in try/catch that closes the requ
 ### N9. `removeIndex` leaves a dangling `IndexBulkTarget` and join target
 `DuckDBPersistence.java:368-370, 398-406`, `index/DuckDBIndex.java:157-165`. **PLAUSIBLE.** `destroy`
 drops the table but never unregisters it, so a later `bulkWriter()` opens an appender on a dropped
-table (hitting M13) and pushed-down queries get a catalog error. Add `unregisterIndexTable`.
+table (hitting M8) and pushed-down queries get a catalog error. Add `unregisterIndexTable`.
 
 ### N10. Temp-file race, and the `.wal` is never cleaned up
 `DuckDBPersistence.java:538-551`. `createTempFile` → `delete` → `deleteOnExit` is a TOCTOU, and
@@ -504,18 +504,18 @@ interpolated raw - never pass agent text there.
 
 1. Bulk writer failure: after a duplicate-key flush, every index agrees with the object table
    (`count(DISTINCT objectKey)` per index == size, and no query returns an object whose attribute is
-   not the stored one). Fails today (C7).
-2. `FilterQuery` over a `DuckDBIndex` with > 1,024 matches, columnar and BLOB. Fails today (M11).
+   not the stored one). Fails today (C3).
+2. `FilterQuery` over a `DuckDBIndex` with > 1,024 matches, columnar and BLOB. Fails today (M6).
 3. `in()` with 10,000+ values with metrics on; `shapeOf`/`scrub` with a 1 MB literal and with
-   thousands of `''`. Fails today (M12).
+   thousands of `''`. Fails today (M7).
 4. Two writers of one measure in one database (interleaved timestamps; a full set by one), and two
    live databases into one history with the *same* measure - as-of and ship, reading back.
-   `twoPublishersCanShipIntoOneHistory` never reads back (C6, C7).
+   `twoPublishersCanShipIntoOneHistory` never reads back (C4, C5).
 5. Empty full set → ship → rebuild; removal of a nonexistent record → ship; live-ledger growth on
    no-op refreshes (C6).
 6. Key cache after a caller rollback; one instance against two databases (C7).
 7. `bulkWriter()` when an appender cannot open: the exception names the table, the lock is released
-   exactly once, the connection count returns to baseline (M13).
+   exactly once, the connection count returns to baseline (M8).
 8. Reopen a `.duckdb` file with an evolved BLOB class: field added, removed, reordered (M9).
 9. Pruned point with no earlier full set; `rebuild(at)` at a pruned point (M10).
 10. Export racing with ship - or at least: export ledger == file contents (M11).
@@ -531,14 +531,14 @@ interpolated raw - never pass agent text there.
 16. `OtherProcesses` in `PROCESS_HANDLE` mode with a fake two-reading baseline; a `ps` that never
     exits (N13).
 17. `JsonReader`: deep nesting, bad `\u`, trailing comma, `1.2.3` (N17).
-18. PIVOT with a `\r` and a `\r\n` comment (C7). Fails today.
+18. PIVOT with a `\r` and a `\r\n` comment (C1). Fails today.
 19. Two databases - app and sandbox - with live tables of the same and of different names, asserting
     isolation, and that closing one does not affect the other; a stale handle closed after
-    re-registration (C6). Fails today.
+    re-registration (C2). Fails today.
 20. `checkpoint()` / `force_checkpoint()` / a `https://` path through the guard - decide the policy,
-    then pin it (M11). The byte cap with LIST, STRUCT, MAP and BLOB (M12). A trailing-`;` statement
-    asserting the LIMIT was pushed (M10).
-21. `Catalog` with the same table name in two schemas (M13); `Rows.of` closing its connection (M9);
+    then pin it (M1). The byte cap with LIST, STRUCT, MAP and BLOB (M2). A trailing-`;` statement
+    asserting the LIMIT was pushed (M5).
+21. `Catalog` with the same table name in two schemas (M3); `Rows.of` closing its connection (M4);
     `topK` with a null parameter (N23); a hardening test that uses a function that exists (N27);
     `toText` with a BLOB and a multi-line value (N25).
 
@@ -549,26 +549,26 @@ interpolated raw - never pass agent text there.
 Each of these is fixed by the code change named, or by changing the sentence - not by leaving both.
 
 - `docs/measures.md` and `MeasureRefresh` javadoc: a full set is "everything *this publisher* has" -
-  it is everything the measure has (C7).
+  it is everything the measure has (C5).
 - `docs/measures.md` "refused rather than answered wrong" - not when no full set precedes the point,
   and `rebuild(at)` is never refused (M10).
 - `docs/measures.md`, `docs/proposals/sparse-measures.md`: "several services ship into one history
-  and their rows line up" - shared ids lose data, as-of across publishers is wrong (C6, C7).
+  and their rows line up" - shared ids lose data, as-of across publishers is wrong (C4, C5).
 - `docs/measures.md` "committing the same id twice applies it once" - not for a different measure
   (M12), not for the latest refresh after forgetting (N1).
 - `docs/measures.md` forgetting "within seconds, not days" - trimmed by logical timestamp, so a
   backfill is forgotten at once (N1).
-- `docs/measures.md` "Nothing is lost" (C6); `sql(connection)` for joining your own tables (M13).
+- `docs/measures.md` "Nothing is lost" (C4); `sql(connection)` for joining your own tables (M13).
 - `MeasureTable` javadoc: retries on conflict - not for refreshes (N3).
 - `ArrowResult` comment on per-batch accessors describes dead code (N16); `StatementCache` javadoc
   on unclosed statements (N15).
 - `DuckDBBulkWriter` javadoc "fails the primary key constraint at the next flush" does not say the
-  whole chunk is lost (C7).
-- `docs/guarding-queries.md`: "everything else is refused" and "configures" (M11); the scanner claim
-  for PIVOT (C7); "rows are never built" (M10); the byte estimate (M12); the sandbox story (C6).
-- `docs/live-tables.md` and the `LiveTables` javadoc run `Rows.of` twice on one connection (M9);
+  whole chunk is lost (C3).
+- `docs/guarding-queries.md`: "everything else is refused" and "configures" (M1); the scanner claim
+  for PIVOT (C1); "rows are never built" (M5); the byte estimate (M2); the sandbox story (C2).
+- `docs/live-tables.md` and the `LiveTables` javadoc run `Rows.of` twice on one connection (M4);
   "refused at registration" (N24).
-- `docs/catalog.md` says nothing about schemas or case (M13); `docs/nested-types.md` on null
+- `docs/catalog.md` says nothing about schemas or case (M3); `docs/nested-types.md` on null
   elements (N30); `docs/udfs.md` should say parameter types are exact (N24).
 
 ---
