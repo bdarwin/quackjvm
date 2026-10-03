@@ -64,6 +64,7 @@ cd examples
 | [`CoreTableFunctionStreaming.java`](src/main/java/CoreTableFunctionStreaming.java) | A paged "remote" feed pulled one page at a time only as DuckDB asks for rows. Named parameters, projection pushdown, and the catch: a bare `LIMIT` stops the fetching, a `WHERE` in front of it does not. |
 | [`CoreScalarFunction.java`](src/main/java/CoreScalarFunction.java) | Java functions called from SQL, in three forms, and what a call into the JVM costs per row against a built-in expression - about 4x on one thread, 15x on ten. |
 | [`CoreConcurrency.java`](src/main/java/CoreConcurrency.java) | Many threads, one connection each. Eight dashboard users over five million rows with `threads` at the default, at half the cores, and behind a semaphore; read-modify-write transactions that conflict, roll back and retry without losing a cent; `SparseTable` writes racing `optimize()`. |
+| [`CoreConnectionFacts.java`](src/main/java/CoreConnectionFacts.java) | What one database shares between its connections and what each keeps: an attached database, a Java function and a setting are seen everywhere; a temp table and a transaction are not, so one thread's rollback on a shared connection loses another thread's write. Opening a connection costs 6.6 us. The facts behind the [one entry point](../docs/proposals/one-entry-point.md) proposal. |
 
 ### CQEngine plugin
 

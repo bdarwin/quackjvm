@@ -82,6 +82,7 @@ nav:
       - Managed materializations: proposals/materializations.md
       - Pre-aggregation vs caching: proposals/result-cache.md
       - Measures: refreshes and archiving (design): proposals/sparse-measures.md
+      - One entry point (proposal): proposals/one-entry-point.md
 
 markdown_extensions:
   - abbr
