@@ -18,14 +18,16 @@ public final class LiveTable implements AutoCloseable {
     private final Connection connection;
     private final String name;
     private final String functionName;
+    private final String token;
     private final ColumnarLayout<?> layout;
     private final AtomicLong rowsRead = new AtomicLong();
     private volatile boolean open = true;
 
-    LiveTable(Connection connection, String name, String functionName, ColumnarLayout<?> layout) {
+    LiveTable(Connection connection, String name, String functionName, String token, ColumnarLayout<?> layout) {
         this.connection = connection;
         this.name = name;
         this.functionName = functionName;
+        this.token = token;
         this.layout = layout;
     }
 
@@ -34,9 +36,14 @@ public final class LiveTable implements AutoCloseable {
         return name;
     }
 
-    /** The table function underneath, for a query that would rather call it directly. */
+    /** The table function underneath. Calling it needs this registration's argument - see {@link #getCall()}. */
     public String getFunctionName() {
         return functionName;
+    }
+
+    /** The call the view makes, {@code quack_live_car('<token>')}, for a query that would rather use it directly. */
+    public String getCall() {
+        return Sql.quote(functionName) + "('" + token + "')";
     }
 
     public ColumnarLayout<?> getLayout() {
@@ -56,14 +63,19 @@ public final class LiveTable implements AutoCloseable {
         return open;
     }
 
-    /** Drops the view and stops the name answering. */
+    /**
+     * Stops this registration answering, and drops the view - unless the name has since been registered
+     * again, in which case the view belongs to the newer registration and is left alone.
+     */
     public void unregister() {
         if (!open) {
             return;
         }
         open = false;
-        Sql.execute(connection, "DROP VIEW IF EXISTS " + Sql.quote(name));
-        LiveTableFunction.forget(functionName);
+        LiveTableFunction.forget(token);
+        if (LiveTableFunction.viewStillReads(connection, name, token)) {
+            Sql.execute(connection, "DROP VIEW IF EXISTS " + Sql.quote(name));
+        }
     }
 
     @Override

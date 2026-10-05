@@ -35,10 +35,11 @@ final class LiveTableFunction implements DuckDBTableFunction<LiveTableFunction.B
     private static final String PREFIX = "quack_live_";
 
     /**
-     * What each registered live table reads from, by the name of its function. A function is registered
-     * with DuckDB once per name and cannot be unregistered in 1.5.5, so what it reads is looked up here
-     * every time it binds - and taking a live table away removes the entry, so a query against it says
-     * so rather than reading something stale.
+     * What each registered live table reads from, by a token drawn at random for that registration. A
+     * function is registered with DuckDB once per name and cannot be unregistered in 1.5.5, and this
+     * map is shared by every database in the JVM, so the key must be one only its own view knows: a
+     * name would let any database read another's rows by passing it. Taking a live table away removes
+     * its token, so a query against it says so rather than reading something stale.
      */
     private static final java.util.Map<String, Source> SOURCES = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -60,14 +61,14 @@ final class LiveTableFunction implements DuckDBTableFunction<LiveTableFunction.B
     @Override
     @SuppressWarnings("unchecked")
     public Bound bind(DuckDBTableFunctionBindInfo info) {
-        String functionName;
+        String token;
         try (org.duckdb.DuckDBValue argument = info.getParameter(0)) {
-            functionName = argument.getString();
+            token = argument.getString();
         }
-        Source source = SOURCES.get(functionName);
+        Source source = token == null ? null : SOURCES.get(token);
         if (source == null) {
-            throw new IllegalStateException("There is no live table behind " + functionName
-                    + " any more - it was unregistered.");
+            throw new IllegalStateException("There is no live table behind this call - it was unregistered,"
+                    + " or the argument is not the one its view passes.");
         }
         ColumnarLayout<Object> layout = (ColumnarLayout<Object>) source.layout();
         List<ColumnarLayout.Column<Object, ?>> columns = new ArrayList<>(layout.getColumns());
@@ -78,13 +79,13 @@ final class LiveTableFunction implements DuckDBTableFunction<LiveTableFunction.B
         }
         Iterable<?> rows = source.rows().get();
         if (rows == null) {
-            throw new IllegalStateException("The supplier behind " + functionName + " returned nothing to read.");
+            throw new IllegalStateException("The supplier behind " + source.table().getName() + " returned nothing to read.");
         }
         if (rows instanceof Collection<?> collection) {
             // An estimate, so the optimizer can pick a build side; not a promise.
             info.setCardinality(collection.size(), false);
         }
-        return new Bound(functionName, columns, writers, rows, source.table());
+        return new Bound(source.table().getFunctionName(), columns, writers, rows, source.table());
     }
 
     /**
@@ -182,8 +183,9 @@ final class LiveTableFunction implements DuckDBTableFunction<LiveTableFunction.B
             }
             source = () -> copy;
         }
-        LiveTable table = new LiveTable(connection, name, functionName, layout);
-        SOURCES.put(functionName, new Source(source, layout, table));
+        String token = java.util.UUID.randomUUID().toString();
+        LiveTable table = new LiveTable(connection, name, functionName, token, layout);
+        SOURCES.put(token, new Source(source, layout, table));
         if (!isRegistered(connection, functionName)) {
             try (DuckDBTableFunctionBuilder builder = DuckDBFunctions.tableFunction()) {
                 builder.withName(functionName)
@@ -193,19 +195,25 @@ final class LiveTableFunction implements DuckDBTableFunction<LiveTableFunction.B
                         .register(connection);
             }
             catch (SQLException e) {
-                SOURCES.remove(functionName);
+                SOURCES.remove(token);
                 throw new IllegalStateException("Failed to register a live table function for " + name, e);
             }
         }
-        // The view is what lets SQL say "car" rather than "quack_live_car('quack_live_car')".
+        // The view is what lets SQL say "car" rather than "quack_live_car('<token>')".
         Sql.execute(connection, "CREATE OR REPLACE VIEW " + Sql.quote(name) + " AS SELECT * FROM "
-                + Sql.quote(functionName) + "('" + functionName + "')");
+                + Sql.quote(functionName) + "('" + token + "')");
         return table;
     }
 
-    /** Forgets what a live table read, so its name stops answering. */
-    static void forget(String functionName) {
-        SOURCES.remove(functionName);
+    /** Forgets what one registration read, so its view stops answering. */
+    static void forget(String token) {
+        SOURCES.remove(token);
+    }
+
+    /** Whether the view called {@code name} still reads through this registration's token. */
+    static boolean viewStillReads(Connection connection, String name, String token) {
+        return Sql.queryLong(connection, "SELECT count(*) FROM duckdb_views() WHERE view_name = '"
+                + name.replace("'", "''") + "' AND sql LIKE '%" + token + "%'", List.of()) > 0;
     }
 
     private static boolean isRegistered(Connection connection, String functionName) {

@@ -1,6 +1,9 @@
 package io.quackjvm.core.live;
 
 import io.quackjvm.core.duckdb.Sql;
+import io.quackjvm.core.guard.GuardedQuery;
+import io.quackjvm.core.guard.Hardening;
+import io.quackjvm.core.guard.QueryPolicy;
 import io.quackjvm.core.layout.ColumnarLayout;
 import io.quackjvm.core.sql.Rows;
 import org.duckdb.DuckDBConnection;
@@ -10,6 +13,7 @@ import org.junit.Test;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -22,6 +26,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -348,5 +353,68 @@ public class LiveTablesTest {
         }
         java.util.Arrays.sort(timings);
         return timings[timings.length / 2];
+    }
+
+    // ---------- one database cannot reach another's live tables (review finding C2) ----------
+
+    public record Secret(int id, String value) {
+    }
+
+    @Test
+    public void aSandboxCannotReadTheAppsLiveTableByNamingItsFunction() throws Exception {
+        try (LiveTable ignored = LiveTables.register(connection, "secret", List.of(new Secret(1, "hunter2")),
+                     ColumnarLayout.ofRecord(Secret.class));
+             Connection sandbox = Hardening.sandbox();
+             LiveTable sandboxCars = LiveTables.register(sandbox, "car", cars.subList(0, 2), layout)) {
+            GuardedQuery guarded = GuardedQuery.on(sandbox, QueryPolicy.readOnly());
+            for (String argument : List.of("quack_live_secret", "secret", "")) {
+                try {
+                    guarded.run("SELECT * FROM quack_live_car('" + argument + "')");
+                    fail("the sandbox read another database's live table through '" + argument + "'");
+                }
+                catch (RuntimeException expected) {
+                    assertTrue(expected.getMessage(), expected.getMessage().contains("no live table behind"));
+                }
+            }
+            assertEquals(2, guarded.run("SELECT * FROM car").getRowCount());
+        }
+    }
+
+    @Test
+    public void theSameNameInTwoDatabasesKeepsTwoSetsOfRows() throws Exception {
+        try (LiveTable app = LiveTables.register(connection, "car", cars, layout)) {
+            try (Connection other = DriverManager.getConnection("jdbc:duckdb:");
+                 LiveTable two = LiveTables.register(other, "car", cars.subList(0, 2), layout)) {
+                assertEquals(2, Sql.queryLong(other, "SELECT count(*) FROM car", List.of()));
+                assertEquals(400, Sql.queryLong(connection, "SELECT count(*) FROM car", List.of()));
+            }
+            assertTrue(app.isOpen());
+            assertEquals(400, Sql.queryLong(connection, "SELECT count(*) FROM car", List.of()));
+        }
+    }
+
+    @Test
+    public void closingTheFirstOfTwoRegistrationsOfOneNameLeavesTheSecondAnswering() throws Exception {
+        LiveTable first = LiveTables.register(connection, "twice", cars.subList(0, 1), layout);
+        try (LiveTable second = LiveTables.register(connection, "twice", cars.subList(0, 3), layout)) {
+            first.close();
+            assertFalse(first.isOpen());
+            assertTrue(second.isOpen());
+            assertEquals(3, Sql.queryLong(connection, "SELECT count(*) FROM twice", List.of()));
+        }
+        try {
+            Sql.queryLong(connection, "SELECT count(*) FROM twice", List.of());
+            fail("the view outlived both registrations");
+        }
+        catch (RuntimeException expected) {
+            // closing the second, which owns the view, dropped it
+        }
+    }
+
+    @Test
+    public void theCallAViewMakesCanBeUsedDirectly() throws Exception {
+        try (LiveTable table = LiveTables.register(connection, "car", cars, layout)) {
+            assertEquals(400, Sql.queryLong(connection, "SELECT count(*) FROM " + table.getCall(), List.of()));
+        }
     }
 }
