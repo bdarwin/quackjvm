@@ -4,7 +4,7 @@
 [![Docs](https://img.shields.io/badge/docs-bdarwin.github.io%2Fquackjvm-blue.svg)](https://bdarwin.github.io/quackjvm/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-422%20passing-brightgreen.svg)](#building-and-benchmarking)
+[![Tests](https://img.shields.io/badge/tests-451%20passing-brightgreen.svg)](#building-and-benchmarking)
 
 **An embedded analytical engine for the JVM, built on [DuckDB](https://duckdb.org/).**
 
@@ -80,6 +80,7 @@ Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 | capability | JDBC driver | quackjvm |
 |---|---|---|
 | reading results | one boxed value per call; `DuckDBVector` is package-private so the columnar chunk already in your JVM is unreachable | Arrow columnar batches - **1M rows x 4 columns: 602 ms to 60 ms** |
+| owning connections | you open, duplicate, pass and close them; one shared between threads **queues** - a quick query waited 1,063 ms behind a slow one - and lets one thread roll back another's write | `Quack`: one object owns them. Every call borrows one and gives it back, a transaction holds one start to end, and **no connection is in sight** unless you ask for one |
 | storing Java objects | write your own row mapping | `ColumnarLayout` maps records, beans or explicit accessors to typed columns |
 | bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
 | precomputing a query | `CREATE TABLE AS`, and a refresh that breaks readers | `Materialization`, refreshed without a window where the table is missing |
@@ -90,40 +91,50 @@ Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
 
 ## Objects in, answers out
 
-No CQEngine, no framework - a `ColumnarLayout` maps a record to typed columns, `TableWriter` writes
-them, and `Rows` reads answers back as Java values.
+No CQEngine, no framework, no connection: `Quack` owns the database, a `ColumnarLayout` maps a
+record to typed columns, and answers come back as Java values.
 
 ```java
-record Reading(int sensorId, String site, double celsius, LocalDate day) {}
+record Reading(int readingId, String site, double celsius) {}
 
 ColumnarLayout<Reading> layout = ColumnarLayout.ofRecord(Reading.class);   // columns from the record
 
-try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
-    TableWriter writer = new TableWriter("reading", layout.toColumnDefs(), true,
-            TableWriter.DEFAULT_APPENDER_THRESHOLD);
-    writer.createTable(connection, true);
-    writer.write(connection, readings.stream().map(layout::toRow).iterator(), true);
+try (Quack db = Quack.open("readings.duckdb")) {
+    db.createTable("reading", layout);
+    db.write("reading", layout, readings);          // 100,000 records in 102 ms
 
     // An answer, not rows. Nothing is rebuilt as an object.
-    double average = Rows.of(connection.duplicate(),
-            "SELECT avg(celsius) FROM reading WHERE site = ?", "kitchen").scalar(Double.class);
+    double average = db.query("SELECT avg(celsius) FROM reading WHERE site = ?", "kitchen")
+            .scalar(Double.class);
 
     // Or a record per row, components matched to the selected columns by position.
-    record SiteStats(String site, long readings, double avgCelsius) {}
-    List<SiteStats> stats = Rows.of(connection.duplicate(),
-            "SELECT site, count(*), avg(celsius) FROM reading GROUP BY 1").records(SiteStats.class);
+    record SiteStats(String site, long readings, double average) {}
+    List<SiteStats> stats = db.query("SELECT site, count(*), avg(celsius) FROM reading GROUP BY 1")
+            .records(SiteStats.class);
+
+    // A table and a measure, written together or not at all.
+    db.inTransaction(tx -> {
+        tx.execute("UPDATE item SET count = count + ? WHERE id = ?", 5, 1);
+        tx.commit(MeasureRefresh.at(nine, "09:00").full(exposure, batch));
+    });
 }
 ```
 
+`Quack` is safe to share between threads; every call borrows a pooled connection and gives it back.
+`db.connection()` is the way down to DuckDB for anything it does not wrap. Runnable:
+[`examples/CoreEntryPoint.java`](examples/src/main/java/CoreEntryPoint.java).
+
 `Rows` gives you `scalar`, `scalarOptional`, `list`, `records`, `count`, `forEachRow` and `stream`,
 and picks the read path for you - plain JDBC for a single value, Arrow columnar batches for
-anything wide. It needs only a `Connection`, so it works over Parquet and CSV files too:
+anything wide. It works over Parquet and CSV files too:
 
 ```java
-long rows = Rows.of(connection.duplicate(), "SELECT count(*) FROM 'data/*.parquet'").scalar(Long.class);
+long rows = db.query("SELECT count(*) FROM 'data/*.parquet'").scalar(Long.class);
 ```
 
-Runnable: [`examples/CoreColumnarRecords.java`](examples/src/main/java/CoreColumnarRecords.java).
+Underneath, every class still takes a connection - `TableWriter`, `Rows.of(connection, ...)`,
+`MeasureRefresh.commit(connection)` - for code that has a pool of its own. That level is shown in
+[`examples/CoreColumnarRecords.java`](examples/src/main/java/CoreColumnarRecords.java).
 
 ## Answering questions without rebuilding objects
 
@@ -417,6 +428,7 @@ command to run it in its header and its real output at the bottom.
 
 | example | what it shows |
 |---|---|
+| `CoreEntryPoint` | **start here**: everything through `Quack`, with no connection in sight - objects, a transaction, a measure and its history, live tables, threads, a sandbox |
 | `CoreColumnarRecords` | core only: Java records to typed DuckDB columns and back, queried with SQL |
 | `CoreBulkLoad` | core only: a million rows loaded in 0.62 s into a 9.8 MB file |
 | `CqEngineSwap` | the one-line swap from an on-heap collection, and the memory difference |
@@ -436,7 +448,7 @@ mvn compile
 ## Building and benchmarking
 
 ```
-mvn test                        # 88 tests, across both modules
+mvn test                        # 451 tests, across the modules
 mvn -pl quackjvm-cqengine test  # just the CQEngine plugin
 ```
 

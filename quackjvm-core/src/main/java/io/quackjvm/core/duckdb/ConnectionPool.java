@@ -14,10 +14,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * A small pool of DuckDB connections duplicated from one root connection.
  *
- * <p>CQEngine opens a connection at the start of every request and closes it at the end. Creating
- * a DuckDB connection is not free (tens of microseconds, plus the cost of starting and ending a
- * transaction), and the per-connection temporary staging table used for bulk writes has to be
- * recreated each time. Handing the same connections back out avoids both.</p>
+ * <p>CQEngine opens a connection at the start of every request and closes it at the end, and
+ * {@code io.quackjvm.core.Quack} borrows one for every call. Opening one is cheap - 6.6 microseconds
+ * to duplicate and close, measured in {@code CoreConnectionFacts} - but what a connection accumulates
+ * is not: its prepared statements, and the temporary staging table used for bulk writes, which would
+ * otherwise be recreated each time. Handing the same connections back out keeps both.</p>
  */
 public final class ConnectionPool {
 

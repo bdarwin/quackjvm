@@ -1,7 +1,9 @@
 package io.quackjvm.core;
 
 import io.quackjvm.core.duckdb.Sql;
+import io.quackjvm.core.duckdb.TableWriter;
 import io.quackjvm.core.internal.LendingConnection;
+import io.quackjvm.core.layout.ColumnarLayout;
 import io.quackjvm.core.measure.MeasureQuery;
 import io.quackjvm.core.measure.MeasureRefresh;
 import io.quackjvm.core.measure.MeasureTable;
@@ -10,6 +12,7 @@ import io.quackjvm.core.sql.Rows;
 
 import java.sql.Connection;
 import java.util.Arrays;
+import java.util.Iterator;
 
 /**
  * One transaction, opened by {@link Quack#inTransaction} and ended by it: committed when the work
@@ -57,6 +60,39 @@ public final class Tx {
     public boolean commit(MeasureRefresh refresh) {
         checkOpen();
         return refresh.commit(connection);
+    }
+
+    /**
+     * Writes the objects into the table {@code name}, replacing any already stored under the same key
+     * - the layout's first column. Part of this transaction, so the replacement is all or nothing.
+     *
+     * @return how many rows were written
+     */
+    public <O> long write(String name, ColumnarLayout<O> layout, Iterable<O> objects) {
+        checkOpen();
+        Iterator<O> each = objects.iterator();
+        Iterator<Object[]> rows = new Iterator<>() {
+            @Override
+            public boolean hasNext() {
+                return each.hasNext();
+            }
+
+            @Override
+            public Object[] next() {
+                return layout.toRow(each.next());
+            }
+        };
+        return writer(name, layout).write(connection, rows, true).rowsWritten;
+    }
+
+    /** Creates a table with a column per field of the layout, keyed on the first. Safe to call again. */
+    public <O> void createTable(String name, ColumnarLayout<O> layout) {
+        checkOpen();
+        writer(name, layout).createTable(connection, true);
+    }
+
+    static TableWriter writer(String name, ColumnarLayout<?> layout) {
+        return new TableWriter(name, layout.toColumnDefs(), false, TableWriter.DEFAULT_APPENDER_THRESHOLD);
     }
 
     /** Creates the tables of the measures, inside this transaction. Safe to call again. */

@@ -221,6 +221,24 @@ public final class Quack implements AutoCloseable {
         return withConnection(connection -> Sql.executeUpdate(connection, sql, Arrays.asList(parameters)));
     }
 
+    /** Creates a table with a column per field of the layout, keyed on the first. Safe to call again. */
+    public <O> void createTable(String name, ColumnarLayout<O> layout) {
+        withConnection(connection -> {
+            Tx.writer(name, layout).createTable(connection, true);
+            return null;
+        });
+    }
+
+    /**
+     * Writes the objects into the table {@code name}, replacing any already stored under the same key
+     * - the layout's first column - in one transaction, so a failure leaves the table as it was.
+     *
+     * @return how many rows were written
+     */
+    public <O> long write(String name, ColumnarLayout<O> layout, Iterable<O> objects) {
+        return fromTransaction(tx -> tx.write(name, layout, objects));
+    }
+
     /** Creates the tables of the measures, and their history tables if there is a history. Safe to call again. */
     public void create(MeasureTable... measures) {
         withConnection(connection -> {

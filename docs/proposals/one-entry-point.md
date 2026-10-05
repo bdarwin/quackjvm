@@ -1,4 +1,9 @@
-# One entry point: the database, not the connection (proposal)
+# One entry point: the database, not the connection (design)
+
+> **Built, 2026-10-05,** as `io.quackjvm.core.Quack` and `io.quackjvm.core.Tx` - see
+> [What was built](#what-was-built) at the end for where it differs from what follows, and
+> [`CoreEntryPoint`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreEntryPoint.java)
+> for it running. Review findings C2 and C7 were fixed first, at the lower level.
 
 Every feature of quackjvm-core is reached through a JDBC connection the caller opens, holds and
 passes in. 105 public methods take one: `exposure.create(live)`, `refresh.commit(live)`,
@@ -22,7 +27,7 @@ try (Quack db = Quack.open("live.duckdb")) {
     db.commit(MeasureRefresh.at(nine, "09:00").full(exposure, batch));
 
     db.query("SELECT point, sum(value) FROM exposure_value GROUP BY 1").forEachRow(...);
-    db.asOf(exposure, nine).rows("group", "point").list();
+    db.query(db.asOf(exposure, nine).rows("group", "point")).forEachRow(...);
     db.vectors("note", "embedding").topK(question, 3);
     db.catalog().tables();
 }
@@ -47,6 +52,8 @@ every connection duplicated from one root, as quackjvm's pool opens them:
 | A `TEMP` table, seen from another connection | no |
 | A row not yet committed, seen from another connection | no |
 | 1,600 reads from 8 threads on one shared connection | 0 failed, 0 wrong |
+| A quick query while a 1-second one runs, on the same connection | answered in 1,063 ms |
+| The same, on a connection of its own | answered in 0 ms |
 | Thread A inserts on a shared connection, thread B rolls back | A's row is gone |
 
 Three consequences:
@@ -61,8 +68,9 @@ Three consequences:
    to the pool.
 2. **What a connection keeps, each unit of work gets its own.** A transaction belongs to the
    connection, not the thread. One connection shared by two threads means one thread's rollback
-   loses the other's write. So every call borrows a connection and returns it, and a transaction
-   holds one connection from start to end.
+   loses the other's write. Reads survive sharing but queue: a connection runs one query at a
+   time, so a quick query waited out a slow one on the same connection. So every call borrows a
+   connection and returns it, and a transaction holds one connection from start to end.
 3. **Pooling is not about the cost of opening.** 6.6 µs is cheap; the pool's own comment says "tens
    of microseconds", which is wrong and should be corrected. The pool still earns its place,
    because it keeps what a connection accumulates:
@@ -103,7 +111,7 @@ path and the failure path alike. The caller never holds one, so the ownership qu
 | `VectorSearch.on(c, table, column)` | `db.vectors(table, column)` |
 | `measure.create(c)`, `sparse.create(c)` | `db.create(measure)` |
 | `refresh.commit(c)` | `db.commit(refresh)` |
-| `measure.query()...run(c.duplicate())` | `db.asOf(measure, at)...`, `db.measure(measure)...` |
+| `measure.query()...run(c.duplicate())` | `db.query(db.asOf(measure, at)...)`, `db.query(measure.query()...)` |
 | `history.ship(c, measures)` | `db.ship(measures)` |
 | `history.export(c, measure, location)` | `db.export(measure, location)` |
 
@@ -120,10 +128,9 @@ Udf score = db.function("score", Double.class, Double.class, x -> x * 2);
 Each returns a handle that can be closed early, and `db.close()` closes whatever is still open.
 That ties a registration's life to the database it was made on, which is the right lifetime.
 
-This does **not** fix review finding C2 on its own. `LiveTableFunction.SOURCES` is keyed by
-function name across the whole JVM, so two databases still collide until that map is keyed per
-registration, as the TODO describes. Once it is, the entry point's bookkeeping is the only place
-that needs to know.
+This does not fix review finding C2 on its own: `LiveTableFunction.SOURCES` was keyed by function
+name across the whole JVM, so two databases collided. That was fixed first, at the lower level -
+each registration is now keyed by a random token its own view passes - and the entry point builds on it.
 
 ### Transactions
 
@@ -138,8 +145,8 @@ The entry point keeps that, with the connection held for the caller:
 db.inTransaction(tx -> {
     tx.execute("UPDATE item SET count = count + ? WHERE id = ?", 5, 42);
     tx.commit(MeasureRefresh.at(nine, "09:00").increment(exposure, batch));
-    return null;
 });
+// and fromTransaction(tx -> ...) for work that returns a value
 ```
 
 - `inTransaction` borrows one connection, turns autocommit off and hands the work a `Tx` bound to
@@ -152,10 +159,10 @@ db.inTransaction(tx -> {
   writes to only one attached database per transaction. Review finding N4 is `ship()` failing
   inside a caller's transaction. Through the entry point it cannot be written: there is no
   `tx.ship`.
-- **The rollback happens in one place.** Review finding C7 is a caller's rollback leaving the
-  measure's key-id cache holding ids the database no longer has. When the entry point does the
-  rolling back, it knows which measures the transaction touched and can tell them. The fix the TODO
-  describes (cache only after a commit the write owns) is still needed for anyone on the lower level.
+- **A rollback leaves no stale key ids.** Review finding C7 was a caller's rollback leaving the
+  measure's key-id cache holding ids the database no longer had. It was fixed at the lower level
+  first: ids are remembered only after a commit the write owns, and inside a caller's transaction -
+  which includes every `Tx` - nothing is cached. So the entry point needed nothing of its own for it.
 - **Nesting:** `tx.inTransaction(...)` runs the inner work in the same transaction. DuckDB has no
   savepoints, so an inner failure fails the whole transaction. That will be documented, not hidden.
 
@@ -178,8 +185,8 @@ back, which is what `ConnectionPool.release` already does.
 | M4: `Rows.of` closes the caller's connection | The caller has no connection to lose. |
 | N4: `ship()` inside a caller's transaction fails | `Tx` has no `ship`. |
 | N6: `MeasureQuery.run` leaks its connection when it throws early | The entry point returns the connection in `finally`. |
-| C7: a caller's rollback poisons the key cache | The rollback is the entry point's, so it can tell the measures. The lower-level fix is still needed. |
-| C2: live tables leak across databases | Not fixed. It needs the per-registration key first, then the entry point owns the lifetime. |
+| C7: a caller's rollback poisons the key cache | Fixed at the lower level first (`c2428e3`); nothing is cached inside a `Tx`. |
+| C2: live tables leak across databases | Fixed at the lower level first (`2b6fac4`); the entry point closes its live tables with the database. |
 
 These are the findings that come from the same confusion: who owns a connection, and who owns a
 transaction. The entry point answers both in one place.
@@ -193,7 +200,38 @@ transaction. The entry point answers both in one place.
 - **No new dependency.** One public class in `io.quackjvm.core`, one `Tx`, one handle type. The
   root package is empty today.
 
-## Open questions
+## What was built
+
+Commits `2b6fac4` (C2), `c2428e3` (C7) and `fbe20dc` (the entry point), then the docs. 22 tests in
+`QuackTest`; 451 in all, green.
+
+The open questions, answered:
+
+1. **The name** is `Quack`.
+2. **Sandboxes:** `Quack.sandbox()` returns a second `Quack`, a separate in-memory database.
+3. **Read-only use** is not built; nothing needed it.
+4. **Examples:** one new one, `CoreEntryPoint`. The others still show the lower level, which they teach.
+
+Where it differs from the design above:
+
+- **Helpers that keep a connection for life get one that borrows per statement.** `GuardedQuery`,
+  `Catalog` and `VectorSearch` hold the connection they are given. Handing them one shared connection
+  would queue every query behind every other - measured above. So they get a connection whose every
+  `prepareStatement` borrows from the pool and whose statement's `close()` gives it back. It refuses
+  to start a transaction, since one statement per connection cannot hold one.
+- **Writing objects is on the entry point too:** `createTable(name, layout)` and
+  `write(name, layout, objects)`, the latter in one transaction so a replace is all or nothing.
+  `Tx` has both. Without them, the first thing most callers do would have needed a connection.
+- **Transactions are `inTransaction(tx -> ...)` and `fromTransaction(tx -> ...)`**, not one method.
+  Overloading one name on a void and a value-returning lambda is ambiguous to the Java compiler for
+  a lambda like `tx -> tx.execute(...)`.
+- **Measure queries go through `db.query(measureQuery)`.** `db.asOf(measure, at)` returns the query,
+  bound to the history; there is no second, bound copy of `MeasureQuery`'s builder.
+- **What is not wrapped:** a measure's count and size methods, `SparseTable` reads, `compact`,
+  `prune`, `rebuild`, the null-passing and primitive `Udfs` forms. Each is a line through
+  `db.connection()`; add them when someone needs them.
+
+## Open questions (as proposed)
 
 1. **The name.** `Quack` is short and matches the project. `QuackDb` says what it is. `Database`
    collides with half the JVM.
@@ -205,7 +243,7 @@ transaction. The entry point answers both in one place.
 4. **How far the examples move.** Proposal: the examples written for 1.2 move to the entry point.
    The older ones that teach the lower level stay as they are, and each says which level it shows.
 
-## The work
+## The work (as proposed)
 
 - `Quack`, `Tx` and the registration handle: some 400 lines, all of it delegation to classes that
   exist.

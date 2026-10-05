@@ -126,6 +126,25 @@ public class CoreConnectionFacts {
             threads.shutdown();
             System.out.println("   1,600 reads on one shared connection: " + failed + " failed, " + wrong + " wrong");
 
+            // They survive, but they take turns: a connection runs one query at a time.
+            String slow = "SELECT count(*) FROM range(15000) a, range(15000) b WHERE (a.range * 7 + b.range) % 1000003 = 1";
+            ExecutorService one = Executors.newSingleThreadExecutor();
+            for (boolean shared : new boolean[]{true, false}) {
+                Connection quick = shared ? root : root.duplicate();
+                Future<?> busy = one.submit(() -> one(root, slow));
+                Thread.sleep(50);
+                long asked = System.nanoTime();
+                one(quick, "SELECT 42");
+                long waited = (System.nanoTime() - asked) / 1_000_000;
+                busy.get();
+                System.out.printf("   a quick query while a 1-second one runs, on %-23s %,6d ms%n",
+                        shared ? "the same connection" : "a connection of its own", waited);
+                if (!shared) {
+                    quick.close();
+                }
+            }
+            one.shutdown();
+
             // A transaction belongs to the connection, not the thread: one thread's rollback takes the other's
             // write with it.
             root.setAutoCommit(false);
@@ -195,6 +214,8 @@ public class CoreConnectionFacts {
  * One connection, eight threads
  * -----------------------------
  *    1,600 reads on one shared connection: 0 failed, 0 wrong
+ *    a quick query while a 1-second one runs, on the same connection      1,063 ms
+ *    a quick query while a 1-second one runs, on a connection of its own      0 ms
  *    thread A inserts on the shared connection, thread B rolls back: A's row is gone
  *
  * So the database is the thing to share and the connection is not. A database attached, a function
@@ -203,6 +224,10 @@ public class CoreConnectionFacts {
  * and a transaction belong to one connection, so each unit of work needs a connection of its own;
  * otherwise one thread's rollback is another thread's lost write.
  *
- * And a connection is cheap to open: 6.6 us. A pool is still worth having, for what a connection
- * accumulates - prepared statements, a staging table - but not to save opening one.
+ * Sharing one connection for reads does not fail - but it queues. A connection runs one query at a
+ * time, so a quick query waited out the whole of a slow one on the same connection, and answered at
+ * once on a connection of its own. That is why every call through the entry point borrows.
+ *
+ * And a connection is cheap to open, a few microseconds. A pool is still worth having, for what a
+ * connection accumulates - prepared statements, a staging table - but not to save opening one.
  */

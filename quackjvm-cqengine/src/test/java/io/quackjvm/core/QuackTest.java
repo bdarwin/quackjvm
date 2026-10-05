@@ -96,6 +96,39 @@ public class QuackTest {
     }
 
     @Test
+    public void objectsAreWrittenAndReadBackAsTheyWere() {
+        ColumnarLayout<Car> layout = ColumnarLayout.ofRecord(Car.class);
+        db.createTable("car", layout);
+        List<Car> cars = List.of(new Car(1, "a", 1.5), new Car(2, "b", 2.5));
+        assertEquals(2, db.write("car", layout, cars));
+        assertEquals(cars, db.query("SELECT * FROM car ORDER BY carId").records(Car.class));
+
+        // Written again under the same key, it replaces rather than duplicates.
+        db.write("car", layout, List.of(new Car(2, "b", 9.0)));
+        assertEquals(List.of(new Car(1, "a", 1.5), new Car(2, "b", 9.0)),
+                db.query("SELECT * FROM car ORDER BY carId").records(Car.class));
+        db.createTable("car", layout);   // and creating it again is harmless
+        assertEquals(0.0, inUse(), 0.0);
+    }
+
+    @Test
+    public void objectsWrittenInATransactionThatThrowsAreNotThere() {
+        ColumnarLayout<Car> layout = ColumnarLayout.ofRecord(Car.class);
+        db.createTable("car", layout);
+        db.write("car", layout, List.of(new Car(1, "a", 1.5)));
+        try {
+            db.inTransaction(tx -> {
+                tx.write("car", layout, List.of(new Car(1, "a", 99.0), new Car(2, "b", 2.5)));
+                throw new IllegalStateException("no");
+            });
+        }
+        catch (IllegalStateException expected) {
+            // rolled back
+        }
+        assertEquals(List.of(new Car(1, "a", 1.5)), db.query("SELECT * FROM car").records(Car.class));
+    }
+
+    @Test
     public void everyConnectionIsGivenBackOnFailureAsWellAsSuccess() {
         for (int i = 0; i < 50; i++) {
             db.query("SELECT count(*) FROM item").scalar(Long.class);

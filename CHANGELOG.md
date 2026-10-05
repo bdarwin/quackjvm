@@ -3,6 +3,19 @@
 ## Unreleased
 
 ### Added
+- `io.quackjvm.core.Quack`: one entry point that owns the database, so the code using it never holds a
+  connection. `Quack.open(path)`, `inMemory()`, `on(existingConnection)`, `sandbox()`, or
+  `builder(path).history(...).hardening(...).metrics(...).open()`; then `query`, `execute`,
+  `createTable` and `write` for objects, `create` and `commit` for measures, `ship`, `export` and
+  `asOf` for their history, `guarded`, `catalog`, `vectors`, `live`, `function`. Thread-safe: every
+  call borrows a pooled connection and gives it back on failure as well as success. Helpers that keep
+  a connection for life get one that borrows per statement, because a DuckDB connection runs one
+  query at a time - a quick query behind a slow one on a shared connection waited 1,063 ms, against
+  0 ms on its own. `inTransaction(tx -> ...)` runs work on one connection, committed when it returns
+  and rolled back when it throws; `Tx` leaves out `ship`, `export`, `compact` and `prune`, which run
+  their own transactions against two databases. `connection()` is the way down. Nothing underneath
+  changed: every connection-taking method remains. `CoreEntryPoint` shows it; `CoreConnectionFacts`
+  measures what it rests on - what a database shares between connections, and what each keeps.
 - `io.quackjvm.core.vector.VectorSearch`: the rows whose vector is nearest a given one.
   `VectorSearch.on(connection, table, column).identifiedBy("id").topK(query, 10, "topic = ?", "news")`,
   by cosine similarity, Euclidean distance or inner product, with `sql(...)` for joining your own
@@ -181,6 +194,16 @@
   locks, `serializeWrites`, and the shared-`QueryOptions` guard.
 
 ### Fixed
+- **Live tables could be read from another database (review C2).** What a live table reads was keyed by
+  its function's name across the whole JVM, so a sandbox could read the application's table by passing
+  its name, and registering a name in one database replaced what another's read. Each registration is
+  now keyed by a random token only its own view passes, and closing a handle drops the view only while
+  the view still reads through it.
+- **A caller's rollback left the measure key cache holding ids the dictionary no longer had (review
+  C7)**, so later values pointed at a key that did not exist and silently disappeared from queries.
+  Ids are now remembered only after a commit the write owns. Keys a write adds are now remembered as
+  well, where before only keys that already existed were.
+- `ConnectionPool`'s javadoc said opening a connection costs tens of microseconds; it costs 6.6.
 - The statement cache stopped working for good once full. A burst of one-off statements (SQL with
   values written into it) filled the 64 slots, nothing was ever evicted, and every statement after
   that was prepared from scratch for the life of the connection. Found on the dashboard: 100%

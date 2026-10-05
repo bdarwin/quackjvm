@@ -5,6 +5,46 @@ implementation detail and may change.
 
 ## quackjvm-core
 
+### `io.quackjvm.core.Quack` - the entry point
+
+A DuckDB database and everything quackjvm does with it, behind one object that owns the
+connections, so the code using it never holds one. Thread-safe. Each call borrows a pooled
+connection and gives it back, on failure as well as success. Helpers that keep a connection for
+life (catalog, guard, vector search) get one that borrows per statement: a DuckDB connection runs
+one query at a time, and a quick query behind a slow one on a shared connection waited 1,063 ms,
+against 0 ms on its own ([`CoreConnectionFacts`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreConnectionFacts.java)).
+
+| method | notes |
+|---|---|
+| `static Quack open(path)`, `inMemory()` | A file, created if absent; or memory only. |
+| `static Builder builder(path)` | `.hardening(Hardening.DATABASE)`, `.history(location)`, `.metrics(quackMetrics)`, `.connections(idle)`, then `.open()`. History is attached once and hardening applied once, at open. A null path is in memory. |
+| `static Quack on(DuckDBConnection)` | A database the program already has open. Works on connections duplicated from the one given, and never uses or closes that one. |
+| `static Quack sandbox()` | A separate in-memory database hardened as `Hardening.sandbox()` hardens one: no files, no network, no reconfiguring. |
+| `Rows query(sql, params...)`, `Rows query(MeasureQuery)` | Run at the terminal method; each borrows a connection for that. |
+| `int execute(sql, params...)` | A statement that changes something; rows changed. |
+| `createTable(name, layout)`, `long write(name, layout, objects)` | A table with a column per field, keyed on the first; objects written in one transaction, replacing any under the same key. |
+| `create(MeasureTable...)`, `create(SparseTable)` | Their tables, the refresh ledger, and their history tables if there is a history. Safe to call again. |
+| `boolean commit(MeasureRefresh)` | In a transaction of its own; false if the id was committed before. |
+| `MeasureHistory history()`, `MeasureQuery asOf(measure, at)` | The history given at open (refuses if none); a measure query as of a point, to pass to `query`. |
+| `Shipped ship(measures...)`, `Exported export(measure, location)` | Run their own transactions against the live database and the history. |
+| `GuardedQuery guarded(QueryPolicy)`, `Catalog catalog()`, `VectorSearch vectors(table, column)` | As below, on this database. |
+| `LiveTable live(name, rows, layout)`, `snapshot(...)` | Registered once, seen on every connection, closed with the database. |
+| `Udf function(name, returns, argTypes..., method)` | One, two or three arguments; a null argument is a null result. Other forms through `connection()` and `Udfs`. |
+| `void inTransaction(Tx.Work)`, `T fromTransaction(Tx.Result<T>)` | One connection; committed when the work returns, rolled back when it throws. Not retried on a conflict. |
+| `Connection connection()` | The way down: a pooled connection of the caller's own until closed; closing gives it back with anything uncommitted rolled back. |
+
+### `io.quackjvm.core.Tx`
+
+One transaction, used by the thread that opened it and only until the work returns: `query`,
+`execute`, `write`, `createTable`, `commit(MeasureRefresh)`, `create`, `inTransaction` (more work in
+the same transaction - DuckDB has no savepoints) and `connection()` (closing it does nothing;
+committing, rolling back or turning auto-commit on is refused). It has no `ship`, `export`,
+`compact` or `prune`: those run transactions of their own against two databases, and DuckDB writes
+to only one attached database per transaction.
+
+Every class below keeps its connection-taking methods. They are the lower level: for code with a
+pool of its own, the CQEngine plugin, and tests.
+
 ### `io.quackjvm.core.layout.ColumnarLayout<O>`
 
 How to shred an object into one typed DuckDB column per field, and how to rebuild it from a row.

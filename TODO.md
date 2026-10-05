@@ -9,6 +9,9 @@ list; **PLAUSIBLE** is from reading the code and has not been run.
 This list is for whoever picks the work up next. It is ordered by what would hurt most, not by
 module.
 
+**Status, 2026-10-05:** C2 and C7 are fixed. M4, N4 and N6 cannot happen through the new entry
+point, `io.quackjvm.core.Quack`, but remain at the lower level. Everything else is open. Tests: 451.
+
 ## How to work it
 
 - One commit per item, in order, `mvn -o test` green after each (422 tests at `13959db`; the one
@@ -57,6 +60,8 @@ trusts a scanner instead of the parser, and the javadoc already says so - consid
 exist at all.
 
 ### C2. `LiveTableFunction.SOURCES` is JVM-global and keyed by function name, so live tables leak across databases and the sandbox promise is false
+> **FIXED** in `2b6fac4` (2026-10-05): each registration is keyed by a random token its own view passes; closing a handle drops the view only while the view still reads through it. `LiveTablesTest` has the three scenarios below, each failing before the fix.
+
 `quackjvm-core/.../live/LiveTableFunction.java:43` (static map), `:62-67` (bind looks up whatever
 string the SQL passed), `:186` (put overwrites), `:207-209` (forget removes globally),
 `LiveTable.java:60-67`. **CONFIRMED** - `guard/Probe.java live`.
@@ -140,6 +145,8 @@ Fix: `waitingRefreshes` comes from the live ledger (`measure_refresh` rows for t
 shipped with no entry in the history ledger), so an entry with zero contributions ships as an entry.
 
 ### C7. A caller-owned rollback poisons the key-id cache; later writes reference a key that does not exist and the values silently disappear
+> **FIXED** in `c2428e3` (2026-10-05): a write collects the ids it resolved and the cache adopts them only after a commit the write owns; inside a caller's transaction nothing is cached. Tests in `MeasureRefreshTest`. Still open from this item: the cache following an instance across two databases, and a `DROP TABLE` + `create()` outside `migrate()`.
+
 `MeasureTable.java:736-738` (`keyIds.putAll(ids)` inside the caller's transaction). **CONFIRMED** -
 scenario F.
 
@@ -198,6 +205,8 @@ Fix: filter on `schema_name = current_schema()` or accept `schema.table`; carry 
 `TableInfo`; decide and document case handling.
 
 ### M4. `Rows.of` closes the connection it is given, and two documented examples run it twice on one connection
+> **AVOIDED through `Quack`** (`fbe20dc`): its callers hold no connection to lose. **Still open at the lower level** - `Rows.of(connection, ...)` still closes what it is given.
+
 `Rows.java:59-64, 93-95, 204-206, 220-222`; `docs/live-tables.md:9-10`; `LiveTables` javadoc.
 **CONFIRMED.** After `Rows.of(c, ...).records(...)`, `c.isClosed()` is true; the second `Rows.of(c,
 ...)` fails "Connection was closed", and closing a `LiveTable` on that connection fails too. The
@@ -343,6 +352,8 @@ loser getting "Duplicate key" instead of `false`. `MeasureTable`'s javadoc promi
 `write()` has and `commit()` lacks.
 
 ### N4. `ship()` inside a caller's transaction always fails on the first outbox DELETE
+> **AVOIDED through `Quack`** (`fbe20dc`): `Tx` has no `ship`. **Still open at the lower level** - `history.ship(connection)` inside a caller's transaction still fails late.
+
 `MeasureHistory.java:151`. **CONFIRMED** - `Probe2` M. The second attached database in one
 transaction. Refuse up front with a clear message.
 
@@ -351,6 +362,8 @@ transaction. Refuse up front with a clear message.
 Refuse the combination or implement it.
 
 ### N6. `MeasureQuery.run` leaks the owned connection when `statement()` throws
+> **AVOIDED through `Quack`** (`fbe20dc`): the connection a measure query runs on is borrowed per statement, so nothing is owned to leak. **Still open at the lower level.**
+
 `MeasureQuery.java:441-444` - `checkUnits`, `checkNotPruned` and the pruned refusal all throw before
 `Rows.of` takes ownership. Close on failure.
 
