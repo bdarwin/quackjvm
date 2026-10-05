@@ -332,4 +332,45 @@ public class MeasureRefreshTest {
         assertEquals(0, other.valueCount(connection));
         assertEquals(List.of("3 x/10y=20.0", "3 x/5y=10.0"), state());
     }
+
+    // ---------- the key cache and a caller's rollback (review finding C7) ----------
+
+    @Test
+    public void aCallersRollbackDoesNotLeaveTheKeyCacheHoldingAnIdTheDictionaryLost() throws Exception {
+        connection.setAutoCommit(false);
+        measures.append(connection, batch(3, 10, 20));
+        measures.append(connection, batch(4, 1, 2));   // finds the keys the first append added
+        connection.rollback();
+        connection.setAutoCommit(true);
+
+        measures.append(connection, batch(5, 7, 8));
+
+        assertEquals(2, measures.keyCount(connection));
+        assertEquals(List.of("5 x/10y=8.0", "5 x/5y=7.0"), state());
+    }
+
+    @Test
+    public void aRefreshInsideACallersTransactionThatRollsBackLeavesNothingBehind() throws Exception {
+        connection.setAutoCommit(false);
+        MeasureRefresh.at(NINE, "r1").full(measures, batch(3, 10, 20)).commit(connection);
+        connection.rollback();
+        connection.setAutoCommit(true);
+
+        MeasureRefresh.at(NINE, "r2").full(measures, batch(3, 11, 21)).commit(connection);
+
+        assertEquals(List.of("3 x/10y=21.0", "3 x/5y=11.0"), state());
+        assertEquals(List.of("3 x/10y=21.0", "3 x/5y=11.0"), contributions());
+    }
+
+    @Test
+    public void keysAreStillRememberedAfterACommitTheWriteOwns() throws Exception {
+        MeasureRefresh.at(NINE, "r1").full(measures, batch(3, 10, 20)).commit(connection);
+        // Taken away behind the instance's back: a write that looked the keys up again would put them back.
+        Sql.execute(connection, "DELETE FROM " + Sql.quote(measures.getKeyTable()));
+
+        MeasureRefresh.at(TEN, "r2").full(measures, batch(3, 11, 21)).commit(connection);
+
+        assertEquals("the second refresh resolved its keys from the cache, with no SQL",
+                0, measures.keyCount(connection));
+    }
 }

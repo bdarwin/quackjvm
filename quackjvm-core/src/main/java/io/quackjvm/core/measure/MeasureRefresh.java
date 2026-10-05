@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -182,6 +183,7 @@ public final class MeasureRefresh {
                 checkTimeline(connection, measure, when);
             }
             long sequence = Sql.queryLong(connection, "SELECT nextval('" + SEQUENCE + "')", List.of());
+            Map<MeasureTable, Map<List<String>, Integer>> learned = new HashMap<>();
             for (MeasureTable measure : measures) {
                 Entry entry = entries.get(measure);
                 MeasureBatch batch = entry.batch != null ? entry.batch : measure.batch().build();
@@ -189,7 +191,8 @@ public final class MeasureRefresh {
                 for (int i = 0; i < removed.length; i++) {
                     removed[i] = entry.removed.get(i);
                 }
-                measure.refresh(connection, batch, entry.full, removed, id, when);
+                measure.refresh(connection, batch, entry.full, removed, id, when,
+                        learned.computeIfAbsent(measure, m -> new HashMap<>()));
                 Sql.execute(connection, "INSERT INTO " + Sql.quote(LEDGER) + " VALUES ("
                         + MeasureTable.literal(id) + ", " + MeasureTable.literal(measure.getWrittenBy()) + ", "
                         + MeasureTable.literal(when.toString()) + "::TIMESTAMP, " + sequence + ", "
@@ -202,6 +205,9 @@ public final class MeasureRefresh {
             }
             if (ownTransaction) {
                 Transactions.commit(connection);
+                // Only now are the keys this refresh added committed; inside a caller's transaction
+                // they are not remembered at all, since that caller may still roll back.
+                learned.forEach(MeasureTable::remember);
             }
             return true;
         }

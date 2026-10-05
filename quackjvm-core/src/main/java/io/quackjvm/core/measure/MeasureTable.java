@@ -522,13 +522,15 @@ public final class MeasureTable {
                     if (ownTransaction) {
                         Transactions.begin(connection);
                     }
-                    int[] idOfKey = resolveCreating(connection, batch);
+                    Map<List<String>, Integer> learned = new HashMap<>();
+                    int[] idOfKey = resolveCreating(connection, batch, learned);
                     if (replacing) {
                         deleteRecords(connection, batch.recordIds());
                     }
                     appendValues(connection, batch, idOfKey, part, onlyChanges);
                     if (ownTransaction) {
                         Transactions.commit(connection);
+                        remember(learned);
                     }
                     break;
                 }
@@ -570,12 +572,12 @@ public final class MeasureTable {
      * @return how many contributions were written - values that actually moved
      */
     long refresh(Connection connection, MeasureBatch batch, boolean full, long[] removed, String refreshId,
-                 LocalDateTime at) throws SQLException {
+                 LocalDateTime at, Map<List<String>, Integer> learned) throws SQLException {
         if (!batch.getFields().equals(fields)) {
             throw new IllegalArgumentException("That batch is for the key " + batch.getFields() + ", not " + fields);
         }
         ensureAgreesWithTables(connection);
-        int[] idOfKey = resolveCreating(connection, batch);
+        int[] idOfKey = resolveCreating(connection, batch, learned);
         String incoming = Sql.quote(name + "__refreshing");
         Sql.execute(connection, "CREATE OR REPLACE TEMP TABLE " + incoming
                 + " (record_id BIGINT, key_id INTEGER, value DOUBLE)");
@@ -690,12 +692,15 @@ public final class MeasureTable {
     /**
      * The dictionary id of each distinct key in the batch, adding any the dictionary lacks.
      *
-     * <p>Ids never change, so those already looked up are remembered: a publisher writing the same
-     * keys over and over then does no SQL at all for them, which was measured at 2.1 ms of a 6.5 ms
-     * refresh of 250 keys. Only keys the dictionary already had are remembered - one this call is
-     * adding would be a lie if the transaction rolled back.</p>
+     * <p>Ids never change once committed, so those already looked up are remembered: a publisher
+     * writing the same keys over and over then does no SQL at all for them, which was measured at
+     * 2.1 ms of a 6.5 ms refresh of 250 keys. What this call looks up or adds goes into
+     * {@code learned}, not the cache - inside a transaction even a key that was found may be one the
+     * same transaction added, and a rollback would leave the cache holding an id the dictionary does
+     * not. Whoever commits the transaction hands {@code learned} to {@link #remember} afterwards.</p>
      */
-    private int[] resolveCreating(Connection connection, MeasureBatch batch) throws SQLException {
+    private int[] resolveCreating(Connection connection, MeasureBatch batch, Map<List<String>, Integer> learned)
+            throws SQLException {
         int[] result = new int[batch.keyCount()];
         List<List<String>> unknown = new ArrayList<>();
         List<Integer> positions = new ArrayList<>();
@@ -734,8 +739,6 @@ public final class MeasureTable {
             appender.flush();
         }
         Map<List<String>, Integer> ids = idsOf(connection, staging);
-        // These the dictionary had before this call, so they are safe to remember.
-        keyIds.putAll(ids);
         if (ids.size() < unknown.size()) {
             Sql.execute(connection, "INSERT INTO " + Sql.quote(keyTable) + " SELECT nextval('" + sequence + "'), s.*"
                     + " FROM " + Sql.quote(staging) + " s WHERE NOT EXISTS (SELECT 1 FROM " + Sql.quote(keyTable)
@@ -749,8 +752,14 @@ public final class MeasureTable {
                         + unknown.get(i));
             }
             result[positions.get(i)] = id;
+            learned.put(unknown.get(i), id);
         }
         return result;
+    }
+
+    /** Adopts key ids a write looked up or added, once the transaction that wrote them has committed. */
+    void remember(Map<List<String>, Integer> learned) {
+        keyIds.putAll(learned);
     }
 
     /** The dictionary ids of the keys staged in a temp table, by their fields. */
