@@ -29,7 +29,7 @@ maps, records and arrays again, nulls and empties included.
 ## Written through the appender, not through Arrow
 
 The roadmap said this would need Arrow, because "the appender's native entry points are scalars only".
-That was true of an older driver. In **1.5.5 the appender takes nested values directly** - a
+That was true of an older driver. **Since 1.5.5 the appender takes nested values directly** - a
 `Collection` for a list, a `Map` for a map, `beginStruct`/`endStruct` for a struct, a `float[]` for a
 fixed-size array - so quackjvm writes them that way, and **features that need nested types add no
 dependency at all**. `CoreNestedTypes` is the evidence.
@@ -67,14 +67,15 @@ message saying to flatten it or keep it in a table of its own.
 
 ## What it costs
 
-Writing `FLOAT[768]`, generated row by row rather than held in memory:
+Writing `FLOAT[768]`, generated row by row rather than held in memory, DuckDB 2.0.0:
 
 | rows | floats | time | rate |
 |---|---|---|---|
-| 20,000 | 59 MB | 0.67 s | 29,700 rows/s, 87 MB/s |
-| 100,000 | 293 MB | 3.44 s | 29,000 rows/s, 85 MB/s |
+| 20,000 | 59 MB | 0.99 s | 20,200 rows/s, 59 MB/s |
+| 100,000 | 293 MB | 4.93 s | 20,300 rows/s, 59 MB/s |
 
-Linear in the bytes. A million rows of `FLOAT[768]` is 3 GB of floats before DuckDB sees any of them,
+Linear in the bytes. On DuckDB 1.5.5 it was 29,000 rows/s, 85 MB/s: 2.0's appender is slower.
+A million rows of `FLOAT[768]` is 3 GB of floats before DuckDB sees any of them,
 which is why the rate is the number worth quoting rather than a total.
 
 ## Reading them back

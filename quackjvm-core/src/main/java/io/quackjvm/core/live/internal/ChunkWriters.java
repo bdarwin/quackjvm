@@ -16,7 +16,7 @@ import java.time.ZoneOffset;
 /**
  * Writing a Java value into one row of a DuckDB vector, chosen once per column rather than per value.
  *
- * <p>DuckDB's Java chunk writer covers most of what quackjvm can store, but not all of it: in 1.5.5
+ * <p>DuckDB's Java chunk writer covers most of what quackjvm can store, but not all of it: in 1.5.5 and 2.0
  * there is no setter for {@code UUID}, {@code BLOB} or {@code TIME}. A layout with one of those is
  * refused when the live table is registered, naming the column, rather than failing on the first row.</p>
  */
@@ -33,15 +33,15 @@ public final class ChunkWriters {
     /** Why this type cannot be written into a chunk, or null when it can. */
     public static String unsupportedReason(Class<?> type) {
         if (type == java.util.UUID.class) {
-            return "DuckDB's Java chunk writer has no way to write a UUID in 1.5.5 - map it to String in"
+            return "DuckDB's Java chunk writer has no way to write a UUID in DuckDB 2.0 - map it to String in"
                     + " the layout, or store the objects in a table instead";
         }
         if (type == byte[].class) {
-            return "DuckDB's Java chunk writer has no way to write a BLOB in 1.5.5 - map it to String in"
+            return "DuckDB's Java chunk writer has no way to write a BLOB in DuckDB 2.0 - map it to String in"
                     + " the layout, or store the objects in a table instead";
         }
         if (type == java.time.LocalTime.class || type == java.sql.Time.class) {
-            return "DuckDB's Java chunk writer has no way to write a TIME in 1.5.5 - map it to String, or"
+            return "DuckDB's Java chunk writer has no way to write a TIME in DuckDB 2.0 - map it to String, or"
                     + " to a LocalDateTime, in the layout";
         }
         if (!DuckDBTypes.isSupported(type)) {

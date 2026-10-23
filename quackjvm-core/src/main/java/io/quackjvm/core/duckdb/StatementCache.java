@@ -33,7 +33,7 @@ import java.util.Map;
  * A statement handed out twice without being closed is not served from the cache, so overlapping
  * result sets on one connection each get a statement of their own.</p>
  *
- * <p><b>A statement that fails is gone.</b> DuckDB's JDBC driver (1.5.5) closes a prepared
+ * <p><b>A statement that fails is gone.</b> DuckDB's JDBC driver (1.5.5, and still in 2.0.0) closes a prepared
  * statement when its execution fails - a conflict or a constraint violation - so the cache drops it
  * when it comes back, and the next use prepares it again. Every failed write therefore costs a
  * prepare as well.</p>

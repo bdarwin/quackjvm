@@ -221,11 +221,11 @@ public class CoreEntryPoint {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * Objects in, answers out
  * -----------------------
- *    100,000 records written in 102 ms
+ *    100,000 records written in 92 ms
  *    average in the kitchen: 24.45
  *    SiteStats[site=hall, readings=66666, average=21.45]
  *    SiteStats[site=kitchen, readings=33334, average=24.45]
@@ -255,7 +255,7 @@ public class CoreEntryPoint {
  *
  * Many threads, one database
  * --------------------------
- *    800 writes and 800 reads from 8 threads: 800 of 800 read back, in 108 ms
+ *    800 writes and 800 reads from 8 threads: 800 of 800 read back, in 169 ms
  *    a quick query while a slow one ran: 0 ms - each on a connection of its own
  *    connections in use afterwards: 0
  *

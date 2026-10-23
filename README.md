@@ -75,19 +75,19 @@ needs `--add-opens=java.base/java.nio=ALL-UNNAMED` on Java 17 and later.
 
 ## What the JDBC driver does not give you
 
-Measured against `duckdb_jdbc` 1.5.5, and the reason this project exists:
+Measured against `duckdb_jdbc` 2.0.0 (and 1.5.5 before it), and the reason this project exists:
 
 | capability | JDBC driver | quackjvm |
 |---|---|---|
 | reading results | one boxed value per call; `DuckDBVector` is package-private so the columnar chunk already in your JVM is unreachable | Arrow columnar batches - **1M rows x 4 columns: 602 ms to 60 ms** |
-| owning connections | you open, duplicate, pass and close them; one shared between threads **queues** - a quick query waited 1,063 ms behind a slow one - and lets one thread roll back another's write | `Quack`: one object owns them. Every call borrows one and gives it back, a transaction holds one start to end, and **no connection is in sight** unless you ask for one |
+| owning connections | you open, duplicate, pass and close them; one shared between threads **queues** - a quick query waited 1,136 ms behind a slow one - and lets one thread roll back another's write | `Quack`: one object owns them. Every call borrows one and gives it back, a transaction holds one start to end, and **no connection is in sight** unless you ask for one |
 | storing Java objects | write your own row mapping | `ColumnarLayout` maps records, beans or explicit accessors to typed columns |
 | bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
 | precomputing a query | `CREATE TABLE AS`, and a refresh that breaks readers | `Materialization`, refreshed without a window where the table is missing |
-| LIST / STRUCT / MAP / ARRAY | writable through the appender since 1.5, but every value mapped by hand | a record's own types become the columns - `List<String>` to `VARCHAR[]`, a nested record to a STRUCT, `Map<K,V>` to MAP, `float[]` to `FLOAT[768]` - written and read back, **no Arrow needed**, 85 MB/s |
-| Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | `LiveTables.register(connection, "car", cars, layout)`: a collection queried and joined as a table, projection pushed down, **1M objects joined to 200k stored rows in 40.6 ms with no load step**; `Udfs.register(...)` for a Java method in SQL, nulls decided, **7.1 ns a row** |
-| running SQL you did not write | nothing - and worse: preparing `"DROP TABLE t; SELECT 1"` **executes the DROP** | `GuardedQuery` + `QueryPolicy`: DuckDB's own parser decides what is a query, one statement only, row and byte caps, a timeout that cancels, optional `Hardening` - **check costs 0.20 ms** |
-| vector similarity | `array_cosine_similarity` and friends are built in, but you write the query, the cast and the ordering | `VectorSearch.on(...).topK(query, 10, filter, params)`: **exact top-10 over a million 128-dimension vectors in 40.8 ms**, no extension, HNSW used when `vss` is installed |
+| LIST / STRUCT / MAP / ARRAY | writable through the appender since 1.5, but every value mapped by hand | a record's own types become the columns - `List<String>` to `VARCHAR[]`, a nested record to a STRUCT, `Map<K,V>` to MAP, `float[]` to `FLOAT[768]` - written and read back, **no Arrow needed**, 59 MB/s |
+| Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | `LiveTables.register(connection, "car", cars, layout)`: a collection queried and joined as a table, projection pushed down, **1M objects joined to 200k stored rows in 44.6 ms with no load step**; `Udfs.register(...)` for a Java method in SQL, nulls decided, **8.8 ns a row** |
+| running SQL you did not write | nothing - and worse: preparing `"DROP TABLE t; SELECT 1"` **executes the DROP** | `GuardedQuery` + `QueryPolicy`: DuckDB's own parser decides what is a query, one statement only, row and byte caps, a timeout that cancels, optional `Hardening` - **check costs 0.61 ms** |
+| vector similarity | `array_cosine_similarity` and friends are built in, but you write the query, the cast and the ordering | `VectorSearch.on(...).topK(query, 10, filter, params)`: **exact top-10 over a million 128-dimension vectors in 35.3 ms**, no extension, HNSW used when `vss` is installed |
 
 ## Objects in, answers out
 
@@ -208,7 +208,9 @@ and the plain heap win. Full detail:
 Everything in this section is about the plugin - if you are using `quackjvm-core` on its own, skip
 to [where this is going](#where-this-is-going).
 
-1,000,000 objects of eight fields, indexes on three attributes, JDK 25 / Apple Silicon / 32 GB.
+1,000,000 objects of eight fields, indexes on three attributes, JDK 25 / Apple Silicon / 32 GB,
+**DuckDB 1.5.5 - these tables have not been re-run on 2.0 yet**, and at `memory_limit=256MB` 2.0
+spills some compound queries that 1.5 did not (see [Tuning](docs/tuning.md#set-a-memory-limit)).
 Each configuration runs in its own forked JVM (`-Xmx6g`, DuckDB `memory_limit=256MB`), because
 resident memory is not comparable within one process. Reproduce with:
 
@@ -335,12 +337,12 @@ express, and `database.query(...)` gives you arbitrary SQL over both. See
 
 DuckDB's JDBC driver is the bottleneck, and specifically:
 
-| capability | state in `duckdb_jdbc` 1.5.5 |
+| capability | state in `duckdb_jdbc` 2.0.0 |
 |---|---|
 | columnar / vectorised reads | the chunk is already in the JVM, but `DuckDBVector` is package-private, so you read it one boxed value at a time - about 250 ns per value |
 | Arrow export and import | exposed, both directions, and 17x faster than row-by-row JDBC (measured: 1M rows x 4 columns, 602 ms -> 36 ms) |
 | LIST / STRUCT / MAP / ARRAY reads | work |
-| LIST / STRUCT / MAP / ARRAY writes | **present in 1.5.5** - the appender takes a `Collection`, a `Map`, `beginStruct`/`endStruct` and a `float[]`; measured, and used by `ColumnarLayout`, so no Arrow is needed after all |
+| LIST / STRUCT / MAP / ARRAY writes | **present since 1.5.5** - the appender takes a `Collection`, a `Map`, `beginStruct`/`endStruct` and a `float[]`; measured, and used by `ColumnarLayout`, so no Arrow is needed after all |
 | Java UDFs | **shipped in 1.5** - `DuckDBFunctions.scalarFunction()` |
 | table functions | **shipped in 1.5** - `DuckDBFunctions.tableFunction()`, raw: you implement `bind`, `init` and `apply` and write into vectors by hand |
 
@@ -352,7 +354,7 @@ the third turned out not to need what it was supposed to need:
    foundation for everything else.
 2. ~~**Java collections as DuckDB tables.**~~ Done: `LiveTables.register(connection, "car", cars,
    layout)` turns an `Iterable<O>` into a table, with the projection pushed down and nothing written
-   anywhere - **1,000,000 objects joined to 200,000 stored rows in 40.6 ms, against 479 ms to load
+   anywhere - **1,000,000 objects joined to 200,000 stored rows in 44.6 ms, against 784 ms to load
    them first**. See [Live tables](docs/live-tables.md).
 3. ~~**Nested types**, read and write.~~ Done, and not as expected: the 1.5.5 appender writes
    LIST, STRUCT, MAP and fixed ARRAY natively, so no Arrow was needed. See
@@ -430,7 +432,7 @@ command to run it in its header and its real output at the bottom.
 |---|---|
 | `CoreEntryPoint` | **start here**: everything through `Quack`, with no connection in sight - objects, a transaction, a measure and its history, live tables, threads, a sandbox |
 | `CoreColumnarRecords` | core only: Java records to typed DuckDB columns and back, queried with SQL |
-| `CoreBulkLoad` | core only: a million rows loaded in 0.62 s into a 9.8 MB file |
+| `CoreBulkLoad` | core only: a million rows loaded in 0.56 s into a 10.0 MB file |
 | `CqEngineSwap` | the one-line swap from an on-heap collection, and the memory difference |
 | `CqEngineIndexes` | indexes, equality, ranges and compound queries |
 | `CqEngineJoins` | two collections in one database: `existsIn`, joined pairs, SQL aggregation |

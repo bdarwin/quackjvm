@@ -197,7 +197,7 @@ public class CoreLiveTables {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * An ordinary List<Car>, queried as a table
  * ----------------------------------------
@@ -232,8 +232,8 @@ public class CoreLiveTables {
  * Live against loaded, on the same objects
  * ---------------------------------------
  *      objects  live (no load step)                 stored (loaded first)
- *      100,000  group   46.2 ms, join   7.7 ms   load   62.3 ms, then group   1.6 ms, join  1.7 ms
- *    1,000,000  group  463.9 ms, join  40.6 ms   load  479.1 ms, then group   2.4 ms, join  2.7 ms
+ *      100,000  group   46.4 ms, join  10.3 ms   load   69.1 ms, then group   1.2 ms, join  1.9 ms
+ *    1,000,000  group  469.2 ms, join  44.6 ms   load  783.9 ms, then group   1.5 ms, join  3.0 ms
  *    The join reads one column of the objects, so the projection being pushed down
  *    shows: it costs a tenth of the group-by, which reads a string per object.
  *    Live wins when the data would otherwise have to be loaded first, and when it
@@ -244,11 +244,11 @@ public class CoreLiveTables {
  * The projection is pushed down: a query about make never calls the price accessor, and the join -
  * which reads one int per object - costs a tenth of the group-by, which reads a string per object.
  *
- * Reading objects is the cost. About 460 ns an object for a string column, against 2.4 ms for the
+ * Reading objects is the cost. About 470 ns an object for a string column, against 1.5 ms for the
  * same query over a stored table, because a stored table is columnar and compressed and this is a
- * loop over the heap. The load that would fix it costs about the same as one live query, which is
- * the whole trade: live wins for a query or two and for data that changes under you, loading wins
- * the moment the same rows are asked about again.
+ * loop over the heap. The load that would fix it cost 784 ms at a million objects, about two live
+ * queries' worth, which is the whole trade: live wins for a single query and for data that changes
+ * under you, loading wins by the second time the same rows are asked about.
  *
  * A live table is a view over a table function, so the catalog lists it like any other table, and
  * closing it takes the name away.

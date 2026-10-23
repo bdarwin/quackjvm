@@ -37,22 +37,22 @@ Either way, a method may **return** null and the result is null.
 ## Types
 
 Everything `DuckDBTypes` maps, except `UUID`, `byte[]` and `LocalTime`, which DuckDB's Java vectors have
-no accessor for in 1.5.5 - refused when the function is registered, with a message saying to use a
+no accessor for in 1.5.5 or 2.0 - refused when the function is registered, with a message saying to use a
 `String`. A `Character` crosses as VARCHAR, an `Instant` as TIMESTAMP, an enum as its ordinal, exactly
 as they are stored in a table.
 
 ## What it costs
 
-Measured on 2,000,000 rows, `price * 1.2`:
+Measured on 2,000,000 rows, `price * 1.2`, DuckDB 2.0.0:
 
 | | | |
 |---|---|---|
-| built-in SQL expression | 0.9 ms | 0.5 ns/row |
-| `Udfs.registerDouble` (no boxing) | 14.1 ms | 7.1 ns/row |
-| `Udfs.register` (boxed) | 24.1 ms | 12.0 ns/row |
+| built-in SQL expression | 1.3 ms | 0.7 ns/row |
+| `Udfs.registerDouble` (no boxing) | 17.7 ms | 8.8 ns/row |
+| `Udfs.register` (boxed) | 16.9 ms | 8.4 ns/row |
 
 The same as writing the callbacks by hand - see `CoreScalarFunction` - so the wrapper is free. What the
-numbers say is about UDFs, not about the wrapper: **a call into Java is fifteen to twenty-five times a
+numbers say is about UDFs, not about the wrapper: **a call into Java is about thirteen times a
 built-in expression**, so a UDF is for what SQL cannot say - a lookup that lives in Java, a rule nobody
 wants to maintain twice - rather than for arithmetic SQL already has.
 
@@ -66,7 +66,7 @@ Udfs.registerLong(connection, "half", value -> value / 2);
 
 ## Taking one away
 
-There is nothing to close: DuckDB 1.5.5 has no way to unregister a function. Registering the same name
+There is nothing to close: DuckDB (1.5.5 and 2.0) has no way to unregister a function. Registering the same name
 again replaces what it does, which the tests rely on.
 
 See `examples/src/main/java/CoreUdfs.java` for all of it, with its real output.

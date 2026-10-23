@@ -188,7 +188,7 @@ public class CoreTableFunction {
 }
 
 /*
- * Output (Apple Silicon, JDK 25, duckdb_jdbc 1.5.5.1):
+ * Output (Apple Silicon, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * 1. The list, queried as a table:
  *    grade=A  n=134  avg_score=3.45
@@ -199,11 +199,11 @@ public class CoreTableFunction {
  *    grade=A  sales=39000  revenue=2.18268E7
  *    grade=C  sales=38500  revenue=2.15561E7
  *    grade=B  sales=38500  revenue=2.15365E7
- *    (3.7 ms)
+ *    (3.9 ms)
  *
  * 3. The list is live. Change it in Java and the next query sees it:
  *    n=401  best=99.0
  *
  * 4. An exception thrown in bind fails the query before anything runs:
- *    Error: Binder Error: java.lang.IllegalArgumentException: No list registered as 'nope'
+ *    Binder Error: java.lang.IllegalArgumentException: No list registered as 'nope'
  */

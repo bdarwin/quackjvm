@@ -15,6 +15,9 @@ for people already using CQEngine, and nothing in the engine depends on it.
   `DuckDBConnection.duplicate()` changed its return type in 1.5, which is source-compatible but
   **binary**-incompatible, so mixing quackjvm 1.1.0 with duckdb_jdbc 1.4.x fails at runtime with
   `NoSuchMethodError`. Database files are compatible in both directions between 1.4 and 1.5.
+- quackjvm brings in `duckdb_jdbc` **2.0.0.0** and is tested on 1.5.5.1 as well. A file created by 2.0
+  cannot be opened by 1.5 (2.0 reads and writes 1.5 files without converting them, so those stay
+  readable by both). If a 1.5 process must open your files, pin `duckdb_jdbc` 1.5.5.1.
 - On JDK 22 and later, run with `--enable-native-access=ALL-UNNAMED`; DuckDB's driver loads a
   native library and the JVM otherwise warns about it.
 - Apache Arrow is optional. With `arrow-vector`, `arrow-c-data` and `arrow-memory-unsafe` on the

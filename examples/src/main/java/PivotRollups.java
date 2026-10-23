@@ -323,45 +323,45 @@ public class PivotRollups {
 }
 
 /*
- * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1). Sections 1 and 2 are from one run,
- * 3 and 4 from the next; the machine had IDEs running, 1-2 cores' worth.
+ * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 2.0.0.0), all four sections from one run.
  *
  * 1. Rollups, one per panel
- *    sale_by_make_year_region             504 rows   built in    26 ms
- *    sale_by_country_channel_month     10,080 rows   built in    33 ms
- *    sale_by_segment_tier_channel         420 rows   built in    39 ms
- *    sale_by_region_model_year          5,040 rows   built in    28 ms
- *    all four: 132 ms, from 5,000,000 sales
+ *    sale_by_make_year_region             504 rows   built in    23 ms
+ *    sale_by_country_channel_month     10,080 rows   built in    27 ms
+ *    sale_by_segment_tier_channel         420 rows   built in    38 ms
+ *    sale_by_region_model_year          5,040 rows   built in    23 ms
+ *    all four: 117 ms, from 5,000,000 sales
  *
  * 2. Same answers from the rollups as from the base table
  *    28 of 28 panel-and-year combinations identical, row for row
  *
  * 3. Twenty users, each refreshing one of five panels at random (10 cores)
  *    panels/s   p50 ms   p99 ms   CPU
- *        36.0    509.8   1502.9    83%   base tables
- *         6.3    521.2    999.5          - regions as columns
- *         7.2    472.1    888.5          - months as columns
- *         7.9    730.4   1571.3          - join, channels as columns
- *         7.5    388.2    712.4          - top 5 models per region
- *         7.1    587.4   1050.4          - sparse wide view (base table)
- *       164.5      3.8    965.4    88%   rollups
- *        32.1      2.0     72.9          - regions as columns
- *        32.6      3.4     81.1          - months as columns
- *        34.2      2.1     61.3          - join, channels as columns
- *        32.4      2.3     73.7          - top 5 models per region
- *        33.2    546.9   1059.4          - sparse wide view (base table)
- *       193.2      2.3    842.9    85%   rollups, threads = 5
- *        39.6      1.4     38.4          - regions as columns
- *        36.9      2.6     80.0          - months as columns
- *        39.5      1.6     69.1          - join, channels as columns
- *        40.7      1.6     65.2          - top 5 models per region
- *        36.5    505.2    995.2          - sparse wide view (base table)
+ *        41.1    476.6    954.7    96%   base tables
+ *         8.1    496.2    795.3          - regions as columns
+ *         8.2    410.5    574.7          - months as columns
+ *         8.4    595.9    960.6          - join, channels as columns
+ *         8.4    333.8    527.3          - top 5 models per region
+ *         8.1    650.0    975.7          - sparse wide view (base table)
+ *       159.0      2.1    940.7    95%   rollups
+ *        33.2      1.5     55.0          - regions as columns
+ *        30.8      2.5     43.7          - months as columns
+ *        31.4      1.7     47.2          - join, channels as columns
+ *        32.2      1.5     53.0          - top 5 models per region
+ *        31.4    608.0   1071.8          - sparse wide view (base table)
+ *       172.8      2.1    819.1    95%   rollups, threads = 5
+ *        35.6      1.4     36.6          - regions as columns
+ *        35.7      2.3     45.8          - months as columns
+ *        32.7      1.6     36.7          - join, channels as columns
+ *        34.7      1.4     36.2          - top 5 models per region
+ *        34.2    553.2    915.5          - sparse wide view (base table)
  *
  * 4. Refreshing all four rollups while the twenty users read
- *    5 refreshes of all four: median 1124 ms each, under load
- *    meanwhile 1,320 panel reads, 0 failed
+ *    5 refreshes of all four: median 1805 ms each, under load
+ *    meanwhile 1,618 panel reads, 0 failed
  *
- * A second run agreed on everything but "threads = 5": 88 panels/s with a 5.8 s p99 there, against
- * 193 and 0.8 s here - so that line settles nothing. Base tables and rollups repeated closely:
- * 41.6 and 164.2 panels/s, the four rolled-up panels at 2-4 ms, 0 failed reads during refresh.
+ * One run, so the per-panel figures carry run-to-run noise. The "threads = 5" line has moved a
+ * long way between runs before, so read it only as no worse than full threads here, not as a
+ * win. Rolled up, the four panels answer at 1.5-2.5 ms p50 against 334-596 ms from the base
+ * table, and no read failed while the rollups were refreshed.
  */

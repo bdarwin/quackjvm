@@ -191,7 +191,7 @@ public class CoreMeasureTimeline {
 }
 
 /*
- * What it printed:
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * Monday
  * ------
@@ -213,9 +213,9 @@ public class CoreMeasureTimeline {
  * Export - for whoever reads Parquet, a file per day of refresh
  * ------------------------------------------------------------
  * What was left to export: 3 contributions over 2 refreshes, in 1 file
- *    measure=exposure/part=2026-09-28/svc_a-1790760968706.parquet
- *    measure=exposure/part=2026-09-28/svc_a-1790760968732.parquet
- *    measure=exposure/part=2026-09-29/svc_a-1790760968780.parquet
+ *    measure=exposure/part=2026-09-28/svc_a-1792740724476.parquet
+ *    measure=exposure/part=2026-09-28/svc_a-1792740724513.parquet
+ *    measure=exposure/part=2026-09-29/svc_a-1792740724597.parquet
  * Exporting again: 0 files, 0 contributions
  *
  * Compact - Monday is finished, so its files become one
@@ -238,7 +238,7 @@ public class CoreMeasureTimeline {
  * --------------------------------------------------------------------
  *    live now             g1 5y=1.0,  g3 10y=6.0
  *    thrown away - the live tables now hold 0 values
- *    rebuilt 2 values from the history in 4.6 ms
+ *    rebuilt 2 values from the history in 6.3 ms
  *    live again           g1 5y=1.0,  g3 10y=6.0
  *
  * Four things worth noticing.

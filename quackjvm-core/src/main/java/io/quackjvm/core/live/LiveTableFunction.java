@@ -36,7 +36,7 @@ final class LiveTableFunction implements DuckDBTableFunction<LiveTableFunction.B
 
     /**
      * What each registered live table reads from, by a token drawn at random for that registration. A
-     * function is registered with DuckDB once per name and cannot be unregistered in 1.5.5, and this
+     * function is registered with DuckDB once per name and cannot be unregistered in 1.5.5 or 2.0, and this
      * map is shared by every database in the JVM, so the key must be one only its own view knows: a
      * name would let any database read another's rows by passing it. Taking a live table away removes
      * its token, so a query against it says so rather than reading something stale.

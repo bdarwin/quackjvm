@@ -4,8 +4,9 @@
  *
  * The check is DuckDB's own parser, not a pattern: json_serialize_sql parses the text and refuses
  * anything that is not a query, which is everything that writes, attaches, loads, copies or
- * configures - a CTE with an INSERT inside it included - and counts the statements so that a second
- * one cannot ride along.
+ * configures. A SELECT with a write inside it - a CTE holding an INSERT or a DELETE - is one DuckDB
+ * 2.0's parser accepts, so the check also looks through the parsed tree and refuses any node in it
+ * that is not a read. And it counts the statements, so that a second one cannot ride along.
  *
  * That last part matters more than it sounds. With this driver, preparing a multi-statement string
  * executes all but the last statement: prepareStatement("DROP TABLE u; SELECT 1") drops the table.
@@ -230,7 +231,7 @@ public class CoreGuardedQueries {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * What it runs
  * ------------
@@ -240,13 +241,13 @@ public class CoreGuardedQueries {
  *       make-1  50000  5449.0   
  *       make-2  50000  5450.0   
  *       make-3  50000  5451.0   
- *    4 rows, 112 bytes, 5.3 ms
+ *    4 rows, 112 bytes, 5.1 ms
  *
  * What it refuses, and what it says
  * ---------------------------------
  *    DROP TABLE car                                             DROP is not a query, so it will not be run.
  *    INSERT INTO car VALUES (1, 'x', 1.0)                       INSERT is not a query, so it will not be run.
- *    WITH x AS (DELETE FROM car RETURNING *) SELECT count(...   WITH is not a query, so it will not be run.
+ *    WITH x AS (DELETE FROM car RETURNING *) SELECT count(...   This is not a query, so it will not be run: it is a SELECT with a DELETE inside it - a WITH clause or...
  *    SELECT 1; DROP TABLE car                                   SELECT is not a query, so it will not be run.
  *    SELECT 1 -- hidden ; DROP TABLE car                        SELECT is not a query, so it will not be run.
  *    ATTACH ':memory:' AS other                                 ATTACH is not a query, so it will not be run.
@@ -271,9 +272,9 @@ public class CoreGuardedQueries {
  *
  * What the check costs
  * --------------------
- *    guarded:   2.59 ms
- *    unguarded: 2.07 ms
- *    the check alone, without running anything: 0.19 ms
+ *    guarded:   3.58 ms
+ *    unguarded: 2.06 ms
+ *    the check alone, without running anything: 0.61 ms
  *
  * Hardening: taking the way out away as well
  * ------------------------------------------
@@ -281,7 +282,7 @@ public class CoreGuardedQueries {
  *    the same, with Hardening.DATABASE                          DuckDB refused to run this: Permission Error: Cannot access file "/var/folders/p2/3wph7cw515d_ch9lsq6...
  *    and the environment                                        DuckDB refused to run this: Catalog Error: Scalar Function with name getenv does not exist!
  *    a sandbox database still works as a database: 1 row
- *    and cannot be unlocked: Invalid Input Error: Cannot change configuration option "enable_external_access" - the configuration ...
+ *    and cannot be unlocked: Invalid Input Error: Cannot change configuration option ""enable_external_access"" - the configuratio...
  *
  * And what hardening would cost this database
  * -------------------------------------------
@@ -293,8 +294,9 @@ public class CoreGuardedQueries {
  * prepareStatement call that was never executed - which is what this driver does with a
  * multi-statement string, and why the check parses the text instead of preparing it.
  *
- * The check costs about half a millisecond: two parses, one of the statement and one of the wrapped
- * form that carries the row cap. Everything else is what the query itself costs.
+ * The guard added about one and a half milliseconds here (3.58 ms against 2.06): two parses, one of
+ * the statement - the 0.61 ms measured alone - and one of the wrapped form that carries the row cap.
+ * Everything else is what the query itself costs.
  *
  * Reading a local file is a legitimate query as far as the parser is concerned, which is what
  * hardening is for - at the price of the whole database losing file access, archiving and Parquet

@@ -7,7 +7,7 @@ import java.sql.SQLException;
  * Transactions begun and ended with SQL, on a connection left in auto-commit mode throughout.
  *
  * <p>Not {@code setAutoCommit(false)} and {@code commit()}, because of a bug in DuckDB's JDBC driver
- * (1.5.5): once a {@code commit()} fails - on a constraint violation, or a conflict with another
+ * (1.5.5, and still in 2.0.0): once a {@code commit()} fails - on a constraint violation, or a conflict with another
  * transaction - the driver's idea of whether a transaction is open no longer matches DuckDB's, and
  * no sequence of JDBC calls brings them back together. Every later {@code commit()} on that
  * connection throws "cannot commit - no transaction is active", and the statements it was meant to

@@ -169,19 +169,19 @@ public class CoreMeasureHistory {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5), with plenty else running - consecutive
- * runs varied by about a third, so read the shape rather than the digits:
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0), from a single run. Earlier runs, on
+ * DuckDB 1.5.5, varied by about a third from one to the next, so read the shape rather than the digits:
  *
  * 1,000 records of 50 values: a full set, then 20 increments moving a tenth
  *
  * Refresh into the live database, with its contributions in the outbox
- *    full set of 50,000 values: 55 ms
- *    each increment:          median 9.0 ms, p99 14.0 ms
+ *    full set of 50,000 values: 66 ms
+ *    each increment:          median 11.5 ms, p99 16.9 ms
  * Shipping the outbox into the history
- *    the first, 50,000 contributions: 18 ms
- *    the rest:                        median 5.4 ms, p99 5.8 ms
+ *    the first, 50,000 contributions: 22 ms
+ *    the rest:                        median 7.0 ms, p99 7.6 ms
  *
- * Shipping again with nothing to ship: 0.5 ms, 0 contributions
+ * Shipping again with nothing to ship: 0.7 ms, 0 contributions
  *
  * live:     50,000 values of state, 0 in the outbox, 2,316 KB on disk
  * history:  150,000 contributions over 21 refreshes, 1,292 KB on disk
@@ -189,15 +189,15 @@ public class CoreMeasureHistory {
  * (the history is the smaller file, though it holds three times the rows: it is written once in bulk and never rewritten)
  *
  * What the history holds, for one key of one record:
- *    run-0    2026-09-30 12:48:44.0  +10.0
- *    run-7    2026-09-30 12:48:51.0  +7.0
- *    run-17   2026-09-30 12:49:01.0  +10.0
+ *    run-0    2026-10-23 06:31:55.0  +10.0
+ *    run-7    2026-10-23 06:32:02.0  +7.0
+ *    run-17   2026-10-23 06:32:12.0  +10.0
  *
  * Forgetting shipped refreshes in the live ledger: 21 gone, 21 still in the history
  *
  * The live database holds 50,000 values and nothing else, however many refreshes have been through
  * it; the history holds all 150,000 contributions, in a file of its own that can be pruned on its own
- * schedule. Shipping is bulk: 18 ms for the first 50,000 contributions, single digits for the 5,000 of
+ * schedule. Shipping is bulk: 22 ms for the first 50,000 contributions, single digits for the 5,000 of
  * an increment, and under a millisecond when there is nothing waiting, because the shipper asks the
  * outbox what it holds before it looks at anything else.
  *

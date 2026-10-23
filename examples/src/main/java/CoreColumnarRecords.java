@@ -101,7 +101,7 @@ public class CoreColumnarRecords {
 }
 
 /*
- * Output:
+ * Output (DuckDB 2.0.0):
  *
  * Columns derived from the record: ["sensorId" INTEGER, "site" VARCHAR, "celsius" DOUBLE, "day" DATE]
  * Rows written: 5, replaced: 0

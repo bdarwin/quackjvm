@@ -111,10 +111,10 @@ public class CqEngineBulkWriter {
 }
 
 /*
- * Output (Apple Silicon, JDK 25, default 500,000 objects):
+ * Output (Apple Silicon, JDK 25, duckdb_jdbc 2.0.0.0, default 500,000 objects):
  *
  * Writer accepted 500,000 objects
- * Streamed 500,000 events in 0.73 s (1.46 us each)
- * Collection size: 500,000, DuckDB using 37 MB
+ * Streamed 500,000 events in 0.83 s (1.66 us each)
+ * Collection size: 500,000, DuckDB using 10 MB
  * Slow worker errors: 4,165, for instance Event[eventId=161, source=worker, level=ERROR, latencyMillis=959.0]
  */

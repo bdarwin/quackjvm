@@ -30,7 +30,7 @@ are the parser's problem rather than ours.
 
 ### Why it never prepares the statement to find out
 
-With `duckdb_jdbc` 1.5.5, preparing a multi-statement string **executes all but the last statement**:
+With `duckdb_jdbc` 1.5.5, and still with 2.0.0, preparing a multi-statement string **executes all but the last statement**:
 
 ```java
 connection.prepareStatement("DROP TABLE secrets; SELECT 1");   // never executed
@@ -105,16 +105,17 @@ application writes to keeps everything it had.
 
 ## What it costs
 
-Measured on 200,000 rows, this machine, DuckDB 1.5.5:
+Measured on 200,000 rows, this machine, DuckDB 2.0.0:
 
 | | |
 |---|---|
-| the check alone, nothing run | 0.20 ms |
-| a grouped aggregate, guarded | 2.57 ms |
+| the check alone, nothing run | 0.61 ms |
+| a grouped aggregate, guarded | 3.58 ms |
 | the same, unguarded | 2.06 ms |
 
-One parse of the statement, and one of the wrapped form that carries the row cap - about half a
-millisecond, whatever the query costs afterwards.
+One parse of the statement, and one of the wrapped form that carries the row cap - about one and a
+half milliseconds on DuckDB 2.0, whatever the query costs afterwards. On 1.5.5 the check alone was
+0.23 ms and the guarded aggregate 2.7-2.8 ms: 2.0's parser is slower, and the check is mostly parsing.
 
 ## When it refuses
 

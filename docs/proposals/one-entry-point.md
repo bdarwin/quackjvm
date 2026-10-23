@@ -45,14 +45,14 @@ every connection duplicated from one root, as quackjvm's pool opens them:
 
 | | Result |
 |---|---|
-| Opening a connection: `duplicate()` and `close()` | 6.6 µs |
+| Opening a connection: `duplicate()` and `close()` | 4.4 µs (6.6 on DuckDB 1.5.5) |
 | A database attached on one connection, seen on another | yes |
 | A Java function registered on a connection since closed, called on another | yes (`plus_one(41) = 42`) |
 | `SET threads = 3` on one connection, read on another | yes |
 | A `TEMP` table, seen from another connection | no |
 | A row not yet committed, seen from another connection | no |
 | 1,600 reads from 8 threads on one shared connection | 0 failed, 0 wrong |
-| A quick query while a 1-second one runs, on the same connection | answered in 1,063 ms |
+| A quick query while a 1-second one runs, on the same connection | answered in 1,136 ms |
 | The same, on a connection of its own | answered in 0 ms |
 | Thread A inserts on a shared connection, thread B rolls back | A's row is gone |
 
@@ -71,7 +71,7 @@ Three consequences:
    loses the other's write. Reads survive sharing but queue: a connection runs one query at a
    time, so a quick query waited out a slow one on the same connection. So every call borrows a
    connection and returns it, and a transaction holds one connection from start to end.
-3. **Pooling is not about the cost of opening.** 6.6 µs is cheap; the pool's own comment says "tens
+3. **Pooling is not about the cost of opening.** 4.4 µs is cheap; the pool's own comment says "tens
    of microseconds", which is wrong and should be corrected. The pool still earns its place,
    because it keeps what a connection accumulates:
    - the prepared-statement cache;

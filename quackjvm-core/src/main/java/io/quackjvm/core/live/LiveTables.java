@@ -40,7 +40,7 @@ import java.util.function.Supplier;
  *   <li><b>Only the columns asked for</b> are read from the objects, when DuckDB pushes the projection
  *       down, which it does for a plain scan.</li>
  *   <li><b>Types.</b> Every type {@link io.quackjvm.core.duckdb.DuckDBTypes} maps, except three that
- *       DuckDB's Java chunk writer has no way to write in 1.5.5: {@code UUID}, {@code byte[]} and
+ *       DuckDB's Java chunk writer has no way to write in 1.5.5 or 2.0: {@code UUID}, {@code byte[]} and
  *       {@code LocalTime}. Registering a layout with one of those is refused, saying which column and
  *       what to do instead.</li>
  * </ul>

@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * A registered function: what SQL calls it, and what it takes and returns.
  *
- * <p>DuckDB 1.5.5 has no way to unregister a function, so there is nothing here to close. Registering
+ * <p>DuckDB (1.5.5 and 2.0) has no way to unregister a function, so there is nothing here to close. Registering
  * the same name again replaces what it does.</p>
  */
 public final class Udf {

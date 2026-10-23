@@ -10,7 +10,7 @@
   `asOf` for their history, `guarded`, `catalog`, `vectors`, `live`, `function`. Thread-safe: every
   call borrows a pooled connection and gives it back on failure as well as success. Helpers that keep
   a connection for life get one that borrows per statement, because a DuckDB connection runs one
-  query at a time - a quick query behind a slow one on a shared connection waited 1,063 ms, against
+  query at a time - a quick query behind a slow one on a shared connection waited 1,136 ms, against
   0 ms on its own. `inTransaction(tx -> ...)` runs work on one connection, committed when it returns
   and rolled back when it throws; `Tx` leaves out `ship`, `export`, `compact` and `prune`, which run
   their own transactions against two databases. `connection()` is the way down. Nothing underneath
@@ -22,7 +22,7 @@
   tables to it. It uses DuckDB's built-in array functions, so **no extension, no network and no file
   access** - it works on a database hardened by the guard. A `FLOAT[]` column is refused with a message
   pointing at `vectorColumn`, and a query of the wrong length names both lengths. Measured, top-10:
-  15.8 ms over 10,000 vectors of 768 dimensions, 109.1 ms over 100,000, 40.8 ms over 1,000,000 of 128.
+  19.0 ms over 10,000 vectors of 768 dimensions, 101.8 ms over 100,000, 35.3 ms over 1,000,000 of 128.
   `createIndex()` builds an HNSW index when the `vss` extension is already installed and says why it
   cannot when it is not - which is the case on the machine these numbers come from, so **the index path
   is written and detected but not measured**, and the docs say so.
@@ -36,7 +36,8 @@
   cannot bind a list. **This needed no Arrow**: the roadmap said the write path would require it, and in
   1.5.5 the appender takes a `Collection`, a `Map`, `beginStruct`/`endStruct` and a `float[]`, which
   `CoreNestedTypes` measures. One level of nesting is supported and two is refused when the layout is
-  built, naming what to do instead. `FLOAT[768]` writes at 29,000 rows a second, 85 MB/s.
+  built, naming what to do instead. `FLOAT[768]` writes at 20,000 rows a second, 59 MB/s on DuckDB 2.0 (29,000 and 85 MB/s on
+  1.5.5).
 - `io.quackjvm.core.udf`: a Java method called from SQL. `Udfs.register(connection, name, returnType,
   argumentTypes..., method)` for one, two or three arguments - three being more than
   `java.util.function` offers, so there is an `Fn3`. `register` never calls the method with a null and
@@ -44,7 +45,7 @@
   may return null. Types are the ones `DuckDBTypes` maps, with `UUID`, `byte[]` and `LocalTime` refused
   at registration because DuckDB's Java vectors have no accessor for them in 1.5.5. `registerDouble`,
   `registerInt` and `registerLong` take primitive lambdas and do not box. Measured on 2,000,000 rows of
-  `price * 1.2`: 0.5 ns a row in SQL, 7.1 ns unboxed through a UDF, 12.0 ns boxed - the same as writing
+  `price * 1.2`: 0.7 ns a row in SQL, 8.8 ns unboxed through a UDF, 8.4 ns boxed - the same as writing
   the callback by hand, so the wrapper is free, and a reminder that a UDF is for what SQL cannot say.
 - `io.quackjvm.core.live`: Java objects queried as a table. `LiveTables.register(connection, "car",
   cars, layout)` puts a `ColumnarLayout` and a collection behind a DuckDB table function with a view
@@ -53,11 +54,11 @@
   accessors; the scan is single-threaded because a Java `Iterable` cannot be split safely;
   `LiveTables.snapshot` copies once for a query that must see one state, and `unregister()` takes the
   name away. Types: everything `DuckDBTypes` maps except `UUID`, `byte[]` and `LocalTime`, which
-  DuckDB's Java chunk writer cannot write in 1.5.5 and which are refused at registration with the
-  column named. Measured on 1,000,000 objects: a group-by 463.9 ms live against 2.4 ms stored, a join
-  to 200,000 stored rows 40.6 ms live against 2.7 ms stored, and 479.1 ms to load them - so live wins
-  for a query or two and for data that changes, loading wins the moment the same rows are asked about
-  again.
+  DuckDB's Java chunk writer cannot write in 1.5.5 or 2.0 and which are refused at registration with the
+  column named. Measured on 1,000,000 objects: a group-by 469.2 ms live against 1.5 ms stored, a join
+  to 200,000 stored rows 44.6 ms live against 3.0 ms stored, and 783.9 ms to load them - so live wins
+  for a single query and for data that changes, loading wins by the second time the same rows are
+  asked about.
 - `Catalog.tables()` now lists views as well as tables, since a view is a table to whatever is reading
   - a live table is one.
 - `io.quackjvm.core.catalog`: what is in the database and what it means. `Catalog.of(connection)`
@@ -69,7 +70,7 @@
   written by anything else is read as a plain description. `ColumnarLayout.Builder` gained
   `describing(...)`, `unit(...)` and `describingTable(...)`, `ColumnDef` gained `describedAs(...)` and
   `measuredIn(...)`, and `TableWriter.createTable` writes them onto the table it creates. Measured:
-  `describe` 1 ms whatever the table holds, `profile` 34 ms at a million rows and 307 ms at ten
+  `describe` 2 ms whatever the table holds, `profile` 36 ms at a million rows and 279 ms at ten
   million - which is why the cached variant that was considered was left out rather than built.
 - `io.quackjvm.core.guard`: running SQL that came from somewhere you do not control. `GuardedQuery.on(
   connection, QueryPolicy.readOnly()).run(sql)` checks the statement with DuckDB's own parser -
@@ -84,7 +85,7 @@
   unless allowed deliberately, and the javadoc says what that gives up. `Hardening.DATABASE` takes away
   file, extension and network access, which is off by default because in DuckDB it applies to the whole
   database and cannot be undone while it runs - `Hardening.sandbox()` is the way to have both.
-  Measured on 200,000 rows: the check alone 0.20 ms, a guarded aggregate 2.57 ms against 2.06 unguarded.
+  Measured on 200,000 rows: the check alone 0.61 ms, a guarded aggregate 3.58 ms against 2.06 unguarded.
 - `MeasureRefresh`: publishing a measure over and over as refreshes rather than overwrites. A refresh
   is a point on a publisher's timeline - a timestamp it chooses and an id that makes it itself - and
   covers any number of measures, each of them either everything the publisher has or only what moved.
@@ -92,7 +93,7 @@
   `remove(...)` cancels a record. Nothing is overwritten: each refresh writes contributions saying
   how much every value moved, so what was published can still be seen after it has gone and the state
   is always their sum. Committing an id twice applies it once. Measured on 100 records of 25 values
-  published 200 times: 4.05 ms a refresh against 2.04 ms for a plain replace that keeps no history,
+  published 200 times: 7.29 ms a refresh against 2.72 ms for a plain replace that keeps no history,
   with the state staying 2,500 values and the contributions reaching 51,999 rows.
 - `MeasureHistory`: a second database holding every contribution ever made, so the one being written
   to holds only current state and stays the same size however long it runs. A refresh writes the state
@@ -103,8 +104,8 @@
   measure never strands another's rows. Contributions arrive with their key fields beside them rather
   than a dictionary id, so several services can ship into one history. `forgetShippedRefreshes(live,
   keep)` trims the live ledger, which is the one thing that would otherwise grow for ever, while the
-  history keeps every refresh. Measured on 1,000 records of 50 values: 18 ms to ship the first 50,000
-  contributions, single digits for an increment's 5,000, 0.7 ms with nothing waiting.
+  history keeps every refresh. Measured on 1,000 records of 50 values: 22 ms to ship the first 50,000
+  contributions, a median of 7 ms for an increment's 5,000, 0.7 ms with nothing waiting.
 - Reading a measure as of a point in time: `query().asOf(at, history)` sums the contributions from the
   last full set at or before that point, across the history and whatever is still in the outbox, so a
   recent point answers the same whether the shipper has run or not. A full set now contributes the
@@ -152,7 +153,7 @@
   later declares what older values read as, `migrate` brings the tables up to it, and dropping a
   field is refused rather than silently adding values together. `latestPerKey()` and
   `writtenBy(...)` let a reader decide what two writers on one record mean.
-  Measured on two million values: 33 ms to archive, 8 ms to answer from the files, 30 ms to read
+  Measured on two million values: 131 ms to archive, 13 ms to answer from the file, 93 ms to read
   back. See `docs/measures.md`.
 - `quackjvm-dashboard`, a new optional module: `QuackDashboard.start(database.metrics(), 8090)` serves
   a live page with the diagnosis of the last ten seconds, headline numbers with five minutes of
@@ -192,6 +193,32 @@
 - Examples `CoreConcurrency` and `CqEngineConcurrency`: dashboard users and the `threads`
   setting, your own transactions under conflict, readers during writes, per-collection write
   locks, `serializeWrites`, and the shared-`QueryOptions` guard.
+
+### Changed
+- **Built against DuckDB 2.0.0** (`duckdb_jdbc` 2.0.0.0), up from 1.5.5.1. No code change was needed
+  beyond the two 2.0 fixes below, and the whole suite passes on both 1.5.5.1 and 2.0.0.0, so pinning
+  1.5.5.1 yourself still works. **Database files:** 2.0 opens, reads and writes a file made by 1.5
+  without converting it, and 1.5 can still open that file afterwards - but a file *created* by 2.0
+  cannot be opened by 1.5 ("version number 999"). Keep 1.5 on any machine that must open files a 2.0
+  process creates. Every example was re-run on 2.0 and its recorded output, and the numbers quoted
+  from it here and in the docs, re-measured. The driver limits the docs describe - no UUID, BLOB or
+  TIME in Java functions and live tables, no unregistering a function, the appender losing a failed
+  flush on close, a failed `commit()` leaving the driver out of step with the database, and
+  preparing a multi-statement string running all but its last statement - were re-checked on 2.0 and
+  are all still there. With external access off, 2.0 removes `getenv` rather than refusing it. Lambdas
+  written with `->` are refused by 2.0 ("Deprecated lambda arrow"); quackjvm's own SQL uses none, but
+  a query of yours might.
+- **What 2.0 made slower**, each measured on more than one run against the same code on 1.5.5.1:
+  - at `memory_limit` 256 MB with ten threads, a query combining conditions with `or` and `not`
+    spills to disk - 112 ms against 9.5 ms on 1.5, and 8.3 ms on 2.0 at 512 MB or with four threads.
+    256 MB is what most of the docs use; see `docs/tuning.md`;
+  - the appender: a million objects load in 772-784 ms against 479 ms, `FLOAT[768]` writes at 59 MB/s
+    against 85;
+  - the guard's check: 0.6 ms against 0.23 ms, which is 2.0's parser;
+  - a call into Java on one thread: 16 ns a row against 6 - though on ten threads the primitive forms
+    now scale, which they did not on 1.5.
+
+  The README's CQEngine benchmark tables were measured on 1.5.5 and have not been re-run.
 
 ### Fixed
 - **The guard let a write through on DuckDB 2.0.** 2.0's parser serializes a SELECT whose WITH clause

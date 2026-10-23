@@ -6,19 +6,24 @@
  * instead of re-implementing it in SQL or pulling the rows out to apply it.
  *
  * Shows the ways to write one, and what each costs per row against the same work done by a built-in
- * SQL expression. Measured on 2,000,000 rows, 10 cores:
+ * SQL expression. Measured on 2,000,000 rows, 10 cores, DuckDB 2.0.0 (the 1-thread column with
+ * SET threads = 1 added, the 10-thread column is the output at the bottom):
  *
  *                                 1 thread     10 threads
- *   built-in SQL expression       1.4 ns/row   0.4 ns/row   parallelises across cores
- *   Java, withDoubleFunction      6.0 ns/row   6.7 ns/row   did not get faster with more threads
- *   Java, vectorised              5.9 ns/row   6.4 ns/row   nor did this
- *   Java, Function<Double,...>   34.8 ns/row  10.2 ns/row   boxing; slowest, but does scale
+ *   built-in SQL expression       1.5 ns/row   0.6 ns/row   parallelises across cores
+ *   Java, withDoubleFunction     16.4 ns/row   7.4 ns/row   about twice as fast with ten threads
+ *   Java, vectorised             16.4 ns/row   8.3 ns/row   the same
+ *   Java, Function<Double,...>   22.8 ns/row   9.5 ns/row   boxing; slowest
  *
- * So the call into Java costs about 4x a built-in expression on one thread, and about 15x on a
- * multi-core machine, because the built-in expression spreads over the cores and the primitive Java
- * forms, here, did not. In absolute terms it is still cheap - two million rows in about 12 ms - but
- * it is not free, and over a billion rows it will not use your cores. If the logic can be written as
- * SQL, write it as SQL; reach for a Java UDF for logic that already lives in Java.
+ * On DuckDB 1.5.5 it was 1.4, 6.0, 5.9 and 34.8 ns/row on one thread and 0.4, 6.7, 6.4 and 10.2 on
+ * ten: 2.0 made one thread's call into Java slower, and let the primitive forms use more than one
+ * core, which on 1.5 they did not.
+ *
+ * So the call into Java costs about 11x a built-in expression on one thread (15x boxed), and 13x to
+ * 16x on ten, because the built-in expression spreads over the cores better than the Java forms do.
+ * In absolute terms it is still cheap - two million rows in about 15 ms - but it is not free. If the
+ * logic can be written as SQL, write it as SQL; reach for a Java UDF for logic that already lives in
+ * Java.
  *
  * A hand-written vectorised function buys nothing over withDoubleFunction, which the builder already
  * runs a chunk at a time.
@@ -184,7 +189,7 @@ public class CoreScalarFunction {
 
 
 /*
- * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1):
+ * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * 1. A Java lookup, called from GROUP BY:
  *    region=AMER  sales=444444  revenue=226443552.00
@@ -194,10 +199,10 @@ public class CoreScalarFunction {
  *    region=OTHER  sales=222222  revenue=113222775.00
  *
  * 2. What a call into Java costs, summing price * 1.2 over 2,000,000 rows:
- *    built-in SQL expression                       0.7 ms     0.4 ns/row    1.0x
- *    Java, vectorised (one call per chunk)        12.1 ms     6.0 ns/row   16.2x
- *    Java, withDoubleFunction                     12.0 ms     6.0 ns/row   16.0x
- *    Java, Function<Double, Double>               20.3 ms    10.2 ns/row   27.2x
+ *    built-in SQL expression                       1.2 ms     0.6 ns/row    1.0x
+ *    Java, vectorised (one call per chunk)        16.6 ms     8.3 ns/row   14.4x
+ *    Java, withDoubleFunction                     14.8 ms     7.4 ns/row   12.8x
+ *    Java, Function<Double, Double>               19.0 ms     9.5 ns/row   16.4x
  *
  * 3. All four agree:
  *    in_sql=1222800000.00  vectorised=1222800000.00  primitive=1222800000.00  boxed=1222800000.00

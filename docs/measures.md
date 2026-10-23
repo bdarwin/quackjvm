@@ -112,8 +112,8 @@ MeasureTable restored = MeasureTable.restore(connection, sept20, sept21);
 - The parts a file holds are replaced rather than added to, so restoring twice leaves the same thing.
 - `MeasureTable.describedBy(connection, file)` reads the definition alone.
 
-**Measured** on two million values: 33 ms to archive, 8 ms to answer a question from the files, 30 ms
-to read them back into an empty database.
+**Measured** on two million values, DuckDB 2.0.0: 131 ms to archive into one 5,864 KB file, 13 ms to
+answer a question from the file, 93 ms to read it back into an empty database.
 
 **S3 and the like.** Anywhere DuckDB can read works, once its `httpfs` extension is loaded and a
 secret configured - `archive(connection, "s3://bucket/measures", day)` writes there, and
@@ -202,9 +202,9 @@ measure in the database.
 
 ### What it costs
 
-Measured on 100 records of 25 values, published 200 times to a database on disk: 4.05 ms a refresh
-against 2.04 ms to replace the same records outright and keep no history, and 2,316 KB against
-1,292 KB on disk. The state stays 2,500 values however long it runs; the contributions reach 51,999
+Measured on 100 records of 25 values, published 200 times to a database on disk: 7.29 ms a refresh
+against 2.72 ms to replace the same records outright and keep no history, and 2,572 KB against
+1,548 KB on disk (DuckDB 2.0.0, one run). The state stays 2,500 values however long it runs; the contributions reach 51,999
 rows - 2,500 from the first refresh, then only what moved. Resolving the 250 keys used to take 2.1 ms
 of that until they were remembered: dictionary ids never change, so after the first refresh a
 publisher writing the same keys does no SQL for them at all. See `examples/src/main/java/CoreRefreshes.java`.
@@ -267,10 +267,10 @@ Only refreshes already in the history are forgotten, and the history keeps all o
 ### What it costs
 
 Measured on 1,000 records of 50 values - a full set then 20 increments each moving a tenth of the
-records, shipping after every refresh: 18 ms to ship the first 50,000 contributions, single digits for
-the 5,000 of an increment, and 0.7 ms when nothing is waiting, because the shipper asks the outbox
-what it holds before looking anywhere else. The live database settled at 1,804 KB holding 50,000
-values, the history at 1,292 KB holding 149,999 contributions. See
+records, shipping after every refresh: 22 ms to ship the first 50,000 contributions, a median of 7 ms
+for the 5,000 of an increment, and 0.7 ms when nothing is waiting, because the shipper asks the outbox
+what it holds before looking anywhere else. The live database settled at 2,316 KB holding 50,000
+values, the history at 1,292 KB holding 150,000 contributions. See
 `examples/src/main/java/CoreMeasureHistory.java`.
 
 ## Reading as of a point in time

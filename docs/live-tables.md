@@ -40,7 +40,7 @@ LiveTables.register(connection, "car", () -> cache.currentContents(), layout);
 
 ## Types
 
-Every type `DuckDBTypes` maps, except three that DuckDB's Java chunk writer cannot write in 1.5.5:
+Every type `DuckDBTypes` maps, except three that DuckDB's Java chunk writer cannot write in 1.5.5 or 2.0:
 `UUID`, `byte[]` (BLOB) and `LocalTime` (TIME). Registering a layout with one of those is **refused at
 registration**, naming the column and saying to map it to `String` instead - rather than failing on the
 first row of the first query.
@@ -52,21 +52,22 @@ than the driver's default of 18.
 
 ## What it costs
 
-Measured on this machine, DuckDB 1.5.5, against loading the same objects with the appender first:
+Measured on this machine, DuckDB 2.0.0, against loading the same objects with the appender first:
 
 | objects | live: group by make | live: join to 200k stored rows | load first | then group | then join |
 |---|---|---|---|---|---|
-| 100,000 | 46.2 ms | 7.7 ms | 62.3 ms | 1.6 ms | 1.7 ms |
-| 1,000,000 | 463.9 ms | 40.6 ms | 479.1 ms | 2.4 ms | 2.7 ms |
+| 100,000 | 46.4 ms | 10.3 ms | 69.1 ms | 1.2 ms | 1.9 ms |
+| 1,000,000 | 469.2 ms | 44.6 ms | 783.9 ms | 1.5 ms | 3.0 ms |
 
-Reading the objects is the cost - about 460 ns an object for a string column, against 2.4 ms for the
+Reading the objects is the cost - about 470 ns an object for a string column, against 1.5 ms for the
 same question over a stored table, which is columnar and compressed where this is a loop over the heap.
-The join costs a tenth of the group-by because it reads one `int` per object rather than a string:
+At a million objects the join costs a tenth of the group-by because it reads one `int` per object rather than a string:
 that is the projection pushdown showing.
 
 So: **live wins when the data would otherwise have to be loaded first, and when it changes under you.
-Loading wins the moment the same rows are queried again** - the load costs about what one live query
-does, and every query after that is free by comparison.
+Loading wins once the same rows are queried a second time** - on DuckDB 2.0 the load costs about two
+live queries (784 ms against 469 at a million objects; on 1.5 it was about one, 479 ms), and every
+query after that is free by comparison.
 
 ## Taking it away
 
@@ -75,7 +76,7 @@ table.unregister();     // or close(), or try-with-resources
 ```
 
 Drops the view and detaches the data, so the name stops answering. The table function itself stays
-registered, because DuckDB 1.5.5 has no way to unregister one - a query written against the function
+registered, because DuckDB (1.5.5 and 2.0) has no way to unregister one - a query written against the function
 directly after that says the live table is gone rather than returning stale rows.
 
 See `examples/src/main/java/CoreLiveTables.java` for all of it, with its real output.

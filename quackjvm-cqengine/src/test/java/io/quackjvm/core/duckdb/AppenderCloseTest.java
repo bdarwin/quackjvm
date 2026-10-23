@@ -13,7 +13,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * DuckDB's Appender, in 1.5.5, reports a failed flush from {@code flush()} but not from
+ * DuckDB's Appender, in 1.5.5 and 2.0.0, reports a failed flush from {@code flush()} but not from
  * {@code close()}: close returns normally and the whole chunk is discarded - the good rows along
  * with the bad one. Anything of ours that closes an appender must flush it explicitly first.
  */

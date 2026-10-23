@@ -171,7 +171,7 @@ public class CoreVectorSearch {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * Nearest to a question about the weather
  * --------------------------------------
@@ -202,10 +202,10 @@ public class CoreVectorSearch {
  *
  * What an exact search costs
  * --------------------------
- *       10,000 vectors x 768 dimensions (  29 MB): top-10 in   15.8 ms   (written at 40.1 us/row)
- *      100,000 vectors x 768 dimensions ( 293 MB): top-10 in  109.1 ms   (written at 41.3 us/row)
- *      100,000 vectors x 128 dimensions (  49 MB): top-10 in   15.6 ms   (written at 7.1 us/row)
- *    1,000,000 vectors x 128 dimensions ( 488 MB): top-10 in   40.8 ms   (written at 7.0 us/row)
+ *       10,000 vectors x 768 dimensions (  29 MB): top-10 in   19.0 ms   (written at 59.5 us/row)
+ *      100,000 vectors x 768 dimensions ( 293 MB): top-10 in  101.8 ms   (written at 60.2 us/row)
+ *      100,000 vectors x 128 dimensions (  49 MB): top-10 in   15.3 ms   (written at 9.8 us/row)
+ *    1,000,000 vectors x 128 dimensions ( 488 MB): top-10 in   35.3 ms   (written at 9.6 us/row)
  *    Every row is scored, so it grows with rows times dimensions - and 768 dimensions
  *    cost more per element than 128 do. A million of 768 is 3 GB of floats, which is why
  *    the row-count scaling above is measured at 128.
@@ -215,7 +215,7 @@ public class CoreVectorSearch {
  * has never installed one - so the honest answer above is the message, not a number.
  *
  * An exact search scores every row, and the cost follows rows times dimensions with a penalty for
- * width: a million 128-dimension vectors (488 MB) take 41 ms, where a hundred thousand 768-dimension
- * ones (293 MB) take 109. For a few hundred thousand vectors that is fast enough to need nothing else;
+ * width: a million 128-dimension vectors (488 MB) take 35 ms, where a hundred thousand 768-dimension
+ * ones (293 MB) take 102. For a few hundred thousand vectors that is fast enough to need nothing else;
  * past that, an index is what to reach for, and createIndex() will build one once vss is installed.
  */

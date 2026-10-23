@@ -160,7 +160,7 @@ public class CoreUdfs {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * A Java lookup, called from GROUP BY: region_of(String) -> String
  * -----------------------------------
@@ -183,21 +183,23 @@ public class CoreUdfs {
  *
  * What a call into Java costs, summing price * 1.2 over 2,000,000 rows
  * --------------------------------------------------------------------
- *    built-in SQL expression               0.9 ms    0.5 ns/row    1.0x
- *    Udfs.registerDouble (no boxing)      14.1 ms    7.1 ns/row   15.0x
- *    Udfs.register (boxed)                24.1 ms   12.0 ns/row   25.6x
+ *    built-in SQL expression               1.3 ms    0.7 ns/row    1.0x
+ *    Udfs.registerDouble (no boxing)      17.7 ms    8.8 ns/row   13.5x
+ *    Udfs.register (boxed)                16.9 ms    8.4 ns/row   12.9x
  *
  * And they agree:
  *    in_sql=1222800000.00  primitive=1222800000.00  boxed=1222800000.00
  *
  * What cannot cross
  * -----------------
- *    A function cannot take a UUID: DuckDB's Java vectors have no accessor for it in 1.5.5 - use a String instead
+ *    A function cannot take a UUID: DuckDB's Java vectors have no accessor for it in DuckDB 2.0 - use a String instead
  *
- * The wrapper costs nothing over the raw callback API: the numbers here are the same as
- * CoreScalarFunction's, which writes the callbacks by hand - 6-7 ns a row unboxed, 10-12 boxed.
+ * The wrapper costs nothing over the raw callback API: the numbers here are in the same range as
+ * CoreScalarFunction's, which writes the callbacks by hand - 7-10 ns a row there and here. On 2.0
+ * the boxed form was as fast as the primitive one in both runs, or slightly faster; on 1.5 it was
+ * about twice as slow.
  *
- * What that buys: a call into Java is fifteen to twenty-five times a built-in SQL expression, so a
+ * What that buys: a call into Java is about thirteen times a built-in SQL expression, so a
  * UDF is for what SQL cannot say - a lookup table that lives in Java, a rule nobody wants to maintain
  * twice - rather than for arithmetic. region_of above is the shape that pays for itself; vat_boxed is
  * the shape that does not.

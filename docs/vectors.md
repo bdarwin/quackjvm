@@ -39,14 +39,14 @@ length is refused naming both lengths.
 
 ## What an exact search costs
 
-Every row is scored. Measured on this machine, DuckDB 1.5.5, top-10:
+Every row is scored. Measured on this machine, DuckDB 2.0.0, top-10:
 
 | vectors | dimensions | size | top-10 |
 |---|---|---|---|
-| 10,000 | 768 | 29 MB | 15.8 ms |
-| 100,000 | 768 | 293 MB | 109.1 ms |
-| 100,000 | 128 | 49 MB | 15.6 ms |
-| 1,000,000 | 128 | 488 MB | 40.8 ms |
+| 10,000 | 768 | 29 MB | 19.0 ms |
+| 100,000 | 768 | 293 MB | 101.8 ms |
+| 100,000 | 128 | 49 MB | 15.3 ms |
+| 1,000,000 | 128 | 488 MB | 35.3 ms |
 
 The cost follows rows times dimensions, with a penalty for width: a million 128-dimension vectors are
 faster than a hundred thousand 768-dimension ones despite being more bytes. **A million vectors of 768

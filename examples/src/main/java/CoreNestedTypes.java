@@ -2,8 +2,8 @@
  * Columns that hold more than one value: LIST, STRUCT, MAP, and an ARRAY of fixed size.
  *
  * The roadmap said this would need Arrow, because "the appender's native entry points are scalars
- * only". That was true of an older driver. In 1.5.5 the appender takes a Collection for a list, a Map
- * for a map, beginStruct/endStruct for a struct and a float[] for a fixed-size array - so quackjvm
+ * only". That was true of an older driver. Since 1.5.5 the appender takes a Collection for a list, a
+ * Map for a map, beginStruct/endStruct for a struct and a float[] for a fixed-size array - so quackjvm
  * writes them through the appender, with no Arrow and no extra dependency. This example is the
  * evidence.
  *
@@ -180,7 +180,7 @@ public class CoreNestedTypes {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * What the record's own types became
  * ---------------------------------
@@ -220,8 +220,8 @@ public class CoreNestedTypes {
  *
  * What a vector of 768 floats costs to write
  * -----------------------------------------
- *     20,000 rows of FLOAT[768] ( 59 MB of floats): 0.67 s,  29,716 rows/s,  87 MB/s
- *    100,000 rows of FLOAT[768] (293 MB of floats): 3.44 s,  29,035 rows/s,  85 MB/s
+ *     20,000 rows of FLOAT[768] ( 59 MB of floats): 0.99 s,  20,192 rows/s,  59 MB/s
+ *    100,000 rows of FLOAT[768] (293 MB of floats): 4.93 s,  20,268 rows/s,  59 MB/s
  *    A million rows of FLOAT[768] is 3 GB of floats before DuckDB sees any of them,
  *    so it is the rate that matters rather than the total - it is linear in the bytes.
  *
@@ -235,10 +235,10 @@ public class CoreNestedTypes {
  * vectorColumn(name, 768, ...) is how to say a fixed size, and the size is what array_cosine_similarity
  * needs.
  *
- * Writing 768 floats a row runs at about 29,000 rows a second, 85 MB/s, and is linear in the bytes:
+ * Writing 768 floats a row runs at about 20,000 rows a second, 59 MB/s, and is linear in the bytes:
  * the same rate at 20,000 rows as at 100,000. A million rows would be 3 GB of floats before DuckDB saw
  * any of them, which is why the rate is the number that matters.
  *
  * No Arrow anywhere in this, and no extra dependency. The roadmap said the write path would need it;
- * the 1.5.5 appender took Collections, Maps and structs, so it did not.
+ * the appender has taken Collections, Maps and structs since 1.5.5, so it did not.
  */

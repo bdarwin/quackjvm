@@ -88,7 +88,7 @@ public final class Connections {
         private boolean pending;
         /**
          * Set when commit, rollback or a change of auto-commit mode throws. After that DuckDB's JDBC
-         * driver (1.5.5) no longer agrees with DuckDB about whether a transaction is open, and
+         * driver (1.5.5, and still 2.0.0) no longer agrees with DuckDB about whether a transaction is open, and
          * nothing recovers it: later "transactions" on the connection commit statement by
          * statement, and their commit() throws although the work has landed. Such a connection
          * must never be handed to another request, so the pool discards it.

@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * A registered {@link LiveTables} table: what SQL calls it, and the way to take it away again.
  *
  * <p>Closing it drops the view and detaches the data, so the name stops answering. The table function
- * behind it stays registered, because DuckDB 1.5.5 has no way to unregister one - a query written
+ * behind it stays registered, because DuckDB (1.5.5 and 2.0) has no way to unregister one - a query written
  * against the function directly after that says the table is gone rather than returning stale rows.</p>
  */
 public final class LiveTable implements AutoCloseable {

@@ -215,8 +215,8 @@ public class CoreRefreshes {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5), with plenty else running - consecutive
- * runs varied by about a third, so read the shape rather than the digits:
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0), from a single run - timings here vary
+ * from run to run, so read the shape rather than the digits:
  *
  * A day on one publisher's timeline
  * ---------------------------------
@@ -241,16 +241,16 @@ public class CoreRefreshes {
  *
  * At some scale: 100 records of 25 values, published 200 times, on disk
  * --------------------------------------------------------------------
- * replacing the records outright, keeping no history: median 2.09 ms, p99 6.12 ms, 2,500 values of state, 0 contributions, 1,292 KB on disk
- * the same as refreshes, with the contributions:      median 5.05 ms, p99 9.65 ms, 2,500 values of state, 51,999 contributions, 2,828 KB on disk, sum agrees: yes
+ * replacing the records outright, keeping no history: median 2.72 ms, p99 7.05 ms, 2,500 values of state, 0 contributions, 1,548 KB on disk
+ * the same as refreshes, with the contributions:      median 7.29 ms, p99 11.55 ms, 2,500 values of state, 51,999 contributions, 2,572 KB on disk, sum agrees: yes
  *
  * The state does not grow: 2,500 values after 200 refreshes, because only the current one is kept.
  * The contributions do: 2,500 from the first refresh, then only what moved, which is why they are
  * what gets archived and cut back rather than living in the working database for ever.
  *
- * Refreshing costs about twice a plain replace of the same records, for the contributions, the ledger
- * row, and knowing what each value moved by. Of that, resolving 250 keys used to take 2.1 ms until
- * they were remembered: ids never change, so the second refresh onwards does no SQL for them.
+ * Refreshing costs nearly three times a plain replace of the same records, for the contributions, the
+ * ledger row, and knowing what each value moved by. Of that, resolving 250 keys used to take 2.1 ms
+ * until they were remembered: ids never change, so the second refresh onwards does no SQL for them.
  *
  * The first refresh is a full set, and a full set contributes the values themselves rather than what
  * they moved by - it is a baseline. Everything after it is a difference, which is why the state here

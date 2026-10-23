@@ -169,7 +169,7 @@ public class UdfsTest {
         }
         catch (IllegalArgumentException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("cannot take a UUID"));
-            assertTrue(expected.getMessage(), expected.getMessage().contains("1.5.5"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("DuckDB 2.0"));
         }
         try {
             Udfs.register(connection, "bad", byte[].class, String.class, String::getBytes);

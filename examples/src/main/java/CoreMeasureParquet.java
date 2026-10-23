@@ -268,12 +268,18 @@ public class CoreMeasureParquet {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
+ *
+ * Everything is written under /var/folders/p2/3wph7cw515d_ch9lsq65trmh0000gn/T/measure-parquet1256245082479018856 (kept when the run ends)
  *
  * Export: one file per day of refresh
  * -----------------------------------
- *    measure=exposure/part=2026-09-28/svc_a-1790834689824.parquet   1,694 bytes
- *    measure=exposure/part=2026-09-29/svc_a-1790834689831.parquet   1,580 bytes
+ *    measure=exposure/part=2026-09-28/svc_a-1792740720381.parquet   1,731 bytes
+ *    measure=exposure/part=2026-09-29/svc_a-1792740720389.parquet   1,614 bytes
+ *
+ *    in full:
+ *    /var/folders/p2/3wph7cw515d_ch9lsq65trmh0000gn/T/measure-parquet1256245082479018856/lake/measure=exposure/part=2026-09-28/svc_a-1792740720381.parquet
+ *    /var/folders/p2/3wph7cw515d_ch9lsq65trmh0000gn/T/measure-parquet1256245082479018856/lake/measure=exposure/part=2026-09-29/svc_a-1792740720389.parquet
  *
  * What a file holds - asked with plain SQL, nothing of quackjvm's involved
  * ----------------------------------------------------------------------
@@ -287,7 +293,7 @@ public class CoreMeasureParquet {
  *    kind           VARCHAR
  *    seq            BIGINT
  *    and the measure's own definition, in the file's metadata:
- *       quackjvm_measure   {"measure":"exposure","fields":["group","point"],"orders":{"point":["5y","10y","30y"]},"part":"2026-09-28","written_by":"svc_a","written_at":"2026-10-01T06:04:49.825897Z","version":1}
+ *       quackjvm_measure   {"measure":"exposure","fields":["group","point"],"orders":{"point":["5y","10y","30y"]},"part":"2026-09-28","written_by":"svc_a","written_at":"2026-10-23T07:32:00.382855Z","version":1}
  *
  * Every row of Monday, which is every contribution in the order it was made
  * -----------------------------------------------------------------------
@@ -300,7 +306,7 @@ public class CoreMeasureParquet {
  *
  * The state at a point, by the rule, in SQL a reader with only the files can run
  * -----------------------------------------------------------------------------
- *    WITH c AS (SELECT * FROM read_parquet(['<lake>/measure=exposure/part=2026-09-28/svc_a-1790834689824.parquet', '<lake>/measure=exposure/part=2026-09-29/svc_a-1790834689831.parquet'], hive_partitioning = false)),
+ *    WITH c AS (SELECT * FROM read_parquet(['<lake>/measure=exposure/part=2026-09-28/svc_a-1792740720381.parquet', '<lake>/measure=exposure/part=2026-09-29/svc_a-1792740720389.parquet'], hive_partitioning = false)),
  *    since AS (SELECT coalesce(max(seq), 0) AS seq FROM c WHERE kind = 'full' AND refreshed_at <= ?)
  *    SELECT "group", point, sum(value) AS total FROM c, since
  *    WHERE c.refreshed_at <= ? AND c.seq >= since.seq
@@ -323,10 +329,10 @@ public class CoreMeasureParquet {
  *
  * Over HTTP, where the files lie - nothing is downloaded whole
  * -----------------------------------------------------------
- *    http://127.0.0.1:53016/measure=exposure/part=2026-09-28/svc_a-1790834689824.parquet
+ *    http://127.0.0.1:57841/measure=exposure/part=2026-09-28/svc_a-1792740720381.parquet
  *       full         3     37.0
  *       increment    3     14.0
- *    22 ms, reading only the byte ranges the query needed
+ *    24 ms, reading only the byte ranges the query needed
  *
  * Into a database that has never heard of the measure
  * ---------------------------------------------------
@@ -334,6 +340,8 @@ public class CoreMeasureParquet {
  *    Monday 11:00 from the files alone: g1 5y total=12.0,  g1 10y total=20.0,  g1 30y total=5.0
  *    Tuesday 10:00 from the files alone: g1 5y total=1.0,  g3 10y total=6.0
  *    and pivoted, the point as columns: g1 5y=1.0 10y=null,  g3 5y=null 10y=6.0
+ *
+ * The parquet files are still there: /var/folders/p2/3wph7cw515d_ch9lsq65trmh0000gn/T/measure-parquet1256245082479018856/lake
  *
  * A file is contributions, not state, and it carries everything needed to turn one into the other:
  * the refresh each row belongs to, when that was, who wrote it, and whether it was a full set. The

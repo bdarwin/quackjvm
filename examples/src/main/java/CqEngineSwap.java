@@ -148,20 +148,20 @@ public class CqEngineSwap {
 }
 
 /*
- * Output (Apple Silicon, JDK 25, -Xmx2g, default 200,000 objects):
+ * Output (Apple Silicon, JDK 25, DuckDB 2.0.0, -Xmx2g, default 200,000 objects):
  *
  * Storing 200,000 cars two ways.
  *
  * on-heap ConcurrentIndexedCollection
  *   objects stored     200,000
- *   query matched      1,255 in 6,863 us, first: Car[carId=55000, manufacturer=Ford, model=Prius, doors=4, price=20000.0]
- *   Java heap used     33 MB
+ *   query matched      1,255 in 9,529 us, first: Car[carId=55000, manufacturer=Ford, model=Prius, doors=4, price=20000.0]
+ *   Java heap used     34 MB
  *
  * DuckDBPersistence
  *   objects stored     200,000
- *   query matched      1,255 in 33,986 us, first: Car[carId=135804, manufacturer=Ford, model=M3, doors=3, price=20804.0]
- *   Java heap used     0 MB
- *   DuckDB bytes used  17 MB (native memory, not the heap)
+ *   query matched      1,255 in 42,452 us, first: Car[carId=95012, manufacturer=Ford, model=Civic, doors=5, price=20012.0]
+ *   Java heap used     1 MB
+ *   DuckDB bytes used  14 MB (native memory, not the heap)
  *
  * Both timings include one-off warm-up; they are not a benchmark. The two "first" cars differ
  * because neither collection promises an order unless the query asks for one.

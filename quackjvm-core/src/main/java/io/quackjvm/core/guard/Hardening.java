@@ -16,7 +16,8 @@ import java.util.Properties;
  * running"}. Every connection to that database loses file access at once, including the ones your
  * own code holds.</p>
  *
- * <p>Measured on DuckDB 1.5.5, with external access off: {@code read_csv}, {@code getenv},
+ * <p>Measured on DuckDB 1.5.5 and 2.0.0, with external access off: {@code read_csv}, {@code getenv}
+ * (which 2.0 removes outright),
  * {@code COPY ... TO} and {@code INSTALL} are all refused - and so are quackjvm's own
  * {@code MeasureTable.archive}, {@code MeasureHistory.export} and every Parquet read. If a database
  * archives, exports or attaches anything, hardening it takes those away. {@code ATTACH ':memory:'}

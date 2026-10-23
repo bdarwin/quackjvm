@@ -55,6 +55,14 @@ one spills to temporary files when it has to, so a low limit costs latency rathe
 Bulk loads stage `stagingChunkRows` rows at a time, so a tight limit does not break large `addAll`
 calls.
 
+**On DuckDB 2.0, 256 MB is too tight for ten threads on queries that combine conditions.** A query
+with `or` and `not` in it becomes `UNION`, `INTERSECT` and `EXCEPT` in SQL, and each of those builds
+a hash table per thread. With `memory_limit` at 256 MB and `threads` at 10, 2.0 spills them to disk:
+measured on 100,000 rows, that query took 112 ms against 8.3 ms with 512 MB (162 ms at 128 MB). On
+1.5 the same query took 9.5 ms at 256 MB. Either keep the limit at 512 MB or more, or lower
+`threads` with it - 256 MB with four threads took 7.7 ms. `CqEngineIndexes` shows the effect: its
+`or, and not` query is 86-94 ms on 2.0 against 21 ms on 1.5, at 256 MB.
+
 ## `optimize()` after a bulk load
 
 Index tables are written in the order objects arrive, so the values in any one block span most of
@@ -205,7 +213,7 @@ Anything DuckDB accepts can be passed through:
 ### `threads` is global, not per connection
 
 Worth knowing before you plan around it: **setting `threads` on one connection sets it for every
-connection of that database.** There is no per-query parallelism budget in DuckDB 1.5.5, so you
+connection of that database.** There is no per-query parallelism budget in DuckDB 1.5 or 2.0, so you
 cannot give an analytical query ten threads and a dashboard panel two. Verified by setting it on
 one connection and reading `current_setting('threads')` back from the others — they all report the
 new value.

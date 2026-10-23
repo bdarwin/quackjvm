@@ -141,33 +141,33 @@ public class CqEngineIndexes {
 }
 
 /*
- * Output (Apple Silicon, JDK 25):
+ * Output (Apple Silicon, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * Loaded 100,000 cars, indexed on manufacturer, colour and price.
  *
- * equal on an indexed String    20,000 matches in 11,864 us
+ * equal on an indexed String    20,000 matches in 11,103 us
  *   query                      equal("manufacturer", "Honda")
- *   one of them                Car[carId=581, manufacturer=Honda, colour=GREEN, doors=5, price=5581.0]
+ *   one of them                Car[carId=33391, manufacturer=Honda, colour=BLACK, doors=4, price=38391.0]
  *
- * equal on an indexed enum      20,000 matches in  5,312 us
+ * equal on an indexed enum      20,000 matches in  4,826 us
  *   query                      equal("colour", BLUE)
- *   one of them                Car[carId=312, manufacturer=Toyota, colour=BLUE, doors=3, price=5312.0]
+ *   one of them                Car[carId=33339, manufacturer=Kia, colour=BLUE, doors=3, price=38339.0]
  *
- * between on an indexed double   1,002 matches in  4,902 us
+ * between on an indexed double   1,002 matches in  3,120 us
  *   query                      between("price", 20000.0, 20500.0)
- *   one of them                Car[carId=15063, manufacturer=BMW, colour=BLUE, doors=3, price=20063.0]
+ *   one of them                Car[carId=60015, manufacturer=Ford, colour=BLACK, doors=3, price=20015.0]
  *
- * equal on an unindexed int     33,333 matches in 86,568 us
+ * equal on an unindexed int     33,333 matches in 116,316 us
  *   query                      equal("doors", 5)
- *   one of them                Car[carId=122, manufacturer=Toyota, colour=WHITE, doors=5, price=5122.0]
+ *   one of them                Car[carId=33509, manufacturer=Kia, colour=GREEN, doors=5, price=38509.0]
  *
- * and of three conditions          400 matches in  9,358 us
+ * and of three conditions          400 matches in 11,051 us
  *   query                      and(equal("manufacturer", "Honda"), equal("colour", BLUE), between("price", 20000.0, 25000.0))
- *   one of them                Car[carId=15836, manufacturer=Honda, colour=BLUE, doors=5, price=20836.0]
+ *   one of them                Car[carId=60211, manufacturer=Honda, colour=BLUE, doors=4, price=20211.0]
  *
- * or, and not                    6,400 matches in 20,976 us
+ * or, and not                    6,400 matches in 93,783 us
  *   query                      and(or(equal("manufacturer", "Honda"), equal("manufacturer", "BMW")), not(equal("colour", RED)), greaterThan("price", 40000.0))
- *   one of them                Car[carId=35181, manufacturer=Honda, colour=GREEN, doors=3, price=40181.0]
+ *   one of them                Car[carId=35041, manufacturer=Honda, colour=BLACK, doors=4, price=40041.0]
  *
  * The unindexed attribute is the slowest here because every object has to be rebuilt from its
  * columns; the timings include warm-up and are not a benchmark.

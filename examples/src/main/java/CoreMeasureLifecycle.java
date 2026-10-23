@@ -254,7 +254,7 @@ public class CoreMeasureLifecycle {
 }
 
 /*
- * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1):
+ * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * 1. Added 18,000 values over 200 records; parts now:
  *       2026-09-21    6,000 values
@@ -267,18 +267,18 @@ public class CoreMeasureLifecycle {
  *              g4   1852.5   1852.5   1852.5   1852.5   1860.0   1860.0
  *       ... 1 more rows
  *
- * 2. Archived 2026-09-21 to archive/measure=measure/part=2026-09-21/svc-a-1790408720381.parquet (14 KB), leaving 12,000 values live
+ * 2. Archived 2026-09-21 to archive/measure=measure/part=2026-09-21/svc-a-1792740718478.parquet (14 KB), leaving 12,000 values live
  *       the file says what it is: [group, sub, point, unit], written by svc-a
  * 3. Moved it into a store of my own: 1 blob, 14 KB, and off the disk
  *
- * 4. Two archived days, asked where they lie   (4 rows, 6 ms)
+ * 4. Two archived days, asked where they lie   (4 rows, 9 ms)
  *           group       1d       1m       1y       5y      10y      30y
  *              g0   1225.0   1225.0   1225.0   1225.0   1250.0   1250.0
  *              g2   1225.0   1225.0   1225.0   1225.0   1250.0   1250.0
  *              g4   1225.0   1225.0   1225.0   1225.0   1250.0   1250.0
  *       ... 1 more rows
  *
- * 5. Restored two days into an empty database in 17 ms: 12,000 values, 240 keys, fields [group, sub, point, unit]
+ * 5. Restored two days into an empty database in 13 ms: 12,000 values, 240 keys, fields [group, sub, point, unit]
  *    the same question, answered there   (4 rows, 4 ms)
  *           group       1d       1m       1y       5y      10y      30y
  *              g0   1225.0   1225.0   1225.0   1225.0   1250.0   1250.0
@@ -287,7 +287,7 @@ public class CoreMeasureLifecycle {
  *       ... 1 more rows
  *
  * 6. Added a 'kind' field; values written before it read as "n/a"
- *    by kind, including the day archived before the field existed   (2 rows, 6 ms)
+ *    by kind, including the day archived before the field existed   (2 rows, 8 ms)
  *            kind       1d       1m       1y       5y      10y      30y
  *              k1      7.0      7.0      7.0      7.0      7.0      7.0
  *             n/a   2450.0   2450.0   2450.0   2450.0   2500.0   2500.0

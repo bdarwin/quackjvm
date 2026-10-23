@@ -11,7 +11,7 @@ A DuckDB database and everything quackjvm does with it, behind one object that o
 connections, so the code using it never holds one. Thread-safe. Each call borrows a pooled
 connection and gives it back, on failure as well as success. Helpers that keep a connection for
 life (catalog, guard, vector search) get one that borrows per statement: a DuckDB connection runs
-one query at a time, and a quick query behind a slow one on a shared connection waited 1,063 ms,
+one query at a time, and a quick query behind a slow one on a shared connection waited 1,136 ms,
 against 0 ms on its own ([`CoreConnectionFacts`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreConnectionFacts.java)).
 
 | method | notes |
@@ -164,7 +164,7 @@ String whyNoIndex = search.createIndex();     // null when an HNSW index was cre
 
 - `Metric.COSINE` (default), `EUCLIDEAN` or `INNER_PRODUCT`, all built in - no extension, no network.
 - The column must be a fixed-size array; a `FLOAT[]` is refused, pointing at `vectorColumn`.
-- Exact top-10: 15.8 ms over 10,000 x 768, 109.1 ms over 100,000 x 768, 40.8 ms over 1,000,000 x 128.
+- Exact top-10: 19.0 ms over 10,000 x 768, 101.8 ms over 100,000 x 768, 35.3 ms over 1,000,000 x 128.
 
 See [Vector similarity](vectors.md).
 
@@ -183,7 +183,7 @@ ColumnarLayout.builder(Doc.class)
 
 - Written through the appender - no Arrow, no extra dependency - and read back by `Rows.records`.
 - One level of nesting; a list of structs is refused when the layout is built.
-- `FLOAT[768]` at 29,000 rows a second, 85 MB/s.
+- `FLOAT[768]` at 20,000 rows a second, 59 MB/s (DuckDB 2.0; 85 MB/s on 1.5).
 
 See [Nested types](nested-types.md).
 
@@ -201,8 +201,8 @@ Udfs.registerDouble(connection, "vat", (double price) -> price * 1.2);   // no b
 - One, two or three arguments. `register` answers a null argument with a null result without calling the
   method; `registerNullable` passes nulls through.
 - `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java vectors cannot carry them
-  in 1.5.5.
-- 2,000,000 rows of `price * 1.2`: 0.5 ns a row in SQL, 7.1 ns unboxed, 12.0 ns boxed.
+  in 1.5.5 or 2.0.
+- 2,000,000 rows of `price * 1.2`: 0.7 ns a row in SQL, 8.8 ns unboxed, 8.4 ns boxed (DuckDB 2.0).
 
 See [Java functions in SQL](udfs.md).
 
@@ -220,8 +220,8 @@ table.unregister();
 - A DuckDB table function plus a view, so SQL says `car`. Projection pushdown is on; the scan is
   single-threaded.
 - `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java chunk writer cannot
-  write them in 1.5.5.
-- 1,000,000 objects: join to 200,000 stored rows in 40.6 ms, against 479 ms to load them first.
+  write them in 1.5.5 or 2.0.
+- 1,000,000 objects: join to 200,000 stored rows in 44.6 ms, against 784 ms to load them first.
 
 See [Live tables](live-tables.md).
 
@@ -242,7 +242,7 @@ catalog.apply("car", layout);                      // writes everything the layo
 
 - `TableInfo` / `ColumnInfo` / `Profile` / `ColumnProfile` are records, each with `toText()`.
 - Descriptions and units are stored as DuckDB comments - `COMMENT ON` - not in a registry of ours.
-- `describe` reads metadata only: 1 ms whatever the table holds. `profile` is a full scan: 307 ms at
+- `describe` reads metadata only: 2 ms whatever the table holds. `profile` is a full scan: 279 ms at
   ten million rows.
 
 See [Catalog](catalog.md).

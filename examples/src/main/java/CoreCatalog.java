@@ -138,7 +138,7 @@ public class CoreCatalog {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * Every table, as something deciding what to ask would read it
  * -----------------------------------------------------------
@@ -170,10 +170,10 @@ public class CoreCatalog {
  * What is actually in a table
  * ---------------------------
  * car: 200,000 rows - cars we have sold, one row each
- *   carId INTEGER: 0 to 199999, ~187,859 distinct, mean 99999.5
+ *   carId INTEGER: 0 to 199999, ~195,264 distinct, mean 99999.5
  *   make VARCHAR: make-0 to make-3, ~4 distinct
- *   price DOUBLE: 5000.0 to 5899.0, ~1,022 distinct, mean 5449.15
- *   mileage INTEGER: 0 to 249999, ~182,977 distinct, mean 123986.5
+ *   price DOUBLE: 5000.0 to 5899.0, ~838 distinct, mean 5449.15
+ *   mileage INTEGER: 0 to 249999, ~188,380 distinct, mean 123986.5
  *   example rows:
  *     0, make-0, 5000.0, 0
  *     1, make-1, 5001.0, 37
@@ -181,10 +181,10 @@ public class CoreCatalog {
  *
  * What each of those costs
  * ------------------------
- *    describe (the schema only):    1 ms
- *    profile of 200,000 rows:       32 ms
- *    profile of   1,000,000 rows:   34 ms
- *    profile of  10,000,000 rows:   307 ms
+ *    describe (the schema only):    2 ms
+ *    profile of 200,000 rows:       42 ms
+ *    profile of   1,000,000 rows:   36 ms
+ *    profile of  10,000,000 rows:   279 ms
  *    so: describe whenever you like, profile when something has to decide.
  *
  * A table that is not there says what is
@@ -202,6 +202,6 @@ public class CoreCatalog {
  * description, so nothing has to know about the convention.
  *
  * describe reads metadata only, so it costs the same whatever the table holds. profile is SUMMARIZE,
- * which is a full scan - 34 ms at a million rows, 307 ms at ten million. That is cheap enough that
+ * which is a full scan - 36 ms at a million rows, 279 ms at ten million. That is cheap enough that
  * nothing here is cached: describe whenever you like, profile when something has to decide.
  */

@@ -83,16 +83,16 @@ percentage per column - plus an exact row count and a few rows to look at.
 
 ## What it costs
 
-Measured on this machine, DuckDB 1.5.5:
+Measured on this machine, DuckDB 2.0.0:
 
 | | |
 |---|---|
-| `describe` - the schema only | 1 ms, whatever the table holds (1.2 ms on 5,000,000 rows) |
-| `profile` of 200,000 rows x 4 columns | 32 ms |
-| `profile` of 1,000,000 rows x 4 columns | 34 ms |
-| `profile` of 10,000,000 rows x 4 columns | 307 ms |
+| `describe` - the schema only | 2 ms, whatever the table holds |
+| `profile` of 200,000 rows x 4 columns | 42 ms |
+| `profile` of 1,000,000 rows x 4 columns | 36 ms |
+| `profile` of 10,000,000 rows x 4 columns | 279 ms |
 
-`SUMMARIZE` is a full scan, so `profile` grows with the table while `describe` does not. At 307 ms for
+`SUMMARIZE` is a full scan, so `profile` grows with the table while `describe` does not. At 279 ms for
 ten million rows there is nothing here worth caching: **a cached variant tied to a materialization was
 considered and left out**, because the honest advice is cheaper than a cache - describe whenever you
 like, profile when something actually has to decide.

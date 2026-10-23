@@ -3,8 +3,10 @@
  *
  *   1. Dashboard users. Eight people refreshing the same GROUP BY panels over five million rows.
  *      DuckDB runs every query on many threads, so by default eight concurrent queries fight over
- *      the same cores. Setting threads to half the cores is the cheapest fix; a semaphore in front
- *      of the queries trims the tail further, for a little throughput.
+ *      the same cores. Setting threads to half the cores is the cheapest fix: more panels a second
+ *      and a shorter tail. A semaphore in front of the queries, on top of that, gives up about a
+ *      fifth of the throughput and trims the tail a little at most: p99 182-203 ms against
+ *      199-204 ms, over three runs on DuckDB 2.0.
  *   2. Your own transactions. Two threads doing read-modify-write on the same rows: one of them
  *      gets a conflict, is rolled back and retries, and no update is lost. Begin and end them with
  *      Transactions (SQL BEGIN/COMMIT), not setAutoCommit/commit - after a failed commit(), DuckDB's
@@ -324,25 +326,25 @@ public class CoreConcurrency {
 }
 
 /*
- * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1):
+ * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * 1. Eight users refreshing dashboard panels over 5,000,000 rows (10 cores)
- *    threads = 10 (DuckDB's default)           71.2 panels/s   p50   97.7 ms   p99  431.0 ms
- *    threads = 5                               70.0 panels/s   p50  101.7 ms   p99  357.5 ms
- *    threads = 5, at most 4 panels at once     58.1 panels/s   p50  136.2 ms   p99  301.5 ms
+ *    threads = 10 (DuckDB's default)           82.4 panels/s   p50   87.0 ms   p99  270.2 ms
+ *    threads = 5                               98.7 panels/s   p50   81.6 ms   p99  201.0 ms
+ *    threads = 5, at most 4 panels at once     81.7 panels/s   p50   98.8 ms   p99  203.0 ms
  *    threads is a database-wide setting: SET on any connection changes them all.
  *
  * 2. Two threads moving money between the same 10 accounts, 2,000 transfers each
- *    4,000 committed, 1,523 conflicts rolled back and retried
+ *    4,000 committed, 1,627 conflicts rolled back and retried
  *    money in the system: 10,000 (started with 10,000)
  *
  * 3. SparseTable: a writer and a reader running while optimize() reorders the table
  *    loaded 2,000 records, 100,000 values
  *    through the writer's instance:
  *      optimize: 5 of 5 succeeded
- *      meanwhile 5 replaces and 68 reads; records holding exactly their last replace: 5 of 5
+ *      meanwhile 6 replaces and 56 reads; records holding exactly their last replace: 6 of 6
  *    through a second instance:
  *      optimize: 0 of 5 succeeded - "Failed to optimize reading after 10 attempts"
- *      meanwhile 1,141 replaces and 1,197 reads; records holding exactly their last replace: 1,141 of 1,141
+ *      meanwhile 1,389 replaces and 1,576 reads; records holding exactly their last replace: 1,389 of 1,389
  *    Either way nothing is lost. Run optimize() through the instance your writers use.
  */

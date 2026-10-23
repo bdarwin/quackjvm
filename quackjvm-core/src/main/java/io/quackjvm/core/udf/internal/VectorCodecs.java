@@ -18,7 +18,7 @@ import java.time.ZoneOffset;
  * rather than once per row.
  *
  * <p>The types are the ones {@link DuckDBTypes} maps, minus the ones DuckDB's Java vectors have no
- * accessor for in 1.5.5 - {@code UUID}, {@code BLOB} and {@code TIME} - which are refused when the
+ * accessor for in 1.5.5 or 2.0 - {@code UUID}, {@code BLOB} and {@code TIME} - which are refused when the
  * function is registered rather than at the first row.</p>
  */
 public final class VectorCodecs {
@@ -67,7 +67,7 @@ public final class VectorCodecs {
     private static String unsupported(Class<?> type) {
         if (type == java.util.UUID.class || type == byte[].class || type == java.time.LocalTime.class
                 || type == java.sql.Time.class) {
-            return "DuckDB's Java vectors have no accessor for it in 1.5.5 - use a String instead";
+            return "DuckDB's Java vectors have no accessor for it in DuckDB 2.0 - use a String instead";
         }
         if (!DuckDBTypes.isSupported(box(type))) {
             return "quackjvm has no DuckDB type for it";

@@ -341,29 +341,29 @@ public class CqEngineConcurrency {
 }
 
 /*
- * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1):
+ * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * 1. Readers are never blocked by writers
- *    4 readers, 0 writers:  3,577 reads/s   p50  1.08 ms   p99  1.72 ms
- *    4 readers, 4 writers:  3,352 reads/s   p50  1.12 ms   p99  2.24 ms   (writers added 4,717 orders meanwhile)
+ *    4 readers, 0 writers:  3,506 reads/s   p50  1.12 ms   p99  1.50 ms
+ *    4 readers, 4 writers:  3,332 reads/s   p50  1.16 ms   p99  1.85 ms   (writers added 4,172 orders meanwhile)
  *    Reads slow a little because the machine is busier, not because they wait.
  *
  * 2. Different collections write in parallel; one collection writes in turn
- *    two threads, two collections, one database: 3,214 orders/s
- *    two threads, one collection:                2,049 orders/s
+ *    two threads, two collections, one database: 3,198 orders/s
+ *    two threads, one collection:                1,923 orders/s
  *    Each collection has its own write lock, so collections sharing a database for
  *    joins do not queue behind each other's writes.
  *
  * 3. Two writers replacing the same 50 orders, 400 writes each
  *    serializeWrites(true): 800 succeeded, 0 failed; afterwards 50 orders, 50 distinct
- *    serializeWrites(false): 422 succeeded, 378 failed; afterwards 50 orders, 50 distinct
+ *    serializeWrites(false): 763 succeeded, 37 failed; afterwards 50 orders, 50 distinct
  *      a failure looks like: TransactionContext Error: Conflict on tuple deletion!
  *    Turn serializeWrites off only when writers never touch the same keys.
  *
  * 4. A QueryOptions shared between threads is refused, not deadlocked
- *    refused: A QueryOptions instance is being used by two threads at once (opened on pool-7-thread-2, now used by pool-7-thread-1)
+ *    refused: A QueryOptions instance is being used by two threads at once (opened on pool-7-thread-3, now used by pool-7-thread-1)
+ *    refused: A QueryOptions instance is being used by two threads at once (opened on pool-7-thread-3, now used by pool-7-thread-2)
  *    completed
- *    refused: A QueryOptions instance is being used by two threads at once (opened on pool-7-thread-2, now used by pool-7-thread-3)
- *    refused: A QueryOptions instance is being used by two threads at once (opened on pool-7-thread-2, now used by pool-7-thread-4)
+ *    refused: A QueryOptions instance is being used by two threads at once (opened on pool-7-thread-3, now used by pool-7-thread-4)
  *    The fix is one QueryOptions per operation; they are cheap to build.
  */

@@ -197,25 +197,25 @@ public class CqEngineMaterialization {
 }
 
 /*
- * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 1.5.5.1):
+ * Output (Apple Silicon, 10 cores, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * 5,000,000 sales loaded.
  *
  * 1. The panel, computed against the base table, then from its materialization:
- *    base table          14.99 ms
- *    materialization      0.28 ms   (54x, 72 rows)
+ *    base table          13.56 ms
+ *    materialization      0.37 ms   (36x, 72 rows)
  *    and it is still a table - EMEA, from the same materialization:
  *      1. Audi    4,166,412,232
  *      2. Ford    4,166,245,528
  *      3. Toyota  2,083,431,104
  *
  * 2. Fifteen refreshes, with four threads reading throughout:
- *    5,899 reads, 0 failed, 20 ms per refresh
+ *    4,799 reads, 0 failed, 18 ms per refresh
  *    (Measured separately under the same load: DROP then CREATE TABLE AS failed 1,280 reads.)
  *
  * 3. 250,000 new sales arrive, into a rollup of 5,000,000:
- *    fold in the new rows       4.8 ms
- *    rebuild from scratch      14.1 ms
+ *    fold in the new rows       5.4 ms
+ *    rebuild from scratch      13.4 ms
  *    same answer both ways: true
  *      AMER      875,000 sales, average 35,002.00
  *      ANZ       875,000 sales, average 34,998.93

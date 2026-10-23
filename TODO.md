@@ -31,7 +31,7 @@ point, `io.quackjvm.core.Quack`, but remain at the lower level. Everything else 
 - Before committing anything that touches `quackjvm-core`'s API, compile the examples - nothing in
   the build does, and two were broken for days (see H1):
   `cd examples && javac --release 17 -d /tmp/ex -cp "$(cat target/classpath.txt)" src/main/java/*.java`
-- Never validate untrusted SQL by preparing it: with `duckdb_jdbc` 1.5.5.1,
+- Never validate untrusted SQL by preparing it: with `duckdb_jdbc` 1.5.5.1 and 2.0.0.0,
   `prepareStatement("DROP TABLE t; SELECT 1")` executes the DROP. `GuardedQuery` exists because of this.
 - Reproduction programs from the reviews are kept locally, outside git, under
   `.claude/review-probes/` (`guard/Probe{,2,3}.java` with `guard/cp.txt`, `measures/Probe{,2}.java`,
@@ -39,6 +39,29 @@ point, `io.quackjvm.core.Quack`, but remain at the lower level. Everything else 
   compile against `quackjvm-core/target/classes` plus the classpath in `cp.txt`/`run.sh`.
 
 ---
+
+## 0. Found moving to DuckDB 2.0 (2026-10-23)
+
+### D1. At `memory_limit` 256 MB and 10 threads, 2.0 spills set operations: 12x slower
+`UNION`/`INTERSECT`/`EXCEPT` - what an `or`/`not` CQEngine query becomes - took 112 ms on 100,000
+rows against 9.5 ms on 1.5 at the same limit, and 8.3 ms on 2.0 at 512 MB or with 4 threads. 256 MB
+is the limit the docs, the getting-started page and most examples use; the README's benchmark
+tables were measured with it on 1.5 and have not been re-run. Decide: raise the documented default
+to 512 MB, cap `threads` alongside a small limit, or report it upstream with the standalone
+reproduction (`.claude/review-probes/duckdb2/SetOps3.java`, run with the jar on the classpath and `256MB` as its argument). Documented in `docs/tuning.md` meanwhile.
+
+### D2. 2.0's appender is 40-60% slower
+Measured three times each: 1,000,000 objects loaded in 772-784 ms against 479 ms on 1.5
+(`CoreLiveTables`); `FLOAT[768]` at 59-63 MB/s against 85 (`CoreNestedTypes`); vector rows 56-60
+us against 40 (`CoreVectorSearch`). Not investigated beyond that.
+
+### D3. The guard's check is 0.6 ms on 2.0, 0.23 ms on 1.5
+Same code on both drivers (`CoreGuardedQueries`, three runs on 2.0, two on 1.5), so it is 2.0's
+parser, not the node check added for 2.0. Still well under a millisecond.
+
+### D4. `docs/index.md` carries an old copy of the README's driver table
+It still says nested types have "no write path at all" and UDFs are "not wrapped yet", both since
+done, and its numbers are 1.5's. Replace it with the README's table, or link to it.
 
 ## 1. Critical
 
@@ -603,9 +626,9 @@ the build instead of the reader.
   not installed here and installing it needs the network. Measure it on a machine that has it, then
   put the numbers in `docs/vectors.md`.
 - 1,000,000 rows of `FLOAT[768]` was not run (3 GB of floats); the rate is documented instead.
-- `PIVOT` cannot be checked by the parser in 1.5.5 and is opt-in; `UUID`, `byte[]` and `LocalTime`
+- `PIVOT` cannot be checked by the parser (1.5.5 or 2.0.0) and is opt-in; `UUID`, `byte[]` and `LocalTime`
   cannot cross into live tables or UDFs; nested types are one level deep. Each is documented and
-  refused with a message. Re-check all four when the driver moves past 1.5.5.
+  refused with a message. Re-checked on 2.0.0.0 (2026-10-23): PIVOT and the three types still hold; nesting depth not re-checked.
 
 ### H3. Still open from before this review
 - `quackjvm-micrometer`: an optional module exposing the same metrics to Prometheus/Grafana/Datadog

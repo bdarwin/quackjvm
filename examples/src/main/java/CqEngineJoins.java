@@ -167,7 +167,7 @@ public class CqEngineJoins {
 }
 
 /*
- * Output (Apple Silicon, JDK 25):
+ * Output (Apple Silicon, JDK 25, DuckDB 2.0.0):
  *
  * 80,000 vehicles, 20,000 people, one database.
  *
@@ -177,17 +177,20 @@ public class CqEngineJoins {
  *   vehicle  [Vehicle, columnar]
  *       columns: objectKey INTEGER, vehicleId INTEGER, make VARCHAR, ownerId INTEGER, price DOUBLE
  *
- * existsIn: 16,250 vehicles owned by someone in FR, in 121 ms
- * existsIn and price > 45000: 1,948 vehicles, in 61 ms
+ * existsIn: 16,250 vehicles owned by someone in FR, in 6 ms
+ * existsIn and price > 45000: 1,948 vehicles, in 4 ms
  *
- * join: 650 matched pairs in 255 ms; the first few:
- *   Vehicle[vehicleId=4950, make=make0, ownerId=4950, price=50050.0]  <->  Person[personId=4950, country=IE, name=person4950]
- *   Vehicle[vehicleId=10986, make=make1, ownerId=10986, price=49134.0]  <->  Person[personId=10986, country=IE, name=person10986]
- *   Vehicle[vehicleId=28078, make=make3, ownerId=3078, price=50682.0]  <->  Person[personId=3078, country=IE, name=person3078]
+ * join: 650 matched pairs in 21 ms; the first few:
+ *   Vehicle[vehicleId=35238, make=make3, ownerId=10238, price=50722.0]  <->  Person[personId=10238, country=IE, name=person10238]
+ *   Vehicle[vehicleId=35282, make=make2, ownerId=10282, price=49158.0]  <->  Person[personId=10282, country=IE, name=person10282]
+ *   Vehicle[vehicleId=36166, make=make1, ownerId=11166, price=49554.0]  <->  Person[personId=11166, country=IE, name=person11166]
  *
  * sql: vehicles and average price per country
- *   US    16,250 vehicles, average  25,997.46
  *   FR    16,250 vehicles, average  26,003.54
- *   IE    16,250 vehicles, average  25,998.46
  *   DE    16,250 vehicles, average  25,999.46
+ *   IE    16,250 vehicles, average  25,998.46
+ *   US    16,250 vehicles, average  25,997.46
+ *
+ * The "first few" pairs and the order of tied countries vary from run to run: neither query
+ * asks for an order among equals.
  */

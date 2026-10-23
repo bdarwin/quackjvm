@@ -194,11 +194,11 @@ public class CoreConnectionFacts {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * What opening a connection costs
  * -------------------------------
- *    duplicate() and close(): 6.6 us each, over 20,000
+ *    duplicate() and close(): 4.4 us each, over 20,000
  *
  * Shared by the whole database
  * ----------------------------
@@ -214,7 +214,7 @@ public class CoreConnectionFacts {
  * One connection, eight threads
  * -----------------------------
  *    1,600 reads on one shared connection: 0 failed, 0 wrong
- *    a quick query while a 1-second one runs, on the same connection      1,063 ms
+ *    a quick query while a 1-second one runs, on the same connection      1,136 ms
  *    a quick query while a 1-second one runs, on a connection of its own      0 ms
  *    thread A inserts on the shared connection, thread B rolls back: A's row is gone
  *

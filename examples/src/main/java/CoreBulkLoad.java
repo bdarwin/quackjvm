@@ -121,14 +121,14 @@ public class CoreBulkLoad {
 }
 
 /*
- * Output (Apple Silicon, JDK 25, default 1,000,000 rows):
+ * Output (Apple Silicon, JDK 25, DuckDB 2.0.0, default 1,000,000 rows):
  *
- * Wrote 1,000,000 rows in 0.62 s (0.62 us per row)
+ * Wrote 1,000,000 rows in 0.56 s (0.56 us per row)
  * Rows in the table: 1,000,000
  * Top three symbols by notional:
  *   AVGO      125,000 trades    3,289,518,750.00
  *   AMZN      125,000 trades    3,288,213,750.00
  *   TSLA      125,000 trades    3,276,690,000.00
- * File: /var/folders/.../quackjvm-bulk-1993139296406353480.duckdb
- * File size: 9.8 MB (10.2 bytes per row)
+ * File: /var/folders/.../quackjvm-bulk-3824223830629618313.duckdb
+ * File size: 10.0 MB (10.5 bytes per row)
  */

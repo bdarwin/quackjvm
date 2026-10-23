@@ -189,11 +189,11 @@ public class CoreMeasures {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * 2,000,000 values over 2,000 records and 9,000 distinct keys, written in 0.9 s
  *
- * One record, its series as rows and the axis as columns   (33 rows, 12 ms)
+ * One record, its series as rows and the axis as columns   (33 rows, 10 ms)
  *         group       sub      kind        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0        s1        k1      35.8      35.8      35.8      35.8      35.8      35.8      35.8      35.8      35.9      35.9
  *            g0        s2        k1      33.8      33.8      33.8      33.8      33.8      33.8      33.8      33.8      33.9      33.9
@@ -203,7 +203,7 @@ public class CoreMeasures {
  *           g10        s1        k1      84.8      84.8      84.8      84.8      84.8      84.8      84.8      84.8      84.9      84.9
  *    ... 27 more rows
  *
- * Every record: totals by group, the axis as columns   (20 rows, 8 ms)
+ * Every record: totals by group, the axis as columns   (20 rows, 10 ms)
  *         group        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166612.0  166946.0  166946.0
  *            g1  166970.3  166970.3  166970.3  166970.3  166970.3  166970.3  166970.3  166970.3  165904.0  165904.0
@@ -213,7 +213,7 @@ public class CoreMeasures {
  *           g13  167338.9  167338.9  167338.9  167338.9  167338.9  167338.9  167338.9  167338.9  166272.8  166272.8
  *    ... 14 more rows
  *
- * The same data, turned round: the axis as rows, sub-groups as columns   (10 rows, 6 ms)
+ * The same data, turned round: the axis as rows, sub-groups as columns   (10 rows, 8 ms)
  *         point        s0        s1        s2        s3        s4
  *            1d  666093.0  666051.8  665872.7  665903.3  666144.9
  *            1w  666093.0  666051.8  665872.7  665903.3  666144.9
@@ -223,18 +223,18 @@ public class CoreMeasures {
  *            1y  666093.0  666051.8  665872.7  665903.3  666144.9
  *    ... 4 more rows
  *
- * One group only, by kind   (3 rows, 6 ms)
+ * One group only, by kind   (3 rows, 7 ms)
  *          kind        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            k0   55268.9   55268.9   55268.9   55268.9   55268.9   55268.9   55268.9   55268.9   55382.2   55382.2
  *            k1   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56870.0   56980.0   56980.0
  *            k2   54110.2   54110.2   54110.2   54110.2   54110.2   54110.2   54110.2   54110.2   54220.0   54220.0
  *
- * All three units, converted into one and added up   (20 rows, 8 ms)
+ * All three units, converted into one and added up   (20 rows, 9 ms)
  *         group        1d        1w        1m        3m        6m        1y        2y        5y       10y       30y
  *            g0  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  508423.8  509440.9  509440.9
  *            g1  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  509456.6  506408.6  506408.6
  *           g10  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  506290.6  507307.1  507307.1
- *           g11  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  508289.4  508289.5
+ *           g11  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  507273.1  508289.5  508289.5
  *           g12  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  508302.4  509318.7  509318.7
  *           g13  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  509298.6  506249.8  506249.8
  *    ... 14 more rows
@@ -251,9 +251,9 @@ public class CoreMeasures {
  *
  * Adding up different units without converting them:
  *    refused: This would add up values in different units, which is never right. Put 'unit' in rows(...) or columns(...), narrow to one with where("unit", ...), or convertTo(unit, rates).
- * Archived to Parquet in 290 ms, 5,857 KB - the values with their fields, and what the measure is
- * The same question asked of the file, without reading it back: 14 ms, 20 rows
- * Read back into an empty database: 2,000,000 values in 394 ms, 9,000 keys
+ * Archived to Parquet in 131 ms, 5,864 KB - the values with their fields, and what the measure is
+ * The same question asked of the file, without reading it back: 13 ms, 20 rows
+ * Read back into an empty database: 2,000,000 values in 93 ms, 9,000 keys
  *
  * The SQL behind the second one, to join your own tables to:
  *    WITH perKey AS (SELECT key_id,
@@ -272,7 +272,7 @@ public class CoreMeasures {
  *
  * The archive is one self-contained file: every row carries its key fields, and the measure's
  * definition travels in the file's metadata, which is why a database that has never heard of the
- * measure can read it back. That costs more than the earlier two-file export did - 5,857 KB against
- * 1,589, 290 ms against 33 - and buys files anything can read, where they lie, with nothing else in
+ * measure can read it back. That costs more than the earlier two-file export did - 5,864 KB against
+ * 1,589, 131 ms against 33 - and buys files anything can read, where they lie, with nothing else in
  * hand.
  */

@@ -252,7 +252,7 @@ public class LiveTablesTest {
                 fail("expected " + type.getSimpleName() + " to be refused");
             }
             catch (IllegalArgumentException expected) {
-                assertTrue(expected.getMessage(), expected.getMessage().contains("1.5.5"));
+                assertTrue(expected.getMessage(), expected.getMessage().contains("DuckDB 2.0"));
                 assertTrue(expected.getMessage(), expected.getMessage().contains("map it to String")
                         || expected.getMessage().contains("map it to String, or"));
             }

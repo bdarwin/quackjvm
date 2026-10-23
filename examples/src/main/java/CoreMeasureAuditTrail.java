@@ -158,7 +158,7 @@ public class CoreMeasureAuditTrail {
 }
 
 /*
- * What it printed, on this machine (10 cores, DuckDB 1.5.5):
+ * What it printed, on this machine (10 cores, DuckDB 2.0.0):
  *
  * Record 3, hour by hour - the state at each point
  * -----------------------------------------------

@@ -7,10 +7,12 @@
  * cursor, a REST endpoint paging through results, a message topic) streams through SQL without
  * being materialised first.
  *
- * It also shows where that stops being true, which matters as soon as each page costs a network
- * call: a bare LIMIT stops the fetching early, but a WHERE clause in front of the LIMIT does not -
- * every page is fetched even when the first one already holds every row the query returns. There is
- * no filter pushdown in the Java table-function builder, so the function never sees the WHERE.
+ * It also shows how far the early stop reaches, which matters as soon as each page costs a network
+ * call: a bare LIMIT stops the fetching early, and on DuckDB 2.0 so does a WHERE clause in front of
+ * the LIMIT - the scan stops once enough rows have passed the filter (on 1.5 it read every page).
+ * There is still no filter pushdown in the Java table-function builder, so the function never sees
+ * the WHERE: it fills the filtered column for every row it produces, and a filter that matches
+ * nothing still reads the whole feed.
  *
  * Also shows named parameters (page_size := 250) and projection pushdown: when a query only needs
  * some columns, DuckDB says which, and the function produces only those.
@@ -172,11 +174,15 @@ public class CoreTableFunctionStreaming {
             run(connection, "A bare LIMIT stops the fetching early",
                     "SELECT id FROM event_feed() LIMIT 5");
 
-            // Every one of the five rows below is in the first page. All 101 are fetched anyway:
-            // the filter sits between the LIMIT and the scan, and the scan runs to the end. When a
-            // page is a network call, filter inside the function (a parameter), not in WHERE.
-            run(connection, "But a WHERE in front of the LIMIT fetches everything",
+            // Every one of the five rows below is in the first page. DuckDB 1.5 fetched all 101
+            // pages anyway; 2.0 stops after 3, the same as the bare LIMIT. The filter still runs in
+            // DuckDB, not in the function, so a rare match still means many pages: when a page is a
+            // network call, filter inside the function (a parameter), not in WHERE.
+            run(connection, "A WHERE in front of the LIMIT stops early too, on DuckDB 2.0",
                     "SELECT id, level FROM event_feed() WHERE level = 'ERROR' LIMIT 5");
+
+            run(connection, "But a filter that matches nothing reads the whole feed",
+                    "SELECT id FROM event_feed() WHERE level = 'NONE' LIMIT 5");
 
             run(connection, "A named parameter: smaller pages, same answer",
                     "SELECT count(*) AS events FROM event_feed(page_size := 250)");
@@ -214,7 +220,7 @@ public class CoreTableFunctionStreaming {
 }
 
 /*
- * Output (Apple Silicon, JDK 25, duckdb_jdbc 1.5.5.1):
+ * Output (Apple Silicon, JDK 25, duckdb_jdbc 2.0.0.0):
  *
  * The whole feed, aggregated in SQL:
  *    source=api  events=25000  errors=1000  avg_ms=498.0
@@ -230,12 +236,15 @@ public class CoreTableFunctionStreaming {
  *    id=4
  *    -> 3 pages fetched, 2,048 fields written
  *
- * But a WHERE in front of the LIMIT fetches everything:
+ * A WHERE in front of the LIMIT stops early too, on DuckDB 2.0:
  *    id=0  level=ERROR
  *    id=50  level=ERROR
  *    id=100  level=ERROR
  *    id=150  level=ERROR
  *    id=200  level=ERROR
+ *    -> 3 pages fetched, 4,096 fields written
+ *
+ * But a filter that matches nothing reads the whole feed:
  *    -> 101 pages fetched, 200,000 fields written
  *
  * A named parameter: smaller pages, same answer:
