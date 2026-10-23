@@ -438,9 +438,18 @@ public class SparseTableTest {
             return null;
         });
         running.await();
+        // Optimize only once the writer is replacing, and keep optimizing until it has replaced
+        // something meanwhile: on DuckDB 2.0 five optimizes can finish before its first replace.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (replaced.get() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        long replacedBefore = replaced.get();
         int optimized = 0;
+        int attempts = 0;
         try {
-            for (int i = 0; i < 5; i++) {
+            for (; attempts < 5 || (replaced.get() - replacedBefore < 20 && System.nanoTime() < deadline);
+                    attempts++) {
                 try {
                     samples.optimize(connection);
                     optimized++;
@@ -459,9 +468,10 @@ public class SparseTableTest {
         }
 
         assertEquals("" + failures, 0, failures.size());
-        assertTrue("the writer should have replaced something during the optimizes", replaced.get() > 0);
+        assertTrue("the writer should have replaced something during the optimizes (optimized " + optimized
+                + " of " + attempts + ")", replaced.get() - replacedBefore > 0);
         if (optimizeMustSucceed) {
-            assertEquals(5, optimized);
+            assertEquals(attempts, optimized);
         }
         for (int record = 0; record < records; record++) {
             if (!Double.isNaN(expected[record])) {
