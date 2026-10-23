@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -88,7 +89,8 @@ public class GuardedQueryTest {
 
     @Test
     public void explainIsAllowedAndSaysWhatThePlanIs() {
-        GuardedResult result = guard.run("EXPLAIN SELECT count(*) FROM car");
+        // Filtered, so that no DuckDB can answer it from the table's metadata without aggregating.
+        GuardedResult result = guard.run("EXPLAIN SELECT sum(price) FROM car WHERE make = 'm1'");
 
         assertTrue(result.getRowCount() > 0);
         assertTrue(result.toText().toUpperCase().contains("AGGREGATE"));
@@ -442,5 +444,58 @@ public class GuardedQueryTest {
         // Guards against a test above leaving a file behind if it fails early.
         assertTrue(Files.list(Path.of(System.getProperty("java.io.tmpdir")))
                 .noneMatch(path -> path.getFileName().toString().equals("guard-test.csv")));
+    }
+
+    // ---------- a write inside a SELECT (DuckDB 2.0 serializes these as SELECTs) ----------
+
+    @Test
+    public void aWriteInsideAWithIsRefusedHoweverItIsDressed() {
+        for (String write : List.of(
+                "WITH x AS (DELETE FROM car RETURNING *) SELECT count(*) FROM x",
+                "WITH x AS (INSERT INTO car VALUES (1000, 'x', 1.0) RETURNING *) SELECT * FROM x",
+                "WITH x AS (UPDATE car SET price = -1 RETURNING *) SELECT count(*) FROM x",
+                "WITH a AS (SELECT 1), b AS (DELETE FROM car RETURNING *) SELECT * FROM a",
+                "SELECT (WITH x AS (DELETE FROM car RETURNING *) SELECT count(*) FROM x)")) {
+            rejects(write, "not a query");
+            rejects(write + ";", "not a query");
+            rejects(write + " ;\n", "not a query");
+            rejects("EXPLAIN ANALYZE " + write, "not a query");
+        }
+        assertEquals(100, Sql.queryLong(connection, "SELECT count(*) FROM car", List.of()));
+        assertEquals(0, Sql.queryLong(connection, "SELECT count(*) FROM car WHERE price < 0", List.of()));
+    }
+
+    @Test
+    public void aCopyInsideAWithWritesNoFile() throws Exception {
+        java.nio.file.Path file = java.nio.file.Files.createTempDirectory("guard").resolve("out.csv");
+        String copy = "WITH x AS (COPY (SELECT 42 AS v) TO '" + file + "') SELECT * FROM x";
+        rejects(copy + ";", "not a query");
+        rejects("EXPLAIN ANALYZE " + copy, "not a query");
+        assertFalse("the guard let a COPY write " + file, java.nio.file.Files.exists(file));
+    }
+
+    @Test
+    public void readsThatUseWithUnionAndRecursionAreStillAllowed() {
+        for (String read : List.of(
+                "WITH t AS (SELECT make FROM car) SELECT count(*) FROM t",
+                "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r",
+                "SELECT id FROM car UNION ALL SELECT id FROM car",
+                "SELECT * FROM car WHERE id IN (WITH t AS (SELECT 1 AS id) SELECT id FROM t)")) {
+            assertNull("should have been allowed: " + read, guard.whyRejected(read));
+        }
+    }
+
+    @Test
+    public void aTrailingSemicolonKeepsTheRowCap() {
+        GuardedQuery small = GuardedQuery.on(connection, QueryPolicy.readOnly().maxRows(10));
+        for (String query : List.of("SELECT * FROM car;", "SELECT * FROM car ;; ", "SELECT * FROM car;\n")) {
+            try {
+                small.run(query);
+                fail("the row cap did not stop " + query);
+            }
+            catch (ResultTruncated expected) {
+                assertEquals(10, expected.getLimit());
+            }
+        }
     }
 }

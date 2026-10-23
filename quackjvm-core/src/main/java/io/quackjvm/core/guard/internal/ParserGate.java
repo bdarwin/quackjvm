@@ -11,11 +11,18 @@ import java.sql.SQLException;
  * <h2>Why this and not something else</h2>
  *
  * <p>{@code json_serialize_sql(text)} parses the text and returns its syntax tree, or an error. It
- * serializes only queries, so everything that writes, attaches, loads, copies or configures comes
- * back as {@code "Only SELECT statements can be serialized to json!"} - including a CTE with an
- * INSERT inside it, which comes back as "A CTE needs a SELECT". The result also carries the
- * statements as an array, so more than one statement is a count, not a search for semicolons.
- * Quotes, dollar-quoting and comments are the parser's problem, not ours.</p>
+ * serializes only statements whose top level is a query, so everything that writes, attaches, loads,
+ * copies or configures at the top comes back as {@code "Only SELECT statements can be serialized to
+ * json!"}. The result also carries the statements as an array, so more than one statement is a
+ * count, not a search for semicolons. Quotes, dollar-quoting and comments are the parser's problem,
+ * not ours.</p>
+ *
+ * <p><b>A top-level SELECT is not enough.</b> DuckDB 2.0's parser serializes a SELECT whose WITH
+ * clause deletes, inserts, updates or copies to a file - {@code WITH x AS (DELETE FROM t RETURNING *)
+ * SELECT * FROM x} - as a SELECT, with a {@code DELETE_QUERY_NODE} inside it; 1.5 refused it with "A
+ * CTE needs a SELECT". Run at the top level, 2.0 executes the write. So every query node in the tree
+ * is checked against the kinds that only read, and anything else - including kinds a later DuckDB
+ * adds - is not a query.</p>
  *
  * <p>The obvious alternative - preparing the statement and looking at what comes back - is unsafe
  * with this driver, and that is not a theory: {@code prepareStatement("DROP TABLE u; SELECT 1")}
@@ -37,6 +44,10 @@ public final class ParserGate {
         }
     }
 
+    /** The query nodes a statement that only reads is made of. Everything else writes, or is unknown. */
+    static final java.util.List<String> READ_NODES =
+            java.util.List.of("SELECT_NODE", "SET_OPERATION_NODE", "RECURSIVE_CTE_NODE", "CTE_NODE");
+
     private ParserGate() {
     }
 
@@ -45,8 +56,12 @@ public final class ParserGate {
      * writes nothing.
      */
     public static Verdict inspect(Connection connection, String sql) {
+        // Every query node anywhere in the tree, by kind, joined into one string. No lambda: DuckDB 2.0
+        // refuses the arrow syntax 1.5 used, and the filtering is simpler in Java anyway.
         String probe = "SELECT (j->>'error')::BOOLEAN AS failed, j->>'error_message' AS message,"
-                + " coalesce(json_array_length(j->'statements'), 0) AS statements"
+                + " coalesce(json_array_length(j->'statements'), 0) AS statements,"
+                + " list_aggregate(regexp_extract_all(j::VARCHAR, '\"type\"\\s*:\\s*\"([A-Z_]+_NODE)\"', 1),"
+                + " 'string_agg', ',') AS nodes"
                 + " FROM (SELECT json_serialize_sql(" + literal(sql) + ") AS j)";
         try (PreparedStatement statement = connection.prepareStatement(probe);
              ResultSet rows = statement.executeQuery()) {
@@ -56,6 +71,16 @@ public final class ParserGate {
             boolean failed = rows.getBoolean(1);
             String message = rows.getString(2);
             int statements = rows.getInt(3);
+            String nodes = rows.getString(4);
+            if (!failed && nodes != null) {
+                for (String node : nodes.split(",")) {
+                    if (!node.isBlank() && !READ_NODES.contains(node.trim())) {
+                        String kind = node.trim().replace("_QUERY_NODE", "").replace("_NODE", "");
+                        return new Verdict(false, "it is a SELECT with a " + kind + " inside it - a WITH clause"
+                                + " or subquery that writes", statements);
+                    }
+                }
+            }
             return new Verdict(!failed, failed ? message : null, statements);
         }
         catch (SQLException e) {

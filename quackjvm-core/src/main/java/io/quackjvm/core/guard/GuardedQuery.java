@@ -152,6 +152,9 @@ public final class GuardedQuery {
         if (verdict.parsedAsQuery() && verdict.statements() != 1) {
             return "only one statement can be run at a time, and this is " + verdict.statements() + ".";
         }
+        if (verdict.error() != null && verdict.error().startsWith("it is a SELECT with a ")) {
+            return "this is not a query, so it will not be run: " + verdict.error() + ".";
+        }
         String keyword = SqlScanner.leadingKeyword(sql);
         String what = keyword.isEmpty() ? "this" : keyword;
         if (QueryPolicy.PIVOT.equals(keyword)) {
@@ -170,8 +173,11 @@ public final class GuardedQuery {
         String toRun = sql;
         boolean capped = false;
         if (!explaining) {
-            // One more row than allowed, so that "too many" can be told from "exactly the limit".
-            String wrapped = "SELECT * FROM (\n" + sql + "\n) AS " + WRAPPER + " LIMIT " + (maxRows + 1);
+            // One more row than allowed, so that "too many" can be told from "exactly the limit". A
+            // trailing semicolon would end the statement inside the bracket and break the wrapper,
+            // so it is taken off first; the statement is already known to be a single one.
+            String body = sql.replaceAll("[;\\s]+$", "");
+            String wrapped = "SELECT * FROM (\n" + body + "\n) AS " + WRAPPER + " LIMIT " + (maxRows + 1);
             // The wrapper is checked as a whole: a statement that would break out of it - by closing
             // the bracket and starting another statement - stops being a single query, and is caught
             // here rather than run.
