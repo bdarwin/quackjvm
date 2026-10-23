@@ -64,26 +64,52 @@ public final class QueryProfile {
         if (!(parsed instanceof Map<?, ?> root)) {
             return null;
         }
-        String queryName = String.valueOf(root.get("query_name"));
-        if (!sameStatement(queryName, expectedSql) || !(number(root, "latency") > 0)) {
+        // DuckDB 1.5 puts the totals at the top level and the operators under "children"; 2.0 groups
+        // them - "query", "system", and the operators under "operator", inside a RESULT_COLLECTOR.
+        boolean grouped = root.get("query") instanceof Map<?, ?>;
+        Map<?, ?> query = grouped ? (Map<?, ?>) root.get("query") : root;
+        Map<?, ?> system = grouped && root.get("system") instanceof Map<?, ?> s ? s : root;
+        String queryName = String.valueOf(query.get(grouped ? "sql" : "query_name"));
+        if (!sameStatement(queryName, expectedSql) || !(number(query, grouped ? "total_time" : "latency") > 0)) {
             return null;
         }
+        List<?> top = list(root.get(grouped ? "operator" : "children"));
+        // 2.0 wraps the plan in a RESULT_COLLECTOR, and a prepared statement's in an EXECUTE as well:
+        // neither does work of its own, so the operators start beneath them, as they do in 1.5.
+        while (top.size() == 1 && top.get(0) instanceof Map<?, ?> only
+                && ("RESULT_COLLECTOR".equals(only.get("type")) || "EXECUTE".equals(only.get("type")))) {
+            top = list(only.get("children"));
+        }
         List<Operator> operators = new ArrayList<>();
-        for (Object child : list(root.get("children"))) {
+        for (Object child : top) {
             collect(child, 0, operators);
         }
+        double rowsReturned = grouped ? rowsOut(top) : number(root, "rows_returned");
         // Not DuckDB's own "latency": with the profiler switched on for one statement at a time, it
         // measures from when the profiler was last switched rather than from when the statement
         // began - measured at 300 ms for a 2 ms statement sampled 300 ms after the previous one.
         // The time is the caller's own measurement of this execution.
         return new QueryProfile(shape, capturedAt,
                 wallMillis,
-                number(root, "cpu_time") * 1000,
-                number(root, "cumulative_rows_scanned"),
-                number(root, "rows_returned"),
-                number(root, "system_peak_buffer_memory"),
-                number(root, "system_peak_temp_dir_size"),
+                number(query, "cpu_time") * 1000,
+                number(query, grouped ? "total_rows_scanned" : "cumulative_rows_scanned"),
+                rowsReturned,
+                number(system, grouped ? "peak_buffer_memory" : "system_peak_buffer_memory"),
+                number(system, grouped ? "peak_temp_dir_size" : "system_peak_temp_dir_size"),
                 operators);
+    }
+
+    /**
+     * The rows the plan handed back, in 2.0, which has no total for it: what the top operator produced,
+     * where a CTE's top is its last child - the first ones only fill the CTE.
+     */
+    private static double rowsOut(List<?> top) {
+        Object node = top.isEmpty() ? null : top.get(0);
+        while (node instanceof Map<?, ?> operator && "CTE".equals(operator.get("type"))) {
+            List<?> children = list(operator.get("children"));
+            node = children.isEmpty() ? null : children.get(children.size() - 1);
+        }
+        return node instanceof Map<?, ?> operator ? number(operator, "intermediate_rows") : Double.NaN;
     }
 
     private static void collect(Object node, int depth, List<Operator> into) {
@@ -93,6 +119,9 @@ public final class QueryProfile {
         Object name = operator.get("operator_name");
         if (name == null) {
             name = operator.get("operator_type");
+        }
+        if (name == null) {
+            name = operator.get("type");
         }
         StringBuilder detail = new StringBuilder();
         double estimated = Double.NaN;
@@ -119,8 +148,13 @@ public final class QueryProfile {
                 }
             }
         }
-        into.add(new Operator(depth, String.valueOf(name).trim(), number(operator, "operator_timing") * 1000,
-                number(operator, "operator_cardinality"), estimated, number(operator, "operator_rows_scanned"),
+        double timing = operator.containsKey("operator_timing") ? number(operator, "operator_timing")
+                : number(operator, "timing");
+        double rows = operator.containsKey("operator_cardinality") ? number(operator, "operator_cardinality")
+                : number(operator, "intermediate_rows");
+        into.add(new Operator(depth, String.valueOf(name).trim(), timing * 1000,
+                rows, estimated, operator.containsKey("operator_rows_scanned")
+                        ? number(operator, "operator_rows_scanned") : number(operator, "rows_scanned"),
                 detail.length() > 400 ? detail.substring(0, 397) + "..." : detail.toString()));
         for (Object child : list(operator.get("children"))) {
             collect(child, depth + 1, into);
