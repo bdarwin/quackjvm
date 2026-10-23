@@ -9,7 +9,7 @@ list; **PLAUSIBLE** is from reading the code and has not been run.
 This list is for whoever picks the work up next. It is ordered by what would hurt most, not by
 module.
 
-**Status, 2026-10-05:** C2 and C7 are fixed. M4, N4 and N6 cannot happen through the new entry
+**Status, 2026-10-23:** C2, C7 and M5 are fixed. M4, N4 and N6 cannot happen through the new entry
 point, `io.quackjvm.core.Quack`, but remain at the lower level. Everything else is open. Tests: 451.
 
 ## How to work it
@@ -216,6 +216,8 @@ Fix: either stop closing the caller's connection (the surprising choice, and a b
 make every example and doc use `connection.duplicate()` and say why. Pick one and apply it everywhere.
 
 ### M5. A trailing `;` defeats the LIMIT wrapper, silently
+> **FIXED** in `b7034bf` (2026-10-23): a trailing semicolon is taken off before wrapping. Found again while checking DuckDB 2.0, where it was half of a way to make the guard write - see the CHANGELOG.
+
 `GuardedQuery.java:174-181`. **CONFIRMED.** `SELECT * FROM (\nSELECT ... ;\n) AS quackjvm_guarded
 LIMIT n` does not parse, `capped` stays false, and the statement runs unwrapped with the cap applied
 as rows arrive - the "rows are built anyway" case the docs say is avoided; with an `ORDER BY`, DuckDB

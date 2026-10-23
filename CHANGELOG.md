@@ -194,6 +194,16 @@
   locks, `serializeWrites`, and the shared-`QueryOptions` guard.
 
 ### Fixed
+- **The guard let a write through on DuckDB 2.0.** 2.0's parser serializes a SELECT whose WITH clause
+  deletes, inserts, updates or copies to a file as a SELECT, where 1.5 refused it. On 2.0 a read-only
+  guard deleted every row of a table when such a statement ended in a semicolon or was run through
+  `EXPLAIN ANALYZE`, and wrote a file through `COPY TO`. Every query node in the parsed statement is
+  now checked against the kinds that only read, so a write - or a kind a later DuckDB adds - is
+  refused wherever it sits. No released version is affected: the guard is not in 1.0.0.
+- **A trailing semicolon no longer defeats the guard's row cap** (review M5); it is taken off before
+  the statement is wrapped.
+- **Query profiles were never captured on DuckDB 2.0**, whose profiler output is grouped differently.
+  Both 1.5's and 2.0's shapes are read now.
 - **Live tables could be read from another database (review C2).** What a live table reads was keyed by
   its function's name across the whole JVM, so a sandbox could read the application's table by passing
   its name, and registering a name in one database replaced what another's read. Each registration is
