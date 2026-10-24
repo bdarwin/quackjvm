@@ -176,10 +176,22 @@ public class JoinBenchmark {
         }
     }
 
+    /**
+     * Times one run, and when that is quick, takes the best of three more: a single cold run
+     * mostly measures class loading and Arrow's start-up, not the join. A run of five seconds or
+     * more is reported as it is.
+     */
     private static void report(String label, Supplier<Integer> workload) {
         long start = System.nanoTime();
         int matched = workload.get();
         double seconds = (System.nanoTime() - start) / 1_000_000_000.0;
+        if (seconds < 5) {
+            for (int i = 0; i < 3; i++) {
+                long again = System.nanoTime();
+                workload.get();
+                seconds = Math.min(seconds, (System.nanoTime() - again) / 1_000_000_000.0);
+            }
+        }
         System.out.printf("  %-36s %9.3f s   (%,d vehicles matched)%n", label, seconds, matched);
     }
 }
