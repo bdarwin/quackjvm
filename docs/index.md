@@ -10,17 +10,17 @@ hide:
 <p class="tagline" markdown>
 Your Java objects become typed columns in <a href="https://duckdb.org/">DuckDB</a>. You ask
 questions of them in SQL — aggregates, groupings, pivots, window functions, joins — and get answers
-back as Java values, without rebuilding a single object. A million objects cost three megabytes of
+back as Java values, without rebuilding a single object. A million objects cost four megabytes of
 heap instead of eight hundred.
 </p>
 
 </div>
 
 <div class="stats" markdown>
-<div class="stat"><span class="n">62×</span><span class="l">faster grouping than an on-heap collection</span></div>
-<div class="stat"><span class="n">861&nbsp;MB&nbsp;→&nbsp;3&nbsp;MB</span><span class="l">Java heap, 1M objects</span></div>
-<div class="stat"><span class="n">10×</span><span class="l">faster aggregates than the heap</span></div>
-<div class="stat"><span class="n">129&nbsp;s&nbsp;→&nbsp;0.27&nbsp;s</span><span class="l">join across collections</span></div>
+<div class="stat"><span class="n">19×</span><span class="l">faster grouping than an on-heap collection</span></div>
+<div class="stat"><span class="n">862&nbsp;MB&nbsp;→&nbsp;4&nbsp;MB</span><span class="l">Java heap, 1M objects</span></div>
+<div class="stat"><span class="n">3×</span><span class="l">faster aggregates than the heap</span></div>
+<div class="stat"><span class="n">33&nbsp;s&nbsp;→&nbsp;6&nbsp;ms</span><span class="l">join across collections</span></div>
 </div>
 
 DuckDB is an analytical engine, and the JVM has never really had one. Its JDBC driver makes you
@@ -201,31 +201,32 @@ There are two halves to this and most comparisons only show one.
 
 !!! warning "Point queries are a memory trade, not a speed one"
 
-    On-heap CQEngine wins every small single-collection query, and it is not close — between 80×
-    and 250×. No amount of tuning changes that, and the reason is structural: **DuckDB sequentially
+    On-heap CQEngine wins every small single-collection query, and it is not close — between 50×
+    and 360×. No amount of tuning changes that, and the reason is structural: **DuckDB sequentially
     scans a table even for an equality on its primary key.** It does not use the index. A one-row
-    lookup on a million rows costs 224 µs with a primary key, 233 µs with no key, and 254 µs with
+    lookup on a million rows costs 205 µs with a primary key, 235 µs with no key, and 203 µs with
     an explicit ART index. It is an analytical engine, and a pointer dereference beats it every
     time.
 
-1,000,000 objects, three indexed attributes, JDK 25 / Apple Silicon, `memory_limit=256MB`. Memory
-is process RSS, because DuckDB and SQLite both keep their data in native memory that
-`Runtime.totalMemory()` cannot see.
+1,000,000 objects, three indexed attributes, JDK 25 / Apple Silicon, DuckDB 2.0, `memory_limit=256MB`.
+Memory is process RSS, because DuckDB and SQLite both keep their data in native memory that
+`Runtime.totalMemory()` cannot see. Most of DuckDB's is allocator retention rather than data: DuckDB
+itself accounts for about 45 MB of it (see [Migrating](migrating.md#reproducing-these-numbers)).
 
 | | CQEngine on-heap | CQEngine SQLite | quackjvm (columnar) |
 |---|---|---|---|
-| process memory | 1,387 MB | **88 MB** | 145 MB |
-| Java heap | 862 MB | **3 MB** | **3 MB** |
-| on disk | – | 225 MB | **36 MB** |
-| loading 1M objects | **2.7 s** | 11.6 s | 4.1 s |
-| point lookup by key | **7.2 µs** | 546 µs | **556 µs** |
-| narrow range | **39 µs** | **1.4 ms** | 3.2 ms |
-| count matches | **3.6 µs** | 7.1 ms | 906 µs |
-| query returning 2% | **1.1 ms** | 98.6 ms | 13.2 ms |
-| iterate everything | **210 ms** | 751 ms | 339 ms |
-| single `add()` | **4.6 µs** | 1.1 ms | **937 µs** |
-| bulk write per object | 3.1 µs | – | **2.3 µs** |
-| join 200k to 50k | 0.373 s | – | **0.270 s** |
+| process memory | 1,303 MB | **97 MB** | 401 MB |
+| Java heap | 862 MB | **3 MB** | 4 MB |
+| on disk | – | 225 MB | **49 MB** |
+| loading 1M objects | **2.5 s** | 11.7 s | 3.4 s |
+| point lookup by key | **7.3 µs** | 552 µs | 379 µs |
+| narrow range | **37 µs** | 1.2 ms | 3.0 ms |
+| count matches | **2.4 µs** | 7.0 ms | 869 µs |
+| query returning 2% | **1.2 ms** | 96.1 ms | 16.4 ms |
+| iterate everything | **212 ms** | 750 ms | 332 ms |
+| single `add()` | **4.7 µs** | 980 µs | 1.1 ms |
+| bulk write per object | 2.5 µs | – | **2.4 µs** |
+| join 200k to 50k | 0.229 s | – | **0.015 s** |
 
 ### What it buys
 
@@ -234,12 +235,12 @@ expensive part of an object store is rebuilding objects, and none of these need 
 
 | 1M cars, 200k matching | on-heap | quackjvm | |
 |---|---|---|---|
-| sum a column over 200k matches | 10.5 ms | **1.0 ms** | **10× faster** |
-| group by make: count and average price | 117.5 ms | **1.9 ms** | **62× faster** |
-| pivot: makes across years | *not possible* | 0.6 ms | – |
-| median price | *not possible\** | 14.6 ms | – |
-| approximate distinct models | *not possible* | 0.6 ms | – |
-| join across two collections | 0.373 s | **0.270 s** | 1.4× faster |
+| sum a column over 200k matches | 6.8 ms | **2.2 ms** | **3× faster** |
+| group by make: count and average price | 67.5 ms | **3.6 ms** | **19× faster** |
+| pivot: makes across years | *not possible* | 9.7 ms | – |
+| median price | *not possible\** | 16.4 ms | – |
+| approximate distinct models | *not possible* | 2.0 ms | – |
+| join across two collections | 0.229 s | **0.015 s** | 15× faster |
 
 <small>\* possible, but only by materialising all 1,000,000 objects and sorting them in Java.</small>
 
@@ -247,13 +248,13 @@ And the whole of SQL comes with it: window functions, `QUALIFY`, CTEs, `UNION`, 
 or CSV file and joining it against your collection without an import step.
 
 The clearest case is a **dashboard**: several people looking at the same group-bys and pivots. Four
-panels over 2,000,000 rows, on-heap against quackjvm — **11 panels/s becomes 804, and 124 ms
-becomes 1.3 ms**. See [Many people, the same panels](aggregates.md#many-people-the-same-panels).
+panels over 2,000,000 rows, on-heap against quackjvm — **12 panels/s becomes 611, and 123 ms
+becomes 1.4 ms**. See [Many people, the same panels](aggregates.md#many-people-the-same-panels).
 
 The rule underneath both tables: **rebuilding objects is what costs.** Materialising those same
-200,000 cars and summing them in Java takes quackjvm 58 ms; asking DuckDB for the sum takes 1.0 ms.
+200,000 cars and summing them in Java takes quackjvm 85 ms; asking DuckDB for the sum takes 2.2 ms.
 If your workload fetches objects one at a time, stay on the heap. If it asks questions *about* many
-objects, this is 10–60× faster and can express things the heap cannot.
+objects, this is 3–20× faster and can express things the heap cannot.
 
 [Read the full comparison :octicons-arrow-right-24:](migrating.md#what-you-are-actually-trading){ .md-button }
 [See it on GitHub :octicons-mark-github-16:](https://github.com/bdarwin/quackjvm){ .md-button }

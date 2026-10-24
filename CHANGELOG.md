@@ -218,7 +218,28 @@
   - a call into Java on one thread: 16 ns a row against 6 - though on ten threads the primitive forms
     now scale, which they did not on 1.5.
 
-  The README's CQEngine benchmark tables were measured on 1.5.5 and have not been re-run.
+- **Every benchmark table re-run on 2.0**, and two of the README's headline figures corrected:
+  - **Process memory was overstated in DuckDB's favour since 1.1.0.** The tables still showed 145 MB
+    for a million objects in a columnar file, measured on DuckDB 1.4.1. Since the move to 1.5 the same
+    code holds 470-550 MB on 1.5.5 and 401 MB on 2.0. It is not data - DuckDB accounts for about 45 MB and
+    the live heap is 4 MB - but memory the native allocator freed and kept after the appender load
+    (on macOS a malloc zone 70% fragmentation; on Linux 1.4.1 kept as much too). The comparison with
+    on-heap CQEngine is now 1,303 MB against 401 MB, 3x rather than 9x; the heap is still 862 MB
+    against 4 MB.
+  - **The aggregate gains are smaller:** a sum over 200,000 matches is 3x faster than the heap
+    (6.8 ms against 2.2 ms) rather than 10x, a group-by 19x (67.5 ms against 3.6 ms) rather than 62x.
+    The heap side got faster, not DuckDB slower. These now come from a new harness,
+    `AnalyticsBenchmark`, as do the point-lookup costs, which had no harness before.
+  - **The join gains are larger:** `JoinBenchmark` timed each step once, cold, so the DuckDB rows
+    were mostly Arrow's start-up. It now reports the best of three warm runs: 0.229 s on the heap
+    against 0.015 s pushed into SQL at 200,000 x 50,000, and 32.6 s against 6 ms for the object-by-
+    object form at 80,000 x 20,000 (was 129 s against 0.27 s).
+  - `memory_limit` no longer changes resident memory for the benchmark (371 MB at the default, 401 MB
+    at 256 MB); on 1.4 it was 939 MB against 222 MB. `docs/tuning.md` now calls it a ceiling for large
+    queries rather than the most effective setting.
+  - The dashboard and concurrency guidance was re-measured: `threads=2`, not 4, is now the best
+    all-round setting for many concurrent users, and capping concurrent queries costs some
+    throughput (41.2 to 34.9 panels/s) while still cutting p99 by a third.
 
 ### Fixed
 - **The guard let a write through on DuckDB 2.0.** 2.0's parser serializes a SELECT whose WITH clause

@@ -61,12 +61,13 @@ vehicles.retrieve(not(existsIn(people, Vehicle.OWNER_ID, Person.PERSON_ID,
 Note that a vehicle whose `ownerId` matches nobody at all is included, as SQL's `NOT EXISTS` would
 include it. CQEngine has no `notExistsIn` factory; `not(existsIn(...))` is the spelling.
 
-Why this matters, measured on 80,000 vehicles against 20,000 people:
+Why this matters, measured on 80,000 vehicles against 20,000 people (DuckDB 2.0; the semi-join is
+the best of three runs after a first, so it does not include start-up):
 
 | | time |
 |---|---|
-| CQEngine evaluating `existsIn` object by object | **129 s** |
-| translated to one SQL semi-join | **0.27 s** |
+| CQEngine evaluating `existsIn` object by object | **32.6 s** |
+| translated to one SQL semi-join | **6 ms** |
 
 That is not a tuning difference. The nested-loop form is O(left x right) and degrades as either
 side grows; the semi-join is one hash join over two columns.

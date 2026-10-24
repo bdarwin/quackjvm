@@ -9,26 +9,27 @@ than for the *rows* skips that step entirely.
 
 ```java
 // 200,000 matching cars, summed.
-// 99.8 ms if you materialise them. 2.3 ms if you do not.
+// 85 ms if you materialise them. 2.2 ms if you do not.
 double total = database.query("SELECT sum(price) FROM car WHERE make = ?", "Ford")
                        .scalar(Double.class);
 ```
 
-Measured on 1,000,000 cars, 200,000 matching — and compared against an **on-heap** CQEngine
+Measured on 1,000,000 cars, 200,000 matching, DuckDB 2.0 (median of three runs of
+`AnalyticsBenchmark`) — and compared against an **on-heap** CQEngine
 collection holding the same objects, not just against quackjvm doing it the slow way:
 
 | | on-heap | quackjvm | |
 |---|---|---|---|
-| sum a column over 200k matches | 10.5 ms | **1.0 ms** | **10x faster** |
-| group by make: count and average price | 117.5 ms | **1.9 ms** | **62x faster** |
-| pivot: makes across years | *not possible* | 0.6 ms | – |
-| median price | *not possible*\* | 14.6 ms | – |
-| approximate distinct models | *not possible* | 0.6 ms | – |
+| sum a column over 200k matches | 6.8 ms | **2.2 ms** | **3x faster** |
+| group by make: count and average price | 67.5 ms | **3.6 ms** | **19x faster** |
+| pivot: makes across years | *not possible* | 9.7 ms | – |
+| median price | *not possible*\* | 16.4 ms | – |
+| approximate distinct models | *not possible* | 2.0 ms | – |
 
 <sub>\* possible, but only by materialising all 1,000,000 objects and sorting them in Java.</sub>
 
 Note what the first row says: this is not merely faster than quackjvm materialising the objects
-(58 ms), it is **ten times faster than the heap**, which has the objects in hand already. Rebuilding
+(85 ms), it is **three times faster than the heap**, which has the objects in hand already. Rebuilding
 objects is what costs, and an aggregate rebuilds none.
 
 ## The `Rows` API
@@ -143,19 +144,20 @@ query — it is **many large queries at once**, which pull DuckDB's tuning in op
 
 Measured on 2,000,000 sales, four panels — a group-by, a pivot, a filtered revenue-by-year, and a
 headline scalar aggregate — with each "user" looping over them. Against an on-heap CQEngine
-collection doing the same four in Java:
+collection doing the same four in Java (DuckDB 2.0, `DashboardBenchmark`, the mean of two runs):
 
 | users | on-heap panels/s | quackjvm panels/s | on-heap p50 | quackjvm p50 |
 |---|---|---|---|---|
-| 1 | 11.2 | **804** | 124 ms | **1.3 ms** |
-| 2 | 24.7 | **1,087** | 122 ms | **1.8 ms** |
-| 4 | 49.2 | **1,216** | 124 ms | **3.0 ms** |
-| 8 | 96.2 | **1,116** | 120 ms | **4.8 ms** |
-| 16 | 95.6 | 1,070 | 196 ms | 8.1 ms |
+| 1 | 11.8 | **611** | 123 ms | **1.4 ms** |
+| 2 | 25.6 | **905** | 120 ms | **2.0 ms** |
+| 4 | 49.2 | **1,077** | 123 ms | **3.4 ms** |
+| 8 | 98.9 | **1,074** | 121 ms | **6.4 ms** |
+| 16 | 103.6 | **1,033** | 163 ms | **13.2 ms** |
 
-**Roughly 70–100x the throughput, and a hundredth of the latency.** A panel that takes the heap
-120 ms takes DuckDB 1.3 ms, because a group-by over two million rows is a columnar scan rather than
-two million virtual calls.
+**50x the throughput for one user, 10x at sixteen, and p50 latency 12–90x lower.** A panel that
+takes the heap 123 ms takes DuckDB 1.4 ms, because a group-by over two million rows is a columnar
+scan rather than two million virtual calls. The heap's throughput grows with users until the cores
+run out; DuckDB's is near its ceiling by four.
 
 ### Tuning it: `threads` is the dial
 
@@ -164,27 +166,31 @@ panels fight over the same cores. The default is one thread per core; on a 10-co
 
 | users | default | `threads=1` | `threads=2` | `threads=4` |
 |---|---|---|---|---|
-| 1 | **804** | 191 | 293 | 589 |
-| 4 | 1,216 | 742 | 794 | 1,207 |
-| 8 | 1,116 | 1,379 | 1,225 | **1,408** |
-| 16 | 1,070 | **1,470** | 1,285 | 1,329 |
-| p99 at 16 users | 77.6 ms | **39.0 ms** | 43.5 ms | 48.5 ms |
+| 1 | **611** | 175 | 298 | 492 |
+| 4 | **1,077** | 662 | 785 | 1,014 |
+| 8 | 1,074 | **1,296** | 1,277 | 1,223 |
+| 16 | 1,033 | **1,384** | 1,302 | 1,135 |
+| p99 at 16 users | 48.5 ms | **32.4 ms** | 34.7 ms | 42.7 ms |
+
+The `threads=4` column at eight and sixteen users moved by up to 20% between the two runs; the
+others by under 5%.
 
 Three things to take from it:
 
-- **Total throughput saturates around 1,200–1,470 panels/s whatever you do.** That is the machine,
+- **Total throughput saturates around 1,000–1,400 panels/s whatever you do.** That is the machine,
   not the setting. What the setting changes is how the work is shared out.
 - **The default is best at low concurrency and worst at high.** It wins outright at one user
-  (804 against 191) and loses at sixteen, where its p99 is twice the alternatives'.
-- **`threads = cores / 2` is the best all-rounder.** At `threads=4` on ten cores you keep most of
-  the single-user latency (1.9 ms against 1.3) and get the best throughput at eight users.
+  (611 against 175) and loses at sixteen, where its p99 is half as long again as `threads=1`'s.
+- **`threads=2` is the best all-rounder.** At eight and sixteen users it is within 6% of
+  `threads=1`, the fastest there, and at one user it does 298 panels/s (3.4 ms) against
+  `threads=1`'s 175 (5.8 ms).
 
 ```java
-DuckDBDatabase.builder().property("threads", "4").build();
+DuckDBDatabase.builder().property("threads", "2").build();
 ```
 
 If a handful of people share a dashboard, leave the default. If you are serving many concurrent
-sessions and care about the tail, halve it. See [Tuning](tuning.md#threads-is-the-only-one-that-matters-under-concurrency).
+sessions and care about the tail, set it to 2. See [Tuning](tuning.md#threads-is-the-only-one-that-matters-under-concurrency).
 
 ### At multi-million scale, pre-aggregation is the only lever that matters
 
@@ -195,19 +201,19 @@ top models within each region, a three-dimensional roll-up with a `HAVING`, a tw
 
 | | panels/s | p50 | p99 |
 |---|---|---|---|
-| base table, all 16 at once | 42.5 | 296 ms | 898 ms |
-| base table, at most 2 running | 41.4 | 384 ms | **443 ms** |
-| **pre-aggregate, all 16 at once** | **2,285** | **5.3 ms** | 25 ms |
-| pre-aggregate, at most 4 running | 1,330 | 11.8 ms | **18 ms** |
+| base table, all 16 at once | 41.2 | 334 ms | 825 ms |
+| base table, at most 2 running | 34.9 | 458 ms | **535 ms** |
+| **pre-aggregate, all 16 at once** | **3,655** | **3.2 ms** | 17.6 ms |
+| pre-aggregate, at most 4 running | 2,020 | 7.9 ms | **9.8 ms** |
 
-**54x the throughput and a 36x smaller tail.** The pre-aggregate is 18,000 rows — 0.18% of the base
-table — and takes 62 ms to build.
+**89x the throughput and a 47x smaller tail** (DuckDB 2.0, `AdmissionBenchmark`, one run). The
+pre-aggregate is 18,000 rows — 0.18% of the base table — and takes 75 ms to build.
 
 Two things follow, and they are the whole of the guidance for this shape of workload:
 
-**Limiting concurrency fixes the tail but never the throughput.** Look at the first two rows:
-allowing only two queries to run at a time leaves throughput unchanged (42.5 → 41.4) and halves p99
-(898 ms → 443 ms). That is because the machine is already saturated — DuckDB parallelises *within*
+**Limiting concurrency shortens the tail and never adds throughput.** Look at the first two rows:
+allowing only two queries to run at a time costs some throughput (41.2 → 34.9 panels/s) and cuts p99
+by a third (825 ms → 535 ms). That is because the machine is already saturated — DuckDB parallelises *within*
 a query and expects to own the machine while it runs one, so sixteen at once is sixteen queries
 fighting for the same cores. Making them queue does not create capacity, it just stops them
 trampling each other. **You cannot tune your way to more throughput here.**
@@ -215,7 +221,7 @@ trampling each other. **You cannot tune your way to more throughput here.**
 **Reducing the work is what creates capacity.** That is the third row, and it is not a tuning
 change at all — it is asking a smaller question.
 
-**And the two interact.** With the pre-aggregate, limiting concurrency *hurts* (2,285 → 1,330),
+**And the two interact.** With the pre-aggregate, limiting concurrency *hurts* throughput (3,655 → 2,020),
 because the queries are now short enough that queueing is pure overhead. So: limit concurrency when
 queries are slow, do not when they are fast. Fix the queries first and the question goes away.
 
@@ -250,11 +256,11 @@ FROM sale GROUP BY 1,2,3,4;
 ```
 
 On 2,000,000 sales that is **3,000 rows — 0.2% of the base table — built in 17 ms**, and panels run
-against it 4–5x faster. Keep the measures **additive** (counts and sums, never averages) and derive
+against it 4–8x faster. Keep the measures **additive** (counts and sums, never averages) and derive
 the rest at query time as `sum(total)/sum(n)`; you cannot average an average.
 
 Two things make this better than caching the answers. It **serves slices you never anticipated** —
-a region × year breakdown nobody precomputed is still 5x faster against the pre-aggregate, where a
+a region × year breakdown nobody precomputed is still 4x faster against the pre-aggregate, where a
 cache would simply miss. And it can be **kept in step incrementally**: for append-only data, fold in
 the new rows rather than rebuilding.
 
@@ -264,7 +270,7 @@ SELECT region, make, colour, year, count(*), sum(price)
 FROM sale WHERE saleId >= :watermark GROUP BY 1,2,3,4;
 ```
 
-3.5 ms against 13.8 ms for a full rebuild, and the result is identical.
+3.7 ms against 14.7 ms for a full rebuild, and the result is identical.
 
 Note that **DuckDB has no materialised views** — `CREATE MATERIALIZED VIEW` is a parser error and a
 plain `CREATE VIEW` is live, re-scanning the base table every time. A pre-aggregate is a real table

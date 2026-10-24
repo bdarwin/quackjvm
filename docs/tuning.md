@@ -36,19 +36,19 @@ IndexedCollection<Car> cars = database.collection(Car.CAR_ID)
 
 ## Set a memory limit
 
-This is the single most effective setting, and the one most likely to surprise you.
-
-DuckDB's default `memory_limit` is **80% of system RAM**, and it will use a large share of that for
-its buffer pool regardless of how small your data is. In the benchmark, the same million objects
-sat at **939 MB** resident with the default limit and **222 MB** with `memoryLimit("256MB")` — same
-data, same queries, same file.
+DuckDB's default `memory_limit` is **80% of system RAM**. That is a ceiling, not a target: on
+DuckDB 2.0 the benchmark's million objects sit at about the same resident memory whatever the limit:
+371 MB with the default, 378 MB at 512 MB, 387-401 MB at 256 MB. (On DuckDB 1.4 the default let
+the buffer pool grow to 939 MB, against 222 MB at 256 MB; 2.0 no longer does that for this
+workload.) What the limit still decides is how far one large query can grow - a big sort, join or
+aggregate - before DuckDB spills to disk instead.
 
 ```java
 DuckDBPersistence.builder(Car.CAR_ID).memoryLimit("512MB").build();
 ```
 
-If you took this library on to reduce memory and did not set this, you have not yet measured what
-it can do.
+Set one so a single heavy query cannot take most of the machine, and size it from your largest
+queries, not from your data.
 
 A file-backed database honours the limit by evicting pages it can re-read from disk. An in-memory
 one spills to temporary files when it has to, so a low limit costs latency rather than correctness.
@@ -114,8 +114,8 @@ a million-row index over 50,000 distinct values, fetching the ~20 matching objec
 scan and 0.87 ms with an ART index. Worth it for a hot lookup path; not worth it by default.
 
 Where they do **not** help at all is the object table itself. DuckDB sequentially scans it for an
-equality on the primary key regardless: a one-row lookup on a million rows costs 224 µs with a
-primary key, 233 µs with none, and 254 µs with an ART index — adding one made it slower. There is
+equality on the primary key regardless: a one-row lookup on a million rows costs 205 µs with a
+primary key, 235 µs with none, and 203 µs with an ART index — adding one changes nothing. There is
 no index you can add to make a point lookup fast; see
 [Querying](querying.md#why-a-point-lookup-costs-what-it-does).
 
@@ -160,7 +160,7 @@ costs more than reading a single row, and using Arrow there made them measurably
 
 - **Reads** never block and never lock: DuckDB's MVCC gives each request a consistent snapshot.
   Verified rather than asserted: with four readers and the write load going from 0 to 8 concurrent
-  writers, reader throughput moves 9 708 → 8 459 ops/s and reader p99 612 → 808 µs. That is CPU
+  writers, reader throughput moves 9 589 → 8 485 ops/s and reader p99 552 → 686 µs (DuckDB 2.0). That is CPU
   sharing, not blocking — if it were contention the cost would grow with writer count, and it does
   not.
 - **Do not use an `IndexedCollection` as a map key.** It is a `Set`, so its `equals` and `hashCode`
@@ -172,25 +172,25 @@ costs more than reading a single row, and using Arrow there made them measurably
   JDBC driver. quackjvm detects this and throws rather than hanging, but the fix is to build a
   fresh `QueryOptions` each time — the flags on it are cheap to set again.
 - **Writes** are serialised against each other by default, because two DuckDB transactions writing
-  the same table at once cause one to fail with a conflict error. That costs **3.8x of write
-  throughput** at 16 threads (1 328 ops/s serialised against 5 055 not), and nothing at all when
-  only one thread writes (1 305 against 1 357).
+  the same table at once cause one to fail with a conflict error. That costs **3.6x of write
+  throughput** at 16 threads (1 250 ops/s serialised against 4 508 not), and almost nothing when
+  only one thread writes (1 261 against 1 317).
 
     Turn it off with `.serializeWrites(false)` **if writes from different threads never touch the
-    same primary key**. That condition is exact: with 50 shared keys and 8 threads, 11–25% of writes
-    abort with `TransactionContext Error: Conflict on tuple deletion!`. The failure is always a
+    same primary key**. That condition is exact: with 50 shared keys, 9% of writes abort at 2 threads,
+    37% at 4 and 22% at 8, with `TransactionContext Error: Conflict on tuple deletion!`. The failure is always a
     clean exception with the whole write rolled back — the collection is never left inconsistent —
     but a quarter of your writes disappearing is not a trade most applications want.
 
     **The lock is per collection**, so two collections sharing a `DuckDBDatabase` do not serialise
     against each other — they write different tables, and two different tables cannot conflict in
-    DuckDB. Sharing a database for joins therefore costs nothing in write throughput: 2 969 ops/s
-    shared against 3 232 with a database each, where a single database-wide lock gave 1 700.
+    DuckDB. Sharing a database for joins therefore costs little in write throughput: 2 761 ops/s
+    shared against 2 925 with a database each (on DuckDB 1.4 a single database-wide lock gave 1 700).
 - **One JVM process, one database file.** DuckDB does not support several processes writing the
   same file. All connections are duplicated from a single open database.
 - `maxPooledConnections` sets how many connections are kept open for reuse between requests.
-  **Pooling is worth 2.1x and the size is worth nothing past 4** — measured with 16 concurrent
-  readers: 7 930 ops/s unpooled, 15 676 at a pool of 1, 16 741 at 4, and flat from there to 64.
+  **Pooling is worth 1.8x and the size is worth nothing past 1** — measured with 16 concurrent
+  readers: 10 146 ops/s unpooled, 17 995 at a pool of 1, 18 079 at 4, and flat from there to 64.
   The reason is in DuckDB's driver: `duplicate()` takes the root connection's lock, so every
   unpooled borrow serialises against every other. Do not tune this dial; the default of 32 is fine.
   Pooled connections also
@@ -230,18 +230,18 @@ doing point lookups on a 10-core machine:
 
 | `threads` | throughput | p99 |
 |---|---|---|
-| default (10) | 14 961 ops/s | 1 115 µs |
-| **2** | 20 093 ops/s | 805 µs |
-| **1** | **24 803 ops/s** | **687 µs** |
+| default (10) | 16 056 ops/s | 932 µs |
+| **2** | 20 088 ops/s | 634 µs |
+| **1** | **22 588 ops/s** | **573 µs** |
 
 **But the same setting is what makes analytical queries fast**, and there it goes the other way —
 one application thread running a `GROUP BY` over 4,000,000 rows:
 
 | `threads` | `avg(price)` | `GROUP BY manufacturer` |
 |---|---|---|
-| default | **857 µs** | **9.7 ms** |
-| 2 | 2.4 ms | 32.5 ms |
-| 1 | 4.6 ms | **61.8 ms — 6.4x slower** |
+| default | **1.3 ms** | **4.8 ms** |
+| 2 | 3.6 ms | 10.5 ms |
+| 1 | 6.9 ms | **19.4 ms — 4.0x slower** |
 
 So there is no right default, only a right answer for your workload. **`threads=2` is the good
 compromise** for a request-serving application: it keeps most of the concurrent throughput and most

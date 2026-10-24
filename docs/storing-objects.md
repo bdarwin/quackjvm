@@ -40,13 +40,13 @@ DuckDB file.
 
 ## Which to choose
 
-Measured on a million objects of eight fields:
+Measured on a million objects of eight fields, DuckDB 2.0:
 
 | | BLOB | columnar |
 |---|---|---|
-| on disk | 51 MB | **36 MB** |
-| iterate everything | 648 ms | **339 ms** |
-| query returning 2% of the collection | 20.9 ms | **13.2 ms** |
+| on disk | 73 MB | **49 MB** |
+| iterate everything | 675 ms | **332 ms** |
+| query returning 2% of the collection | 51.0 ms | **16.4 ms** |
 | works with any field type | **yes** | scalar fields only |
 | queryable as SQL | no | **yes** |
 

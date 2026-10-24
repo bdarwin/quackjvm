@@ -45,8 +45,8 @@ point, `io.quackjvm.core.Quack`, but remain at the lower level. Everything else 
 ### D1. At `memory_limit` 256 MB and 10 threads, 2.0 spills set operations: 12x slower
 `UNION`/`INTERSECT`/`EXCEPT` - what an `or`/`not` CQEngine query becomes - took 112 ms on 100,000
 rows against 9.5 ms on 1.5 at the same limit, and 8.3 ms on 2.0 at 512 MB or with 4 threads. 256 MB
-is the limit the docs, the getting-started page and most examples use; the README's benchmark
-tables were measured with it on 1.5 and have not been re-run. Decide: raise the documented default
+is the limit the docs, the getting-started page and most examples use. The README's tables, re-run on
+2.0 at 256 MB, are unaffected because none of their queries combine conditions. Decide: raise the documented default
 to 512 MB, cap `threads` alongside a small limit, or report it upstream with the standalone
 reproduction (`.claude/review-probes/duckdb2/SetOps3.java`, run with the jar on the classpath and `256MB` as its argument). Documented in `docs/tuning.md` meanwhile.
 
@@ -62,6 +62,27 @@ parser, not the node check added for 2.0. Still well under a millisecond.
 ### D4. `docs/index.md` carries an old copy of the README's driver table
 It still says nested types have "no write path at all" and UDFs are "not wrapped yet", both since
 done, and its numbers are 1.5's. Replace it with the README's table, or link to it.
+
+### D5. Process memory after a load is mostly allocator retention
+A million objects in a columnar file: 401 MB resident on 2.0 (550 MB on 1.5.5, 134-149 MB on 1.4.1
+on macOS). DuckDB accounts for about 45 MB, the live heap 4 MB. On macOS, `vmmap` shows the malloc
+zone 70% fragmentation (189 MB free but kept). It comes from the appender path: loading the same
+rows with `INSERT ... SELECT` grows the process by 20-40 MB on every version, the appender by 87 MB
+on 1.4, 244 MB on 1.5, 207 MB on 2.0. Not helped by `allocator_flush_threshold`,
+`allocator_background_threads`, fewer threads or periodic appender flushes. On Linux (Docker,
+arm64) 1.4.1 retained about 400 MB as well and 2.0 about 180 MB. Possible lever: a load path that
+appends into a staging table with fewer, larger chunks - unmeasured. Probes in the session scratchpad,
+not kept.
+
+### D6. Claims in the docs with no harness behind them
+Found while re-running the benchmarks; each needs a runnable source or removing:
+- `docs/writing.md`: `DuckDBBulkWriter` loading a million objects in 2.3 s against 4.1 s, and a
+  30 MB file against 36 MB (both "against" figures are the old Comparison numbers, now 3.4 s, 49 MB).
+- `docs/querying.md`: the `and` of two and three attributes, 48.7/90.6 ms against 15.0/17.2 ms.
+- README: Arrow reads of 1M rows x 4 columns quoted as 602 ms to 60 ms in one place and to 36 ms in
+  another.
+- `docs/tuning.md`: Arrow making point lookups worse, 682 to 941 µs; preparing a statement costing
+  about 200 µs and the statement cache taking an `add` from 1.25 to 0.92 ms.
 
 ## 1. Critical
 

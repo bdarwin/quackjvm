@@ -197,8 +197,8 @@ collector never walks it.
 In rough order of how often it is the answer:
 
 1. **The attribute is not indexed**, so every query scans. `cars.addIndex(DuckDBIndex.onAttribute(...))`.
-2. **You are materialising objects you do not need.** A `sum` over 200,000 objects is 99.8 ms if you
-   rebuild them and 2.3 ms if you ask DuckDB — see [Aggregates](aggregates.md).
+2. **You are materialising objects you do not need.** A `sum` over 200,000 objects is 85 ms if you
+   rebuild them and 2.2 ms if you ask DuckDB — see [Aggregates](aggregates.md).
 3. **You have not called `optimize()`** after a bulk load. Counting stops growing with collection
    size once you do.
 4. **The collection was not built through `DuckDBDatabase`**, so compound `and`/`or` queries are
