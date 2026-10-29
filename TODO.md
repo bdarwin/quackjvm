@@ -19,8 +19,8 @@ point, `io.quackjvm.core.Quack`, but remain at the lower level. Everything else 
 - Every fix lands with a test that fails before it. The "missing tests" section says which.
 - Repository conventions, which are not optional: every number in a doc or a javadoc is measured, and
   the measurement is in a runnable example under `examples/` with its real output at the bottom;
-  anything that has to be learned lives in `docs/` and in `mkdocs.yml`'s nav; tests are JUnit 4 under
-  `quackjvm-cqengine/src/test` (core has no test tree of its own); public API small, implementation
+  anything that has to be learned lives in `docs/` and in `mkdocs.yml`'s nav; tests are JUnit 4, in the
+  module they test (`quackjvm-core/src/test`, `quackjvm-cqengine/src/test`); public API small, implementation
   detail in `internal` packages; Java 17 (`maven.compiler.release`), no new dependencies, Arrow stays
   optional; update `CHANGELOG.md` under "Unreleased".
 - Commits are authored by Darwin Baisa only. **No** `Co-Authored-By`, `Claude-Session` or

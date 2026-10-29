@@ -462,7 +462,8 @@ mvn compile
 
 ```
 mvn test                        # 455 tests, across the modules
-mvn -pl quackjvm-cqengine test  # just the CQEngine plugin
+mvn -pl quackjvm-core test      # just core
+mvn -pl quackjvm-cqengine -am test  # the CQEngine plugin, and the core it builds on
 ```
 
 Requires Java 17+. The benchmark harnesses are all under `io.quackjvm.cqengine.bench`. Pass the
