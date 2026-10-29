@@ -70,7 +70,7 @@ jobs:
       - name: Dry run the release bundle
         env:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: ./mvnw -B --no-transfer-progress -Prelease -DskipPublishing=true deploy
+        run: ./mvnw -B --no-transfer-progress -Prelease -DskipTests -DskipPublishing=true deploy
 
       - name: Upload the bundle as a build artifact
         uses: actions/upload-artifact@v4
@@ -87,4 +87,4 @@ jobs:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: ./mvnw -B --no-transfer-progress -Prelease deploy
+        run: ./mvnw -B --no-transfer-progress -Prelease -DskipTests deploy

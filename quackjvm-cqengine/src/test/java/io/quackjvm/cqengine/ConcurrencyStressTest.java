@@ -153,11 +153,17 @@ public class ConcurrencyStressTest {
                 while (!stop.get()) {
                     try {
                         // Everything the object table holds must also be in the index, and vice
-                        // versa: a torn write would show up as these disagreeing.
+                        // versa: a torn write would show up as these disagreeing. The two counts
+                        // are two statements, so a write committing between them is not a tear;
+                        // writes only add, so an unchanged count afterwards means none did.
                         long all = cars.size();
                         long byIndex;
                         try (ResultSet<Car> results = cars.retrieve(greaterThan(Car.PRICE, -1.0))) {
                             byIndex = results.size();
+                        }
+                        long after = cars.size();
+                        if (after != all) {
+                            continue;
                         }
                         if (all != byIndex) {
                             throw new AssertionError("object table has " + all
@@ -174,6 +180,8 @@ public class ConcurrencyStressTest {
         }
         for (int i = 0; i < 300; i++) {
             cars.add(withId(Cars.generate(1, i).get(0), 800_000 + i));
+            // Gaps between writes, so that checks with no write in the middle happen at all.
+            Thread.sleep(5);
         }
         stop.set(true);
         readers.shutdown();
