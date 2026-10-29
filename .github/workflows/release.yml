@@ -46,7 +46,7 @@ jobs:
       - name: Verify the tag matches the project version
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          POM=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
+          POM=$(./mvnw -q -DforceStdout help:evaluate -Dexpression=project.version)
           echo "tag=$TAG pom=$POM"
           if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$TAG" != "$POM" ]; then
             echo "Tag $GITHUB_REF_NAME does not match project version $POM" >&2
@@ -56,15 +56,21 @@ jobs:
             *-SNAPSHOT) echo "Refusing to publish a SNAPSHOT version" >&2; exit 1 ;;
           esac
 
+      # Maven 3.10 leaves resolver metadata in the bundle that central-publishing 0.11.0 does
+      # not remove, and Central refuses it ("content that does NOT have a .pom file"). The
+      # wrapper pins the Maven the bundle is known to come out right with.
+      - name: Maven version
+        run: ./mvnw -v
+
       - name: Build and test
-        run: mvn -B --no-transfer-progress clean verify
+        run: ./mvnw -B --no-transfer-progress clean verify
 
       # Builds the signed bundle without contacting the Portal. Catches missing signatures,
       # javadoc failures and metadata problems before anything leaves the runner.
       - name: Dry run the release bundle
         env:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: mvn -B --no-transfer-progress -Prelease -DskipPublishing=true deploy
+        run: ./mvnw -B --no-transfer-progress -Prelease -DskipPublishing=true deploy
 
       - name: Upload the bundle as a build artifact
         uses: actions/upload-artifact@v4
@@ -73,16 +79,12 @@ jobs:
           path: target/central-publishing/central-bundle.zip
           if-no-files-found: warn
 
-      # The overrides force automatic publishing, because there is nobody to press the Publish
-      # button in CI. If they do not take effect, set <autoPublish>true</autoPublish> and
-      # <waitUntil>published</waitUntil> in the pom instead and remove the two -D flags.
+      # Uploads and waits for Central to validate the bundle, then stops: the deployment waits
+      # for a Publish click in the Portal (autoPublish false in the pom), since a published
+      # version can never be changed.
       - name: Publish to Maven Central
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: >
-          mvn -B --no-transfer-progress -Prelease
-          -Dcentral.autoPublish=true
-          -Dcentral.waitUntil=published
-          deploy
+        run: ./mvnw -B --no-transfer-progress -Prelease deploy
