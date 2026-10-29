@@ -10,16 +10,15 @@ implementation detail and may change.
 A DuckDB database and everything quackjvm does with it, behind one object that owns the
 connections, so the code using it never holds one. Thread-safe. Each call borrows a pooled
 connection and gives it back, on failure as well as success. Helpers that keep a connection for
-life (catalog, guard, vector search) get one that borrows per statement: a DuckDB connection runs
+life (the catalog, the guard, vector search) get `sharedConnection()`, which borrows per statement: a DuckDB connection runs
 one query at a time, and a quick query behind a slow one on a shared connection waited 1,136 ms,
 against 0 ms on its own ([`CoreConnectionFacts`](https://github.com/bdarwin/quackjvm/blob/main/examples/src/main/java/CoreConnectionFacts.java)).
 
 | method | notes |
 |---|---|
 | `static Quack open(path)`, `inMemory()` | A file, created if absent; or memory only. |
-| `static Builder builder(path)` | `.hardening(Hardening.DATABASE)`, `.history(location)`, `.metrics(quackMetrics)`, `.connections(idle)`, then `.open()`. History is attached once and hardening applied once, at open. A null path is in memory. |
+| `static Builder builder(path)` | `.settings(properties)`, `.history(location)`, `.metrics(quackMetrics)`, `.connections(idle)`, then `.open()`. DuckDB settings are applied and the history attached once, at open. A null path is in memory. |
 | `static Quack on(DuckDBConnection)` | A database the program already has open. Works on connections duplicated from the one given, and never uses or closes that one. |
-| `static Quack sandbox()` | A separate in-memory database hardened as `Hardening.sandbox()` hardens one: no files, no network, no reconfiguring. |
 | `Rows query(sql, params...)`, `Rows query(MeasureQuery)` | Run at the terminal method; each borrows a connection for that. |
 | `int execute(sql, params...)` | A statement that changes something; rows changed. |
 | `createTable(name, layout)`, `long write(name, layout, objects)` | A table with a column per field, keyed on the first; objects written in one transaction, replacing any under the same key. |
@@ -27,10 +26,9 @@ against 0 ms on its own ([`CoreConnectionFacts`](https://github.com/bdarwin/quac
 | `boolean commit(MeasureRefresh)` | In a transaction of its own; false if the id was committed before. |
 | `MeasureHistory history()`, `MeasureQuery asOf(measure, at)` | The history given at open (refuses if none); a measure query as of a point, to pass to `query`. |
 | `Shipped ship(measures...)`, `Exported export(measure, location)` | Run their own transactions against the live database and the history. |
-| `GuardedQuery guarded(QueryPolicy)`, `Catalog catalog()`, `VectorSearch vectors(table, column)` | As below, on this database. |
-| `LiveTable live(name, rows, layout)`, `snapshot(...)` | Registered once, seen on every connection, closed with the database. |
-| `Udf function(name, returns, argTypes..., method)` | One, two or three arguments; a null argument is a null result. Other forms through `connection()` and `Udfs`. |
+| `T register(root -> ...)` | Something registered on the database itself, such as a function or a table function, seen on every connection. One at a time; an `AutoCloseable` result is closed with the database. |
 | `void inTransaction(Tx.Work)`, `T fromTransaction(Tx.Result<T>)` | One connection; committed when the work returns, rolled back when it throws. Not retried on a conflict. |
+| `Connection sharedConnection()` | Borrows a pooled connection for each statement and gives it back: for a helper that keeps a connection for life. Safe across threads; holds no transaction; closing it does nothing. |
 | `Connection connection()` | The way down: a pooled connection of the caller's own until closed; closing gives it back with anything uncommitted rolled back. |
 
 ### `io.quackjvm.core.Tx`
@@ -151,23 +149,6 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
-### `io.quackjvm.core.vector.VectorSearch`
-
-The rows whose vector is nearest a given one.
-
-```java
-VectorSearch search = VectorSearch.on(connection, "note", "embedding").identifiedBy("id");
-List<VectorSearch.Match> nearest = search.topK(query, 10, "topic = ?", "weather");
-String sql = search.sql(query, 10, null);
-String whyNoIndex = search.createIndex();     // null when an HNSW index was created
-```
-
-- `Metric.COSINE` (default), `EUCLIDEAN` or `INNER_PRODUCT`, all built in - no extension, no network.
-- The column must be a fixed-size array; a `FLOAT[]` is refused, pointing at `vectorColumn`.
-- Exact top-10: 19.0 ms over 10,000 x 768, 101.8 ms over 100,000 x 768, 35.3 ms over 1,000,000 x 128.
-
-See [Vector similarity](vectors.md).
-
 ### `io.quackjvm.core.duckdb.NestedType`
 
 Columns that hold more than one value. Usually you never name this: a record's own types are enough.
@@ -186,90 +167,6 @@ ColumnarLayout.builder(Doc.class)
 - `FLOAT[768]` at 20,000 rows a second, 59 MB/s (DuckDB 2.0; 85 MB/s on 1.5).
 
 See [Nested types](nested-types.md).
-
-### `io.quackjvm.core.udf.Udfs`
-
-A Java method called from SQL.
-
-```java
-Udfs.register(connection, "region_of", String.class, String.class, Countries::regionOf);
-Udfs.register(connection, "with_tax", Double.class, Double.class, Double.class, (p, r) -> p * (1 + r));
-Udfs.registerNullable(connection, "or_unknown", String.class, String.class, t -> t == null ? "?" : t);
-Udfs.registerDouble(connection, "vat", (double price) -> price * 1.2);   // no boxing
-```
-
-- One, two or three arguments. `register` answers a null argument with a null result without calling the
-  method; `registerNullable` passes nulls through.
-- `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java vectors cannot carry them
-  in 1.5.5 or 2.0.
-- 2,000,000 rows of `price * 1.2`: 0.7 ns a row in SQL, 8.8 ns unboxed, 8.4 ns boxed (DuckDB 2.0).
-
-See [Java functions in SQL](udfs.md).
-
-### `io.quackjvm.core.live.LiveTables` / `LiveTable`
-
-Java objects queried as a table, with no load step.
-
-```java
-LiveTable table = LiveTables.register(connection, "car", cars, ColumnarLayout.ofRecord(Car.class));
-LiveTables.snapshot(connection, "car", cars, layout);          // a copy, for one consistent state
-LiveTables.register(connection, "car", () -> cache.rows(), layout);   // whatever is current
-table.unregister();
-```
-
-- A DuckDB table function plus a view, so SQL says `car`. Projection pushdown is on; the scan is
-  single-threaded.
-- `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java chunk writer cannot
-  write them in 1.5.5 or 2.0.
-- 1,000,000 objects: join to 200,000 stored rows in 44.6 ms, against 784 ms to load them first.
-
-See [Live tables](live-tables.md).
-
-### `io.quackjvm.core.catalog.Catalog`
-
-What is in the database, and what it means.
-
-```java
-Catalog catalog = Catalog.of(connection);
-
-List<TableInfo> tables = catalog.tables();
-TableInfo car = catalog.describe("car", layout);   // layout optional: fills in Java types
-Profile profile = catalog.profile("car", 5);       // SUMMARIZE + row count + 5 rows
-
-catalog.describeColumn("car", "price", "what it sold for", "USD");
-catalog.apply("car", layout);                      // writes everything the layout says
-```
-
-- `TableInfo` / `ColumnInfo` / `Profile` / `ColumnProfile` are records, each with `toText()`.
-- Descriptions and units are stored as DuckDB comments - `COMMENT ON` - not in a registry of ours.
-- `describe` reads metadata only: 2 ms whatever the table holds. `profile` is a full scan: 279 ms at
-  ten million rows.
-
-See [Catalog](catalog.md).
-
-### `io.quackjvm.core.guard.GuardedQuery` / `QueryPolicy` / `Hardening`
-
-Runs SQL that came from somewhere you do not control.
-
-```java
-GuardedQuery guard = GuardedQuery.on(connection, QueryPolicy.readOnly()
-        .timeout(Duration.ofSeconds(2))
-        .maxRows(50));
-
-GuardedResult result = guard.run(sql);   // QueryRejected / QueryTimedOut / ResultTruncated
-String why = guard.whyRejected(sql);     // null when it would be allowed
-```
-
-- `QueryPolicy.readOnly()` - five seconds, ten thousand rows, eight megabytes, EXPLAIN allowed;
-  `timeout`, `maxRows`, `maxBytes`, `allowExplain`, `allowUnverified(PIVOT)`, `hardening` return copies.
-- The statement is checked by DuckDB's parser (`json_serialize_sql`), never by preparing it - with this
-  driver, preparing a multi-statement string executes all but the last.
-- `Hardening.DATABASE` takes file, extension and network access away from **the whole database**,
-  irreversibly; `Hardening.sandbox()` opens a separate database that starts that way.
-- `GuardedResult` carries columns, SQL types, rows, elapsed time, an estimated byte count, and
-  `toText()` for something that reads text.
-
-See [Guarding queries](guarding-queries.md).
 
 ### `io.quackjvm.core.arrow.ArrowSupport`
 
@@ -292,6 +189,116 @@ points, for reading batches or rebuilding objects from them directly.
 connection: `borrow()`, `release(Connection)`, `close()`. `Connections.duckDB(Connection)` unwraps
 a `DuckDBConnection` from a pooled or proxied connection; `Connections.managed(...)` wraps one so
 that `close()` returns it to a pool.
+
+## quackjvm-agent
+
+For SQL and data the application does not write itself - an AI agent, a user, another service.
+Depends only on quackjvm-core. Each helper takes a `Quack` as well as a connection: the guard, the
+catalog and vector search borrow a connection per query through `quack.sharedConnection()`, and
+what is registered on the database - a live table, a Java function - goes through
+`quack.register(root -> ...)`, which closes it with the database.
+
+### `io.quackjvm.agent.guard.GuardedQuery` / `QueryPolicy` / `Hardening`
+
+Runs SQL that came from somewhere you do not control.
+
+```java
+GuardedQuery guard = GuardedQuery.on(quack, QueryPolicy.readOnly()      // or on(connection, ...)
+        .timeout(Duration.ofSeconds(2))
+        .maxRows(50));
+
+GuardedResult result = guard.run(sql);   // QueryRejected / QueryTimedOut / ResultTruncated
+String why = guard.whyRejected(sql);     // null when it would be allowed
+```
+
+- `QueryPolicy.readOnly()` - five seconds, ten thousand rows, eight megabytes, EXPLAIN allowed;
+  `timeout`, `maxRows`, `maxBytes`, `allowExplain`, `allowUnverified(PIVOT)`, `hardening` return copies.
+- The statement is checked by DuckDB's parser (`json_serialize_sql`), never by preparing it - with this
+  driver, preparing a multi-statement string executes all but the last.
+- `Hardening.DATABASE` takes file, extension and network access away from **the whole database**,
+  irreversibly; `Hardening.apply(quack)` does it to a `Quack`'s. `Hardening.openSandbox()` opens a
+  separate `Quack` that starts that way, and `Hardening.sandbox()` a bare connection to one.
+- `GuardedResult` carries columns, SQL types, rows, elapsed time, an estimated byte count, and
+  `toText()` for something that reads text.
+
+See [Guarding queries](guarding-queries.md).
+
+### `io.quackjvm.agent.catalog.Catalog`
+
+What is in the database, and what it means.
+
+```java
+Catalog catalog = Catalog.of(connection);
+
+List<TableInfo> tables = catalog.tables();
+TableInfo car = catalog.describe("car", layout);   // layout optional: fills in Java types
+Profile profile = catalog.profile("car", 5);       // SUMMARIZE + row count + 5 rows
+
+catalog.describeColumn("car", "price", "what it sold for", "USD");
+catalog.apply("car", layout);                      // writes everything the layout says
+```
+
+- `TableInfo` / `ColumnInfo` / `Profile` / `ColumnProfile` are records, each with `toText()`.
+- Descriptions and units are stored as DuckDB comments - `COMMENT ON` - not in a registry of ours.
+- `describe` reads metadata only: 2 ms whatever the table holds. `profile` is a full scan: 279 ms at
+  ten million rows.
+
+See [Catalog](catalog.md).
+
+### `io.quackjvm.agent.live.LiveTables` / `LiveTable`
+
+Java objects queried as a table, with no load step.
+
+```java
+LiveTable table = LiveTables.register(connection, "car", cars, ColumnarLayout.ofRecord(Car.class));
+LiveTables.snapshot(connection, "car", cars, layout);          // a copy, for one consistent state
+LiveTables.register(connection, "car", () -> cache.rows(), layout);   // whatever is current
+table.unregister();
+```
+
+- A DuckDB table function plus a view, so SQL says `car`. Projection pushdown is on; the scan is
+  single-threaded.
+- `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java chunk writer cannot
+  write them in 1.5.5 or 2.0.
+- 1,000,000 objects: join to 200,000 stored rows in 44.6 ms, against 784 ms to load them first.
+
+See [Live tables](live-tables.md).
+
+### `io.quackjvm.agent.udf.Udfs`
+
+A Java method called from SQL.
+
+```java
+Udfs.register(connection, "region_of", String.class, String.class, Countries::regionOf);
+Udfs.register(connection, "with_tax", Double.class, Double.class, Double.class, (p, r) -> p * (1 + r));
+Udfs.registerNullable(connection, "or_unknown", String.class, String.class, t -> t == null ? "?" : t);
+Udfs.registerDouble(connection, "vat", (double price) -> price * 1.2);   // no boxing
+```
+
+- One, two or three arguments. `register` answers a null argument with a null result without calling the
+  method; `registerNullable` passes nulls through.
+- `UUID`, `byte[]` and `LocalTime` are refused at registration - DuckDB's Java vectors cannot carry them
+  in 1.5.5 or 2.0.
+- 2,000,000 rows of `price * 1.2`: 0.7 ns a row in SQL, 8.8 ns unboxed, 8.4 ns boxed (DuckDB 2.0).
+
+See [Java functions in SQL](udfs.md).
+
+### `io.quackjvm.agent.vector.VectorSearch`
+
+The rows whose vector is nearest a given one.
+
+```java
+VectorSearch search = VectorSearch.on(connection, "note", "embedding").identifiedBy("id");
+List<VectorSearch.Match> nearest = search.topK(query, 10, "topic = ?", "weather");
+String sql = search.sql(query, 10, null);
+String whyNoIndex = search.createIndex();     // null when an HNSW index was created
+```
+
+- `Metric.COSINE` (default), `EUCLIDEAN` or `INNER_PRODUCT`, all built in - no extension, no network.
+- The column must be a fixed-size array; a `FLOAT[]` is refused, pointing at `vectorColumn`.
+- Exact top-10: 19.0 ms over 10,000 x 768, 101.8 ms over 100,000 x 768, 35.3 ms over 1,000,000 x 128.
+
+See [Vector similarity](vectors.md).
 
 ## quackjvm-cqengine
 

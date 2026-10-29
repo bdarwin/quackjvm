@@ -52,11 +52,11 @@ reproduction (`.claude/review-probes/duckdb2/SetOps3.java`, run with the jar on 
 
 ### D2. 2.0's appender is 40-60% slower
 Measured three times each: 1,000,000 objects loaded in 772-784 ms against 479 ms on 1.5
-(`CoreLiveTables`); `FLOAT[768]` at 59-63 MB/s against 85 (`CoreNestedTypes`); vector rows 56-60
-us against 40 (`CoreVectorSearch`). Not investigated beyond that.
+(`AgentLiveTables`); `FLOAT[768]` at 59-63 MB/s against 85 (`CoreNestedTypes`); vector rows 56-60
+us against 40 (`AgentVectorSearch`). Not investigated beyond that.
 
 ### D3. The guard's check is 0.6 ms on 2.0, 0.23 ms on 1.5
-Same code on both drivers (`CoreGuardedQueries`, three runs on 2.0, two on 1.5), so it is 2.0's
+Same code on both drivers (`AgentGuardedQueries`, three runs on 2.0, two on 1.5), so it is 2.0's
 parser, not the node check added for 2.0. Still well under a millisecond.
 
 ### D4. `docs/index.md` carries an old copy of the README's driver table
@@ -637,7 +637,7 @@ Each of these is fixed by the code change named, or by changing the sentence - n
 ### H1. Nothing compiles the examples
 `examples/` is a standalone pom against the installed jars, not a reactor module. Two
 README-advertised examples were broken for days without anyone noticing - `CoreMeasures` called an
-API renamed on 26 September, and `CoreGuardedQueries` had a `*/` inside its recorded output. Both
+API renamed on 26 September, and `AgentGuardedQueries` had a `*/` inside its recorded output. Both
 fixed in `13959db`. Add a compile-only step to the build (a `verify`-phase `exec` of `javac` over
 `examples/src/main/java`, or make `examples` a module with tests skipped), so the next rename fails
 the build instead of the reader.

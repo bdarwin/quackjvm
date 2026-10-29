@@ -157,7 +157,7 @@ public final class TableWriter {
         ddl.append(')');
         Sql.execute(connection, ddl.toString());
         // What the columns mean goes into the database with them, as comments, so that anything
-        // reading the schema finds it - see io.quackjvm.core.catalog.Catalog.
+        // reading the schema finds it - see the catalog in quackjvm-agent.
         for (ColumnDef column : columns) {
             String comment = Comments.columnStatement(tableName, column);
             if (comment != null) {

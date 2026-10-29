@@ -6,7 +6,7 @@ package io.quackjvm.core.duckdb;
  * <p>A column may also carry what it means and what it is measured in. Those are written into the
  * database as comments when the table is created, so that anything reading the schema - a person, a
  * query, or something that has to decide what to ask - finds them there rather than in code. See
- * {@link io.quackjvm.core.catalog.Catalog}.</p>
+ * the catalog in quackjvm-agent.</p>
  */
 public final class ColumnDef {
 

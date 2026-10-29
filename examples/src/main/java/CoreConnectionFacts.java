@@ -15,7 +15,6 @@
  *        src/main/java/CoreConnectionFacts.java
  */
 
-import io.quackjvm.core.udf.Udfs;
 import org.duckdb.DuckDBConnection;
 
 import java.nio.file.Files;
@@ -60,10 +59,10 @@ public class CoreConnectionFacts {
                         .equals("1"));
             }
             try (Connection registering = root.duplicate()) {
-                Udfs.registerInt(registering, "plus_one", x -> x + 1);
+                execute(registering, "CREATE MACRO plus_one(x) AS x + 1");
             }
             try (Connection other = root.duplicate()) {
-                System.out.println("   a Java function registered on a connection since closed: plus_one(41) = "
+                System.out.println("   a macro created on a connection since closed:            plus_one(41) = "
                         + one(other, "SELECT plus_one(41)"));
             }
             try (Connection setting = root.duplicate()) {
@@ -203,7 +202,7 @@ public class CoreConnectionFacts {
  * Shared by the whole database
  * ----------------------------
  *    a database attached on one connection, seen on another:  true
- *    a Java function registered on a connection since closed: plus_one(41) = 42
+ *    a macro created on a connection since closed:            plus_one(41) = 42
  *    SET threads = 3 on one connection, read on another:      threads = 3
  *
  * Kept by each connection

@@ -263,7 +263,7 @@ public final class ColumnarLayout<O> {
 
         /**
          * What the column just added means. Written into the database as a comment on that column, so
-         * that whatever reads the schema finds it - see {@link io.quackjvm.core.catalog.Catalog}.
+         * that whatever reads the schema finds it - see the catalog in quackjvm-agent.
          */
         public Builder<O> describing(String description) {
             lastColumn("describing").description = description;

@@ -7,6 +7,7 @@ for people already using CQEngine, and nothing in the engine depends on it.
 |---|---|---|
 | `io.github.bdarwin:quackjvm-core` | **The engine.** Java objects as typed DuckDB columns, typed SQL results, Arrow columnar reads, bulk loading, a connection pool. No query framework, no opinions. | DuckDB's JDBC driver |
 | `io.github.bdarwin:quackjvm-cqengine` | *Optional.* A DuckDB-backed `Persistence` for CQEngine, plus indexes, joins and a bulk writer. | the engine, and CQEngine |
+| `io.github.bdarwin:quackjvm-agent` | *Optional.* For SQL and data the application does not write itself - an AI agent, a user, another service: guarded queries, the catalog, live tables, Java functions, vector search. | the engine |
 
 ## Requirements
 

@@ -3,6 +3,10 @@
 Running SQL that came from somewhere you do not control - a language model, a user, another service -
 against a database that has real data in it.
 
+!!! note "In quackjvm-agent"
+    This page is part of the `quackjvm-agent` module, not core: add `io.github.bdarwin:quackjvm-agent`
+    beside `quackjvm-core`. `GuardedQuery.on(quack, policy)` borrows a connection per query, and `Hardening.openSandbox()` opens a hardened `Quack`.
+
 ```java
 GuardedQuery guard = GuardedQuery.on(connection, QueryPolicy.readOnly());
 GuardedResult result = guard.run(whateverTheAgentWrote);
@@ -37,7 +41,7 @@ connection.prepareStatement("DROP TABLE secrets; SELECT 1");   // never executed
 // secrets is gone
 ```
 
-That is measured, in `CoreGuardedQueries`, and it is why a guard that validates by preparing has
+That is measured, in `AgentGuardedQueries`, and it is why a guard that validates by preparing has
 already lost. Nothing here prepares a statement until the parser has said it is a single query.
 
 ### PIVOT, which cannot be checked
@@ -128,4 +132,4 @@ Every refusal is an exception whose message is written to be read by whoever sen
 `guard.whyRejected(sql)` gives the same message without running anything, for a tool that wants to
 tell an agent why before it tries.
 
-See `examples/src/main/java/CoreGuardedQueries.java` for all of it, with its real output.
+See `examples/src/main/java/AgentGuardedQueries.java` for all of it, with its real output.

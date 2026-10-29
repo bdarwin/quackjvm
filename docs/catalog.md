@@ -3,6 +3,10 @@
 What is in the database, and what it means - for anything that has to decide what to query before it
 can query it.
 
+!!! note "In quackjvm-agent"
+    This page is part of the `quackjvm-agent` module, not core: add `io.github.bdarwin:quackjvm-agent`
+    beside `quackjvm-core`. `Catalog.of(quack)` borrows a connection per call.
+
 ```java
 Catalog catalog = Catalog.of(connection);
 
@@ -97,4 +101,4 @@ ten million rows there is nothing here worth caching: **a cached variant tied to
 considered and left out**, because the honest advice is cheaper than a cache - describe whenever you
 like, profile when something actually has to decide.
 
-See `examples/src/main/java/CoreCatalog.java` for all of it, with its real output.
+See `examples/src/main/java/AgentCatalog.java` for all of it, with its real output.

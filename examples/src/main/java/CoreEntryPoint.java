@@ -1,13 +1,12 @@
 /*
  * The whole of quackjvm through one object, with no connection in sight: records written and asked
  * questions of, a table and a measure written together in one transaction, a failed transaction
- * that leaves nothing behind, a measure read as of a point from its history, a Java list queried as
- * a table, a Java method called from SQL, many threads at once, and a query nobody vetted, run in a
- * sandbox.
+ * that leaves nothing behind, a measure read as of a point from its history, and many threads at
+ * once. AgentEntryPoint does the same for live tables, Java functions, the catalog and a sandbox.
  *
  * Quack owns the connections. Every call borrows one and gives it back; a transaction holds one
- * from start to end; what the database shares - its history, its functions, its live tables - is
- * set up once. db.connection() is the way down to DuckDB itself, for anything not wrapped.
+ * from start to end; what the database shares - its history, its settings - is set up once.
+ * db.connection() is the way down to DuckDB itself, for anything not wrapped.
  *
  * Run it with:
  *
@@ -19,7 +18,6 @@
  */
 
 import io.quackjvm.core.Quack;
-import io.quackjvm.core.guard.QueryPolicy;
 import io.quackjvm.core.layout.ColumnarLayout;
 import io.quackjvm.core.measure.MeasureRefresh;
 import io.quackjvm.core.measure.MeasureTable;
@@ -45,9 +43,6 @@ public class CoreEntryPoint {
     static final Instant TEN = NINE.plusSeconds(3600);
     static final String SLOW = "SELECT count(*) FROM range(15000) a, range(15000) b"
             + " WHERE (a.range * 7 + b.range) % 1000003 = 1";
-
-    public record Car(int carId, String make, double price) {
-    }
 
     public record Reading(int readingId, String site, double celsius) {
     }
@@ -141,18 +136,6 @@ public class CoreEntryPoint {
                 System.out.println("   as of " + at + ": " + String.join(", ", cells));
             }
 
-            System.out.println("\nA Java list as a table, and a Java method in SQL");
-            System.out.println("------------------------------------------------");
-            List<Car> cars = List.of(new Car(1, "a", 1000), new Car(2, "b", 2500), new Car(3, "a", 1800));
-            db.live("car", cars, ColumnarLayout.ofRecord(Car.class));
-            db.function("with_tax", Double.class, Double.class, price -> price * 1.2);
-            db.query("SELECT make, count(*) AS cars, round(sum(with_tax(price)), 2) AS taxed FROM car"
-                    + " GROUP BY make ORDER BY make").forEachRow((SqlRow row) ->
-                    System.out.println("   " + row.get("make") + ": " + row.get("cars") + " cars, " + row.get("taxed")));
-            List<String> names = new ArrayList<>();
-            db.catalog().tables().forEach(table -> names.add(table.name()));
-            System.out.println("   the catalog sees " + names);
-
             System.out.println("\nMany threads, one database");
             System.out.println("--------------------------");
             ExecutorService threads = Executors.newFixedThreadPool(8);
@@ -200,23 +183,6 @@ public class CoreEntryPoint {
                 walk.sorted(Comparator.reverseOrder()).forEach(path -> path.toFile().delete());
             }
         }
-
-        System.out.println("\nA query nobody vetted, in a sandbox");
-        System.out.println("-----------------------------------");
-        try (Quack sandbox = Quack.sandbox()) {
-            sandbox.live("car", List.of(new Car(1, "a", 1000), new Car(2, "b", 2500)), ColumnarLayout.ofRecord(Car.class));
-            var guard = sandbox.guarded(QueryPolicy.readOnly());
-            System.out.println("   SELECT count(*) FROM car -> " + guard.run("SELECT count(*) FROM car").getRows().get(0)[0]);
-            for (String attempt : List.of("DROP VIEW car", "SELECT * FROM read_csv('/etc/hosts')")) {
-                try {
-                    guard.run(attempt);
-                    System.out.println("   " + attempt + " -> ran (it should not have)");
-                }
-                catch (RuntimeException refused) {
-                    System.out.println("   " + attempt + " -> refused: " + refused.getMessage().split("\n")[0]);
-                }
-            }
-        }
     }
 }
 
@@ -247,12 +213,6 @@ public class CoreEntryPoint {
  *    as of 2026-09-30T09:00:00Z: g1 5y=10.0 10y=20.0
  *    as of 2026-09-30T10:00:00Z: g1 5y=12.0 10y=20.0
  *
- * A Java list as a table, and a Java method in SQL
- * ------------------------------------------------
- *    a: 2 cars, 3360.0
- *    b: 1 cars, 3000.0
- *    the catalog sees [car, exposure_contribution, exposure_key, exposure_value, item, measure_refresh, measure_watermark, reading]
- *
  * Many threads, one database
  * --------------------------
  *    800 writes and 800 reads from 8 threads: 800 of 800 read back, in 169 ms
@@ -262,12 +222,6 @@ public class CoreEntryPoint {
  * The way down, for what is not wrapped
  * -------------------------------------
  *    attached: [live, quack_history] - the history, attached once at open
- *
- * A query nobody vetted, in a sandbox
- * -----------------------------------
- *    SELECT count(*) FROM car -> 2
- *    DROP VIEW car -> refused: DROP is not a query, so it will not be run. Only statements that read are allowed: SELECT, WITH, FROM, TABLE, VALUES, DESCRIBE, SUMMARIZE, UNPIVOT and EXPLAIN. DuckDB's parser said: Only SELECT statements can be serialized to json!
- *    SELECT * FROM read_csv('/etc/hosts') -> refused: DuckDB refused to run this: Permission Error: Cannot access file "/etc/hosts" - file system operations are disabled by configuration
  *
  * Not one connection was opened, passed or closed by this code until the way-down section asked for
  * one. Records went in through the layout and came back as records, and a record written again under
@@ -279,7 +233,4 @@ public class CoreEntryPoint {
  * Eight threads shared the database without sharing a connection: each call borrowed one and gave
  * it back, so a quick query issued while a slow one ran answered at once instead of queueing behind
  * it, and nothing was left borrowed at the end.
- *
- * The sandbox is another database altogether. It held only the two cars put into it, refused a
- * statement that was not a read, and could not open a file even when the statement was one.
  */

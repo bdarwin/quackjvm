@@ -40,6 +40,12 @@
             <artifactId>quackjvm-dashboard</artifactId>
             <version>${quackjvm.version}</version>
         </dependency>
+
+        <dependency>
+            <groupId>io.github.bdarwin</groupId>
+            <artifactId>quackjvm-agent</artifactId>
+            <version>${quackjvm.version}</version>
+        </dependency>
     </dependencies>
 
     <build>

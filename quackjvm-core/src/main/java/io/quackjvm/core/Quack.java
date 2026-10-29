@@ -1,16 +1,10 @@
 package io.quackjvm.core;
 
-import io.quackjvm.core.catalog.Catalog;
 import io.quackjvm.core.duckdb.ConnectionPool;
 import io.quackjvm.core.duckdb.Connections;
 import io.quackjvm.core.duckdb.Sql;
-import io.quackjvm.core.guard.GuardedQuery;
-import io.quackjvm.core.guard.Hardening;
-import io.quackjvm.core.guard.QueryPolicy;
 import io.quackjvm.core.internal.LendingConnection;
 import io.quackjvm.core.layout.ColumnarLayout;
-import io.quackjvm.core.live.LiveTable;
-import io.quackjvm.core.live.LiveTables;
 import io.quackjvm.core.measure.MeasureHistory;
 import io.quackjvm.core.measure.MeasureQuery;
 import io.quackjvm.core.measure.MeasureRefresh;
@@ -18,8 +12,6 @@ import io.quackjvm.core.measure.MeasureTable;
 import io.quackjvm.core.metrics.QuackMetrics;
 import io.quackjvm.core.sparse.SparseTable;
 import io.quackjvm.core.sql.Rows;
-import io.quackjvm.core.udf.Udf;
-import io.quackjvm.core.udf.Udfs;
 import org.duckdb.DuckDBConnection;
 
 import java.sql.Connection;
@@ -28,10 +20,9 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * A DuckDB database, and everything quackjvm does with it, behind one object that owns the
@@ -42,7 +33,6 @@ import java.util.function.Supplier;
  *     db.create(exposure);
  *     db.commit(MeasureRefresh.at(nine, "09:00").full(exposure, batch));
  *     db.query("SELECT count(*) FROM car").scalar(Long.class);
- *     db.vectors("note", "embedding").topK(question, 3);
  * }
  * </pre>
  *
@@ -50,12 +40,15 @@ import java.util.function.Supplier;
  * needs one and gives it back, on failure as well as success, so threads run on connections of their
  * own: a transaction belongs to a connection, and one shared between two threads would let one roll
  * back the other's work. What the database shares between its connections - an attached history, a
- * Java function, a live table, hardening - is done once, here, and every connection sees it.</p>
+ * setting, a registered function - is done once, here, and every connection sees it.</p>
  *
  * <p>A transaction is {@link #inTransaction}: one connection, committed when the work returns and
  * rolled back when it throws. {@link #connection()} is the way down to DuckDB itself, for anything not
  * wrapped here. The connection-taking methods of every class underneath remain, for code that has a
  * pool of its own.</p>
+ *
+ * <p>Guarded queries, the catalog, live tables, Java functions and vector search are in
+ * {@code quackjvm-agent}, and take a {@code Quack} as well as a connection.</p>
  */
 public final class Quack implements AutoCloseable {
 
@@ -63,7 +56,7 @@ public final class Quack implements AutoCloseable {
     private final ConnectionPool pool;
     private final Connection lending;
     private final MeasureHistory history;
-    private final List<LiveTable> liveTables = new CopyOnWriteArrayList<>();
+    private final List<AutoCloseable> registered = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
     private Quack(DuckDBConnection root, MeasureHistory history, QuackMetrics metrics, int connections) {
@@ -101,15 +94,6 @@ public final class Quack implements AutoCloseable {
         }
     }
 
-    /**
-     * A separate in-memory database, hardened as {@link Hardening#sandbox()} hardens one, for queries
-     * nobody has vetted: it cannot read files, reach the network or be reconfigured. It is a different
-     * database from any other, so it holds only what is put into it.
-     */
-    public static Quack sandbox() {
-        return new Quack(Connections.duckDB(Hardening.sandbox()), null, null, defaultConnections());
-    }
-
     /** A database in a file, or in memory for a null path, with the options set before it opens. */
     public static Builder builder(String path) {
         return new Builder(path);
@@ -122,7 +106,7 @@ public final class Quack implements AutoCloseable {
     /** The options a database is opened with. */
     public static final class Builder {
         private final String path;
-        private Hardening hardening = Hardening.NONE;
+        private final Properties settings = new Properties();
         private String historyLocation;
         private QuackMetrics metrics;
         private int connections = defaultConnections();
@@ -131,9 +115,12 @@ public final class Quack implements AutoCloseable {
             this.path = path;
         }
 
-        /** Hardening, applied once when the database opens and before anything else runs on it. */
-        public Builder hardening(Hardening hardening) {
-            this.hardening = hardening;
+        /**
+         * DuckDB settings the database is opened with, such as {@code threads} or
+         * {@code memory_limit}. Some can only be set here, before anything else runs.
+         */
+        public Builder settings(Properties settings) {
+            this.settings.putAll(settings);
             return this;
         }
 
@@ -161,19 +148,15 @@ public final class Quack implements AutoCloseable {
         public Quack open() {
             DuckDBConnection root;
             try {
-                root = (DuckDBConnection) DriverManager.getConnection(path == null ? "jdbc:duckdb:" : "jdbc:duckdb:" + path);
+                root = (DuckDBConnection) DriverManager.getConnection(
+                        path == null ? "jdbc:duckdb:" : "jdbc:duckdb:" + path, settings);
             }
             catch (SQLException e) {
                 throw new IllegalStateException("Failed to open " + (path == null ? "an in-memory database" : path), e);
             }
             try {
                 MeasureHistory measureHistory = historyLocation == null ? null : MeasureHistory.at(historyLocation);
-                Quack quack = new Quack(root, measureHistory, metrics, connections);
-                if (hardening == Hardening.DATABASE) {
-                    // After the history is attached: hardening stops a database attaching files.
-                    Hardening.apply(root);
-                }
-                return quack;
+                return new Quack(root, measureHistory, metrics, connections);
             }
             catch (RuntimeException e) {
                 Sql.closeQuietly(root);
@@ -194,24 +177,6 @@ public final class Quack implements AutoCloseable {
     public Rows query(MeasureQuery query) {
         checkOpen();
         return query.run(lending);
-    }
-
-    /** A guard for queries nobody has vetted, on this database. Safe to share between threads. */
-    public GuardedQuery guarded(QueryPolicy policy) {
-        checkOpen();
-        return GuardedQuery.on(lending, policy);
-    }
-
-    /** What this database holds, described: tables, columns, comments, profiles. */
-    public Catalog catalog() {
-        checkOpen();
-        return Catalog.of(lending);
-    }
-
-    /** The rows whose vector in {@code column} is nearest a given one. */
-    public io.quackjvm.core.vector.VectorSearch vectors(String table, String column) {
-        checkOpen();
-        return io.quackjvm.core.vector.VectorSearch.on(lending, table, column);
     }
 
     // ---------- writing ----------
@@ -301,58 +266,21 @@ public final class Quack implements AutoCloseable {
     // ---------- what lives as long as the database ----------
 
     /**
-     * A Java collection, queryable as a table called {@code name}, read afresh by every query. Closed
-     * with the database, or earlier through the handle.
+     * Registers something on the database itself - a function, a table function - which every
+     * connection then sees. Registrations run one at a time; one that returns an
+     * {@link AutoCloseable} is closed with the database, unless closed before.
      */
-    public <O> LiveTable live(String name, Iterable<O> rows, ColumnarLayout<O> layout) {
-        return register(() -> LiveTables.register(root, name, rows, layout));
-    }
-
-    /** As {@link #live(String, Iterable, ColumnarLayout)}, asking the supplier for the rows at every query. */
-    public <O> LiveTable live(String name, Supplier<Iterable<O>> rows, ColumnarLayout<O> layout) {
-        return register(() -> LiveTables.register(root, name, rows, layout));
-    }
-
-    /** A copy of the rows as they are now, queryable as a table called {@code name}. */
-    public <O> LiveTable snapshot(String name, Iterable<O> rows, ColumnarLayout<O> layout) {
-        return register(() -> LiveTables.snapshot(root, name, rows, layout));
-    }
-
-    private LiveTable register(Supplier<LiveTable> registration) {
+    public <T> T register(Function<DuckDBConnection, T> registration) {
         checkOpen();
-        LiveTable table;
+        T result;
         // The root connection is used by nothing but registrations, one at a time.
         synchronized (root) {
-            table = registration.get();
+            result = registration.apply(root);
         }
-        liveTables.add(table);
-        return table;
-    }
-
-    /** A Java method callable from SQL, of one argument. A null argument is a null result. */
-    public <A, R> Udf function(String name, Class<R> returns, Class<A> a, Function<A, R> function) {
-        checkOpen();
-        synchronized (root) {
-            return Udfs.register(root, name, returns, a, function);
+        if (result instanceof AutoCloseable closeable) {
+            registered.add(closeable);
         }
-    }
-
-    /** A Java method callable from SQL, of two arguments. A null in either is a null result. */
-    public <A, B, R> Udf function(String name, Class<R> returns, Class<A> a, Class<B> b,
-                                  BiFunction<A, B, R> function) {
-        checkOpen();
-        synchronized (root) {
-            return Udfs.register(root, name, returns, a, b, function);
-        }
-    }
-
-    /** A Java method callable from SQL, of three arguments. A null in any is a null result. */
-    public <A, B, C, R> Udf function(String name, Class<R> returns, Class<A> a, Class<B> b, Class<C> c,
-                                     Udfs.Fn3<A, B, C, R> function) {
-        checkOpen();
-        synchronized (root) {
-            return Udfs.register(root, name, returns, a, b, c, function);
-        }
+        return result;
     }
 
     // ---------- transactions ----------
@@ -423,6 +351,16 @@ public final class Quack implements AutoCloseable {
     // ---------- the way down ----------
 
     /**
+     * A connection that borrows a pooled one for each statement and gives it back, for a helper that
+     * keeps a connection for life. Safe to share between threads; it cannot hold a transaction, and
+     * closing it does nothing.
+     */
+    public Connection sharedConnection() {
+        checkOpen();
+        return lending;
+    }
+
+    /**
      * A connection of this database's own, for anything not wrapped here. Closing it gives it back,
      * rolling back whatever was left uncommitted; until then it is the caller's alone.
      */
@@ -435,22 +373,22 @@ public final class Quack implements AutoCloseable {
         return !closed;
     }
 
-    /** Takes away the live tables still registered, closes the pooled connections, then the database. */
+    /** Closes what was registered and is still open, then the pooled connections, then the database. */
     @Override
     public void close() {
         if (closed) {
             return;
         }
         synchronized (root) {
-            for (LiveTable table : liveTables) {
+            for (AutoCloseable closeable : registered) {
                 try {
-                    table.close();
+                    closeable.close();
                 }
-                catch (RuntimeException ignored) {
-                    // Closing the database takes the view with it; what matters is the next one.
+                catch (Exception ignored) {
+                    // Closing the database takes the registration with it; what matters is the next one.
                 }
             }
-            liveTables.clear();
+            registered.clear();
             closed = true;
         }
         pool.close();

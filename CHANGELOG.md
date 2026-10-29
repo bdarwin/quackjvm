@@ -3,20 +3,31 @@
 ## Unreleased
 
 ### Added
+- **`quackjvm-agent`, a module of its own** for SQL and data the application does not write itself - an
+  AI agent, a user, another service. It holds what was added for that: guarded queries and hardening
+  (`io.quackjvm.agent.guard`), the catalog (`.catalog`), live tables (`.live`), Java functions in SQL
+  (`.udf`) and vector search (`.vector`). They were `io.quackjvm.core.*`; `quackjvm-core` no longer
+  contains them. Each takes a `Quack` as well as a connection: `GuardedQuery.on(quack, policy)`,
+  `Catalog.of(quack)`, `VectorSearch.on(quack, table, column)`, `Hardening.apply(quack)` and
+  `Hardening.openSandbox()`, and `quack.register(root -> LiveTables.register(root, ...))` for a live
+  table or a function. In place of `Quack.guarded`, `catalog`, `vectors`, `live`, `snapshot`,
+  `function`, `sandbox` and `Builder.hardening`, which are gone, core has three generic hooks:
+  `register`, `sharedConnection` and `Builder.settings`. The examples are `Agent*`;
+  `AgentEntryPoint` shows them through `Quack`.
 - `io.quackjvm.core.Quack`: one entry point that owns the database, so the code using it never holds a
-  connection. `Quack.open(path)`, `inMemory()`, `on(existingConnection)`, `sandbox()`, or
-  `builder(path).history(...).hardening(...).metrics(...).open()`; then `query`, `execute`,
+  connection. `Quack.open(path)`, `inMemory()`, `on(existingConnection)`, or
+  `builder(path).settings(...).history(...).metrics(...).open()`; then `query`, `execute`,
   `createTable` and `write` for objects, `create` and `commit` for measures, `ship`, `export` and
-  `asOf` for their history, `guarded`, `catalog`, `vectors`, `live`, `function`. Thread-safe: every
-  call borrows a pooled connection and gives it back on failure as well as success. Helpers that keep
-  a connection for life get one that borrows per statement, because a DuckDB connection runs one
+  `asOf` for their history, and `register(root -> ...)` for what lives on the database itself.
+  Thread-safe: every call borrows a pooled connection and gives it back on failure as well as success.
+  Helpers that keep a connection for life get `sharedConnection()`, which borrows per statement, because a DuckDB connection runs one
   query at a time - a quick query behind a slow one on a shared connection waited 1,136 ms, against
   0 ms on its own. `inTransaction(tx -> ...)` runs work on one connection, committed when it returns
   and rolled back when it throws; `Tx` leaves out `ship`, `export`, `compact` and `prune`, which run
   their own transactions against two databases. `connection()` is the way down. Nothing underneath
   changed: every connection-taking method remains. `CoreEntryPoint` shows it; `CoreConnectionFacts`
   measures what it rests on - what a database shares between connections, and what each keeps.
-- `io.quackjvm.core.vector.VectorSearch`: the rows whose vector is nearest a given one.
+- `io.quackjvm.agent.vector.VectorSearch`: the rows whose vector is nearest a given one.
   `VectorSearch.on(connection, table, column).identifiedBy("id").topK(query, 10, "topic = ?", "news")`,
   by cosine similarity, Euclidean distance or inner product, with `sql(...)` for joining your own
   tables to it. It uses DuckDB's built-in array functions, so **no extension, no network and no file
@@ -38,7 +49,7 @@
   `CoreNestedTypes` measures. One level of nesting is supported and two is refused when the layout is
   built, naming what to do instead. `FLOAT[768]` writes at 20,000 rows a second, 59 MB/s on DuckDB 2.0 (29,000 and 85 MB/s on
   1.5.5).
-- `io.quackjvm.core.udf`: a Java method called from SQL. `Udfs.register(connection, name, returnType,
+- `io.quackjvm.agent.udf`: a Java method called from SQL. `Udfs.register(connection, name, returnType,
   argumentTypes..., method)` for one, two or three arguments - three being more than
   `java.util.function` offers, so there is an `Fn3`. `register` never calls the method with a null and
   answers a null argument with a null result; `registerNullable` passes nulls through both ways; either
@@ -47,7 +58,7 @@
   `registerInt` and `registerLong` take primitive lambdas and do not box. Measured on 2,000,000 rows of
   `price * 1.2`: 0.7 ns a row in SQL, 8.8 ns unboxed through a UDF, 8.4 ns boxed - the same as writing
   the callback by hand, so the wrapper is free, and a reminder that a UDF is for what SQL cannot say.
-- `io.quackjvm.core.live`: Java objects queried as a table. `LiveTables.register(connection, "car",
+- `io.quackjvm.agent.live`: Java objects queried as a table. `LiveTables.register(connection, "car",
   cars, layout)` puts a `ColumnarLayout` and a collection behind a DuckDB table function with a view
   over it, so SQL says `car`, joins work, and nothing is copied or kept in step - add an object and the
   next query sees it. Projection pushdown is on, so a query about one column never touches the others'
@@ -61,7 +72,7 @@
   asked about.
 - `Catalog.tables()` now lists views as well as tables, since a view is a table to whatever is reading
   - a live table is one.
-- `io.quackjvm.core.catalog`: what is in the database and what it means. `Catalog.of(connection)`
+- `io.quackjvm.agent.catalog`: what is in the database and what it means. `Catalog.of(connection)`
   gives `tables()`, `describe(table)` - columns with their SQL type, the Java type quackjvm maps them
   to, nullability, a description and a unit - and `profile(table)`, which is `SUMMARIZE` plus an exact
   row count and a few rows, as typed records with a `toText()` for whatever reads text. Descriptions
@@ -72,7 +83,7 @@
   `measuredIn(...)`, and `TableWriter.createTable` writes them onto the table it creates. Measured:
   `describe` 2 ms whatever the table holds, `profile` 36 ms at a million rows and 279 ms at ten
   million - which is why the cached variant that was considered was left out rather than built.
-- `io.quackjvm.core.guard`: running SQL that came from somewhere you do not control. `GuardedQuery.on(
+- `io.quackjvm.agent.guard`: running SQL that came from somewhere you do not control. `GuardedQuery.on(
   connection, QueryPolicy.readOnly()).run(sql)` checks the statement with DuckDB's own parser -
   `json_serialize_sql`, which serializes only queries - so everything that writes, attaches, loads,
   copies or configures is refused, a CTE with a write inside it included, and more than one statement

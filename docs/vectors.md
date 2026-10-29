@@ -3,6 +3,10 @@
 The rows whose vector is nearest a given one - what an agent's memory needs, and what a recommendation
 is underneath.
 
+!!! note "In quackjvm-agent"
+    This page is part of the `quackjvm-agent` module, not core: add `io.github.bdarwin:quackjvm-agent`
+    beside `quackjvm-core`. `VectorSearch.on(quack, table, column)` borrows a connection per query.
+
 ```java
 VectorSearch search = VectorSearch.on(connection, "note", "embedding").identifiedBy("id");
 
@@ -81,4 +85,4 @@ otherwise. What can be said without measuring: the queries `VectorSearch` builds
 planner uses an HNSW index for - a `LIMIT k` over an `ORDER BY` on the array function - so nothing about
 the call changes once the index exists.
 
-See `examples/src/main/java/CoreVectorSearch.java` for all of it, with its real output.
+See `examples/src/main/java/AgentVectorSearch.java` for all of it, with its real output.

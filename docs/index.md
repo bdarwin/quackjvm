@@ -102,7 +102,7 @@ long rows = Rows.of(connection.duplicate(), "SELECT count(*) FROM 'data/*.parque
     Your query code does not change, and you can drop into SQL over the same data whenever the
     object API runs out. See [Querying](querying.md) and [Migrating](migrating.md).
 
-## Two modules
+## The modules
 
 <div class="grid cards" markdown>
 
@@ -126,6 +126,16 @@ long rows = Rows.of(connection.duplicate(), "SELECT count(*) FROM 'data/*.parque
     collections**. Everything above still works underneath it.
 
     [:octicons-arrow-right-24: Using the plugin](querying.md)
+
+-   :material-robot-outline: **`quackjvm-agent`** *(optional)*
+
+    ---
+
+    For SQL and data the application does not write itself — an AI agent, a user, another
+    service: guarded read-only queries, a catalog that describes the database, live Java
+    collections and Java functions in SQL, and vector similarity.
+
+    [:octicons-arrow-right-24: Guarding queries](guarding-queries.md)
 
 </div>
 

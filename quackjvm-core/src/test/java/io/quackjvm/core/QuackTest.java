@@ -1,10 +1,7 @@
 package io.quackjvm.core;
 
-import io.quackjvm.core.guard.Hardening;
-import io.quackjvm.core.guard.QueryPolicy;
-import io.quackjvm.core.guard.QueryTimedOut;
+import io.quackjvm.core.duckdb.Sql;
 import io.quackjvm.core.layout.ColumnarLayout;
-import io.quackjvm.core.live.LiveTable;
 import io.quackjvm.core.measure.MeasureBatch;
 import io.quackjvm.core.measure.MeasureRefresh;
 import io.quackjvm.core.measure.MeasureTable;
@@ -188,20 +185,6 @@ public class QuackTest {
         assertTrue("the quick query waited " + quickMs + " ms behind the slow one", quickMs < slowMs / 3);
     }
 
-    @Test
-    public void aGuardedQueryTimesOutAndGivesItsConnectionBack() {
-        try {
-            db.guarded(QueryPolicy.readOnly().timeout(Duration.ofMillis(100)))
-                    .run("SELECT count(*) FROM range(15000) a, range(15000) b WHERE (a.range * 7 + b.range) % 1000003 = 1");
-            fail("the guarded query should have timed out");
-        }
-        catch (QueryTimedOut expected) {
-            // interrupted
-        }
-        assertEquals(0.0, inUse(), 0.0);
-        assertEquals(Long.valueOf(2), db.query("SELECT count(*) FROM item").scalar(Long.class));
-    }
-
     // ---------- transactions ----------
 
     @Test
@@ -347,68 +330,51 @@ public class QuackTest {
         }
     }
 
-    @Test
-    public void aHardenedDatabaseStillShipsToTheHistoryItWasOpenedWith() throws Exception {
-        try (Quack hardened = Quack.builder(folder.getRoot().toPath().resolve("hard.duckdb").toString())
-                .history(folder.getRoot().toPath().resolve("hard-history.duckdb").toString())
-                .hardening(Hardening.DATABASE)
-                .open()) {
-            try (Connection connection = hardened.connection()) {
-                assertTrue(Hardening.isHardened(connection));
-            }
-            hardened.create(measure);
-            hardened.commit(MeasureRefresh.at(NINE, "r1").full(measure, batch(3, 10, 20)));
-            assertEquals(1, hardened.ship(measure).entries());
-        }
-    }
-
     // ---------- what lives as long as the database ----------
 
     @Test
-    public void liveTablesAndFunctionsAreSeenEverywhereAndGoWithTheDatabase() throws Exception {
-        List<Car> cars = List.of(new Car(1, "a", 1.0), new Car(2, "b", 2.0));
-        LiveTable table = db.live("car", cars, ColumnarLayout.ofRecord(Car.class));
-        db.function("twice", Double.class, Double.class, x -> x * 2);
-
-        assertEquals(Double.valueOf(6.0), db.query("SELECT sum(twice(price)) FROM car").scalar(Double.class));
-        db.inTransaction(tx -> assertEquals(Long.valueOf(2),
-                tx.query("SELECT count(*) FROM car").scalar(Long.class)));
+    public void aRegistrationIsSeenByEveryConnectionAndClosedWithTheDatabase() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
+        AutoCloseable registration = db.register(root -> {
+            Sql.execute(root, "CREATE MACRO twice(x) AS x * 2");
+            return (AutoCloseable) () -> closed.set(true);
+        });
+        assertEquals(Long.valueOf(4), db.query("SELECT twice(2)").scalar(Long.class));
+        db.inTransaction(tx -> assertEquals(Long.valueOf(6), tx.query("SELECT twice(3)").scalar(Long.class)));
+        assertFalse(closed.get());
 
         db.close();
-        assertFalse(table.isOpen());
+        assertTrue("closed with the database", closed.get());
+        registration.close();   // and closing it again is the registration's own business
     }
 
     @Test
-    public void twoDatabasesInOneJvmKeepTheirOwnLiveTables() {
-        try (Quack other = Quack.inMemory()) {
-            db.live("car", List.of(new Car(1, "a", 1.0)), ColumnarLayout.ofRecord(Car.class));
-            other.live("car", List.of(new Car(1, "a", 1.0), new Car(2, "b", 2.0), new Car(3, "c", 3.0)),
-                    ColumnarLayout.ofRecord(Car.class));
-            assertEquals(Long.valueOf(1), db.query("SELECT count(*) FROM car").scalar(Long.class));
-            assertEquals(Long.valueOf(3), other.query("SELECT count(*) FROM car").scalar(Long.class));
+    public void theSharedConnectionBorrowsPerStatementAndIsSafeAcrossThreads() throws Exception {
+        Connection shared = db.sharedConnection();
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            List<Future<Long>> counts = new ArrayList<>();
+            for (int i = 0; i < 40; i++) {
+                counts.add(pool.submit(() -> Sql.queryLong(shared, "SELECT count(*) FROM item", List.of())));
+            }
+            for (Future<Long> count : counts) {
+                assertEquals(2L, count.get().longValue());
+            }
         }
-        assertEquals(Long.valueOf(1), db.query("SELECT count(*) FROM car").scalar(Long.class));
+        finally {
+            pool.shutdown();
+        }
+        shared.close();   // does nothing
+        assertEquals(0.0, inUse(), 0.0);
+        assertEquals(2L, Sql.queryLong(shared, "SELECT count(*) FROM item", List.of()));
     }
 
     @Test
-    public void aSandboxIsADifferentDatabaseThatCannotReachFiles() {
-        db.live("car", List.of(new Car(1, "a", 1.0)), ColumnarLayout.ofRecord(Car.class));
-        try (Quack sandbox = Quack.sandbox()) {
-            try {
-                sandbox.query("SELECT count(*) FROM car").scalar(Long.class);
-                fail("the sandbox saw the application's table");
-            }
-            catch (RuntimeException expected) {
-                // a different database
-            }
-            try {
-                sandbox.query("SELECT * FROM read_csv('" + folder.getRoot() + "/x.csv')").list(Object[].class);
-                fail("the sandbox read a file");
-            }
-            catch (RuntimeException expected) {
-                // hardened
-            }
-            assertEquals(0, sandbox.guarded(QueryPolicy.readOnly()).run("SELECT 1 WHERE false").getRowCount());
+    public void settingsAreAppliedWhenTheDatabaseOpens() {
+        java.util.Properties settings = new java.util.Properties();
+        settings.setProperty("threads", "3");
+        try (Quack configured = Quack.builder(null).settings(settings).open()) {
+            assertEquals("3", configured.query("SELECT current_setting('threads')::VARCHAR").scalar(String.class));
         }
     }
 
@@ -452,7 +418,8 @@ public class QuackTest {
         for (Runnable call : List.<Runnable>of(
                 () -> db.query("SELECT 1"),
                 () -> db.execute("SELECT 1"),
-                () -> db.catalog(),
+                () -> db.sharedConnection(),
+                () -> db.register(root -> null),
                 () -> db.inTransaction(tx -> { }),
                 () -> db.connection())) {
             try {

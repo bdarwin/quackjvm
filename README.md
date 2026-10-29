@@ -4,7 +4,7 @@
 [![Docs](https://img.shields.io/badge/docs-bdarwin.github.io%2Fquackjvm-blue.svg)](https://bdarwin.github.io/quackjvm/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-459%20passing-brightgreen.svg)](#building-and-benchmarking)
+[![Tests](https://img.shields.io/badge/tests-463%20passing-brightgreen.svg)](#building-and-benchmarking)
 
 **An embedded analytical engine for the JVM, built on [DuckDB](https://duckdb.org/).**
 
@@ -58,6 +58,7 @@ examples throughout. This page is the overview; the site is the manual.
 |---|---|
 | **`quackjvm-core`** | DuckDB for the JVM. Java-object-to-column mapping, an Arrow columnar read path that is 10x faster than reading rows through JDBC, bulk loading, connection pooling, typed SQL access. Depends on nothing but DuckDB. |
 | **`quackjvm-cqengine`** | One plugin built on the core: a `Persistence` implementation for [CQEngine](https://github.com/npgall/cqengine). Drop it in where you would use CQEngine's on-heap, off-heap or SQLite persistence. |
+| **`quackjvm-agent`** | Optional. For SQL and data the application does not write itself - an AI agent, a user, another service: guarded read-only queries and hardening, a catalog that describes the database, live Java collections and Java functions in SQL, vector similarity. Depends on nothing but the core. |
 | **`quackjvm-dashboard`** | Optional. A live page showing where quackjvm is choking - write-lock queueing, CPU contention, conflicts, memory - and what to change. The JDK's own HTTP server, localhost-only and read-only by default; depends on nothing but the core. |
 
 ```xml
@@ -441,7 +442,8 @@ command to run it in its header and its real output at the bottom.
 
 | example | what it shows |
 |---|---|
-| `CoreEntryPoint` | **start here**: everything through `Quack`, with no connection in sight - objects, a transaction, a measure and its history, live tables, threads, a sandbox |
+| `CoreEntryPoint` | **start here**: everything through `Quack`, with no connection in sight - objects, a transaction, a measure and its history, threads |
+| `AgentEntryPoint` | `quackjvm-agent` through `Quack`: a live table, a Java function, the catalog, a guarded query in a sandbox |
 | `CoreColumnarRecords` | core only: Java records to typed DuckDB columns and back, queried with SQL |
 | `CoreBulkLoad` | core only: a million rows loaded in 0.56 s into a 10.0 MB file |
 | `CqEngineSwap` | the one-line swap from an on-heap collection, and the memory difference |
@@ -461,8 +463,9 @@ mvn compile
 ## Building and benchmarking
 
 ```
-mvn test                        # 459 tests, across the modules
+mvn test                        # 463 tests, across the modules
 mvn -pl quackjvm-core test      # just core
+mvn -pl quackjvm-agent -am test # the agent module, and the core it builds on
 mvn -pl quackjvm-cqengine -am test  # the CQEngine plugin, and the core it builds on
 ```
 

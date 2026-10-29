@@ -2,6 +2,10 @@
 
 A Java method called from SQL, without writing a callback by hand.
 
+!!! note "In quackjvm-agent"
+    This page is part of the `quackjvm-agent` module, not core: add `io.github.bdarwin:quackjvm-agent`
+    beside `quackjvm-core`. With a `Quack`, register on the database once: `quack.register(root -> Udfs.register(root, "region_of", ...))`.
+
 ```java
 Udfs.register(connection, "region_of", String.class, String.class, Countries::regionOf);
 
@@ -69,4 +73,4 @@ Udfs.registerLong(connection, "half", value -> value / 2);
 There is nothing to close: DuckDB (1.5.5 and 2.0) has no way to unregister a function. Registering the same name
 again replaces what it does, which the tests rely on.
 
-See `examples/src/main/java/CoreUdfs.java` for all of it, with its real output.
+See `examples/src/main/java/AgentUdfs.java` for all of it, with its real output.

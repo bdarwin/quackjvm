@@ -2,6 +2,10 @@
 
 Java objects queried as a table, with no load step and nothing copied.
 
+!!! note "In quackjvm-agent"
+    This page is part of the `quackjvm-agent` module, not core: add `io.github.bdarwin:quackjvm-agent`
+    beside `quackjvm-core`. With a `Quack`, register on the database once: `quack.register(root -> LiveTables.register(root, "car", cars, layout))`, closed with it.
+
 ```java
 List<Car> cars = ...;                                  // an ordinary list, still yours
 LiveTable table = LiveTables.register(connection, "car", cars, ColumnarLayout.ofRecord(Car.class));
@@ -79,4 +83,4 @@ Drops the view and detaches the data, so the name stops answering. The table fun
 registered, because DuckDB (1.5.5 and 2.0) has no way to unregister one - a query written against the function
 directly after that says the live table is gone rather than returning stale rows.
 
-See `examples/src/main/java/CoreLiveTables.java` for all of it, with its real output.
+See `examples/src/main/java/AgentLiveTables.java` for all of it, with its real output.
