@@ -17,7 +17,7 @@ import java.util.function.Function;
  * rebuild the object from a row.
  *
  * <p>Supplying a layout to
- * {@link io.quackjvm.cqengine.persistence.DuckDBPersistence.Builder#columnarLayout(ColumnarLayout)}
+ * {@code DuckDBPersistence.Builder.columnarLayout(..)} in quackjvm-cqengine
  * switches the object store from "one serialized BLOB per object" to a real columnar table.
  * DuckDB can then apply dictionary, run-length and FSST compression per column, which
  * typically shrinks the stored data several-fold and makes full scans much faster.</p>
