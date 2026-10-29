@@ -242,6 +242,21 @@
     throughput (41.2 to 34.9 panels/s) while still cutting p99 by a third.
 
 ### Fixed
+- **A measure export could mark a refresh as exported when it was not in the file**, and pruning then
+  deleted it. The file, the count and the export ledger each read the pending refreshes separately;
+  a shipment landing between them was recorded but never written. They now read one snapshot.
+- **Archiving by size ran inside the caller's transaction**, handing a part to `onArchive` before
+  anything had committed, and, with its checkpoint unable to run, could archive part after part. It
+  now waits for the next write outside a transaction, and stops when archiving frees no space.
+- **`SparseTable.optimize` inside the caller's transaction left a full copy of the table** in memory
+  until the connection closed.
+- **`optimize()` on a CQEngine collection could fail a concurrent query** with "table does not exist":
+  each index table was dropped and its sorted copy renamed as two separate statements. Now one
+  transaction.
+- **A `null` query parameter threw `NullPointerException`** in `Quack.query`, `Rows.of`, `SqlQuery`,
+  `Materialization.append` and `VectorSearch.topK`.
+- `Join` shared one `QueryOptions` between calls, which the persistence refuses when two threads use
+  it at once; `MeasureQuery.sql` failed on a value holding `$` or `\`.
 - **The guard let a write through on DuckDB 2.0.** 2.0's parser serializes a SELECT whose WITH clause
   deletes, inserts, updates or copies to a file as a SELECT, where 1.5 refused it. On 2.0 a read-only
   guard deleted every row of a table when such a statement ended in a semicolon or was run through

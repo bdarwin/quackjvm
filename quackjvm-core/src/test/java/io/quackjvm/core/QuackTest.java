@@ -326,6 +326,16 @@ public class QuackTest {
         assertEquals(0.0, inUse(), 0.0);
     }
 
+    /** List.of rejects nulls, so a null parameter used to throw before reaching DuckDB. */
+    @Test
+    public void aNullParameterBindsAsSqlNull() {
+        try (Quack plain = Quack.inMemory()) {
+            assertEquals(Boolean.TRUE, plain.query("SELECT ? IS NULL", (Object) null).scalar(Boolean.class));
+            assertEquals(1L, plain.query("SELECT count(*) FROM (SELECT ? AS x) WHERE x IS NULL", (Object) null)
+                    .scalar(Long.class).longValue());
+        }
+    }
+
     @Test
     public void aDatabaseOpenedWithoutAHistorySaysSo() {
         try (Quack plain = Quack.inMemory()) {

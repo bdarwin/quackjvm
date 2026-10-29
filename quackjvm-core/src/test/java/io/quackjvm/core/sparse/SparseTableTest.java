@@ -324,6 +324,24 @@ public class SparseTableTest {
 
     // ---------- optimize ----------
 
+    /** The sorted copy is the whole table; inside a caller's transaction it was left behind. */
+    @Test
+    public void optimizeInTheCallersTransactionLeavesNoCopyBehind() throws SQLException {
+        samples.append(connection, batchOf(randomData(1_000, 300, 20, 7)));
+        connection.setAutoCommit(false);
+        samples.optimize(connection);
+        connection.commit();
+        connection.setAutoCommit(true);
+
+        try (java.sql.Statement statement = connection.createStatement();
+             java.sql.ResultSet tables = statement.executeQuery(
+                     "SELECT count(*) FROM duckdb_tables() WHERE table_name = 'sample__sorted'")) {
+            tables.next();
+            assertEquals(0, tables.getLong(1));
+        }
+        assertEquals(1_000 * 20, samples.valueCount(connection));
+    }
+
     @Test
     public void optimizeKeepsEveryValue() {
         Map<Long, Map<String, Double>> data = randomData(1_000, 300, 20, 7);

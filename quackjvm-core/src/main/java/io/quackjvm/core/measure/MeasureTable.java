@@ -90,6 +90,7 @@ public final class MeasureTable {
     private final ReentrantLock writeLock = new ReentrantLock(true);
     /** Key fields to dictionary id, for keys this instance has looked up. Guarded by writeLock. */
     private final Map<List<String>, Integer> keyIds = new KeyCache();
+    /** Values written since the size was last checked. Guarded by writeLock. */
     private long writtenSinceCheck;
     /** Whether the tables have been checked against this definition. Guarded by writeLock. */
     private boolean checkedColumns;
@@ -219,6 +220,8 @@ public final class MeasureTable {
         /**
          * Archive the oldest parts whenever the measure's own tables grow past this many bytes.
          * Needs somewhere for the files to go: {@link #archiveTo}, and usually {@link #onArchive}.
+         * Checked on writes made outside a transaction of the caller's; inside one, the next write
+         * outside it does the check.
          */
         public Builder archiveWhenLargerThan(long bytes) {
             this.archiveOverBytes = bytes;
@@ -939,12 +942,23 @@ public final class MeasureTable {
         if (archiveOverBytes <= 0) {
             return;
         }
-        writtenSinceCheck += valuesWritten;
-        if (writtenSinceCheck < CHECK_EVERY) {
-            return;
+        // Inside a caller's transaction an archive would not have committed when the handler runs,
+        // and the checkpoint that frees its space cannot run, so the size would never fall. The
+        // count carries on, and the next write outside a transaction does the check.
+        boolean ownTransaction = Transactions.isAutoCommit(connection);
+        writeLock.lock();
+        try {
+            writtenSinceCheck += valuesWritten;
+            if (writtenSinceCheck < CHECK_EVERY || !ownTransaction) {
+                return;
+            }
+            writtenSinceCheck = 0;
         }
-        writtenSinceCheck = 0;
-        while (sizeOnDisk(connection) > archiveOverBytes) {
+        finally {
+            writeLock.unlock();
+        }
+        long size = sizeOnDisk(connection);
+        while (size > archiveOverBytes) {
             List<Part> parts = parts(connection);
             if (parts.size() <= 1) {
                 // Never archive the only part: it is what writers are still adding to.
@@ -961,6 +975,13 @@ public final class MeasureTable {
                             + ", but handing it on failed", e);
                 }
             }
+            long after = sizeOnDisk(connection);
+            if (after >= size) {
+                // The checkpoint could not run - someone is reading - so the space is not free yet.
+                // Archiving on would empty the measure down to one part; a later write tries again.
+                return;
+            }
+            size = after;
         }
     }
 

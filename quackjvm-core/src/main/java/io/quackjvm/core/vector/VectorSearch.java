@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -117,7 +118,7 @@ public final class VectorSearch {
         String sql = sql(query, k, filterSql);
         List<Match> matches = new ArrayList<>();
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            Sql.bindAll(statement, List.of(params), 1);
+            Sql.bindAll(statement, Arrays.asList(params), 1);
             try (ResultSet rows = statement.executeQuery()) {
                 while (rows.next()) {
                     matches.add(new Match(rows.getObject(1), rows.getDouble(2)));

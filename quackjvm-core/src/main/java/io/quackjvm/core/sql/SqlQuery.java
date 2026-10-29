@@ -7,6 +7,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -37,7 +38,7 @@ public final class SqlQuery {
         PreparedStatement statement = null;
         try {
             statement = connection.prepareStatement(sql);
-            Sql.bindAll(statement, List.of(parameters), 1);
+            Sql.bindAll(statement, Arrays.asList(parameters), 1);
             ResultSet resultSet = statement.executeQuery();
 
             List<String> columnNames = new ArrayList<>();

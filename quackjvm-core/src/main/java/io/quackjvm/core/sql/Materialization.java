@@ -177,7 +177,7 @@ public final class Materialization {
         }
         int appended = Sql.executeUpdate(connection,
                 "INSERT INTO " + Sql.quote(name) + " " + deltaSql,
-                java.util.List.of(parameters));
+                java.util.Arrays.asList(parameters));
         return Math.max(appended, 0);
     }
 

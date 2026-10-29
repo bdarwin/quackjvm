@@ -13,6 +13,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -224,7 +225,7 @@ public final class Rows {
 
     private PreparedStatement prepare() throws SQLException {
         PreparedStatement statement = connection.prepareStatement(sql);
-        Sql.bindAll(statement, List.of(parameters), 1);
+        Sql.bindAll(statement, Arrays.asList(parameters), 1);
         return statement;
     }
 

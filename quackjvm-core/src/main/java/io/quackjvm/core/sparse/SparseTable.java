@@ -446,9 +446,9 @@ public final class SparseTable {
                     pause(attempt);
                 }
             }
-            if (ownTransaction) {
-                Sql.execute(connection, "DROP TABLE IF EXISTS " + Sql.quote(sorted));
-            }
+            // Also inside a caller's transaction: the copy is the whole table, and would otherwise
+            // stay in memory until the connection closes.
+            Sql.execute(connection, "DROP TABLE IF EXISTS " + Sql.quote(sorted));
         }
         finally {
             writeLock.unlock();

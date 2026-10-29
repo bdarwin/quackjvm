@@ -359,6 +359,48 @@ public class MeasureArchiveTest {
         }
     }
 
+    /**
+     * Inside the caller's transaction the checkpoint cannot run, so the size never fell and every
+     * part but the newest was archived - and handed on before anything had committed.
+     */
+    @Test
+    public void writesInTheCallersTransactionLeaveArchivingToTheNextWriteOutsideOne() throws Exception {
+        Path file = folder.getRoot().toPath().resolve("sized-tx.duckdb");
+        List<String> handed = new ArrayList<>();
+        try (DuckDBConnection sized = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:" + file)) {
+            MeasureTable measure = MeasureTable.named("big").fields("a", "point")
+                    .writtenBy("svc-a")
+                    .archiveWhenLargerThan(512 * 1024)
+                    .archiveTo(store)
+                    .onArchive((part, where) -> handed.add(part))
+                    .build();
+            measure.create(sized);
+            for (int day = 20; day <= 26; day++) {
+                sized.setAutoCommit(false);
+                measure.append(sized, dayOfValues(measure, day), "2026-09-" + day);
+                sized.commit();
+                sized.setAutoCommit(true);
+            }
+            assertTrue("nothing is archived inside a caller's transaction: " + handed, handed.isEmpty());
+            assertEquals(7, measure.parts(sized).size());
+
+            measure.append(sized, dayOfValues(measure, 27), "2026-09-27");
+            assertFalse("the next write outside a transaction archives", handed.isEmpty());
+            assertEquals("2026-09-20", handed.get(0));
+        }
+    }
+
+    private static MeasureBatch dayOfValues(MeasureTable measure, int day) {
+        MeasureBatch.Builder batch = measure.batch();
+        for (int record = 0; record < 60; record++) {
+            batch.record(day * 1000L + record);
+            for (int key = 0; key < 1_000; key++) {
+                batch.put(record + key / 10.0, "a" + key % 50, "p" + key);
+            }
+        }
+        return batch.build();
+    }
+
     // ---------- Helpers ----------
 
     private String archiveOf(MeasureTable measure, String part) {

@@ -446,11 +446,20 @@ public final class MeasureQuery {
     /** The SQL of this query, with its values written in - for reading, not for running. */
     public String sql(Connection connection) {
         Statement statement = statement(connection);
+        // Left to right, never searching what was written in: a value may itself hold a '?'.
         String sql = statement.sql();
+        StringBuilder written = new StringBuilder(sql.length());
+        int from = 0;
         for (Object parameter : statement.parameters()) {
-            sql = sql.replaceFirst("\\?", parameter instanceof String text ? literal(text) : String.valueOf(parameter));
+            int at = sql.indexOf('?', from);
+            if (at < 0) {
+                break;
+            }
+            written.append(sql, from, at)
+                    .append(parameter instanceof String text ? literal(text) : String.valueOf(parameter));
+            from = at + 1;
         }
-        return sql;
+        return written.append(sql, from, sql.length()).toString();
     }
 
     /** The values that will become columns, in the field's declared order, or text order. */

@@ -381,6 +381,45 @@ public class DuckDBPersistenceTest {
         assertTrue(cars.remove(extra));
     }
 
+    /**
+     * Readers take no lock, and optimize used to drop each index table and rename its sorted copy
+     * as two statements: a query landing between them found no table.
+     */
+    @Test(timeout = 120_000)
+    public void queriesDuringOptimizeNeverFindTheIndexMissing() throws Exception {
+        DuckDBPersistence<Car, Integer> persistence = track(DuckDBPersistence.onPrimaryKey(Car.CAR_ID));
+        IndexedCollection<Car> cars = new ConcurrentIndexedCollection<>(persistence);
+        cars.addIndex(DuckDBIndex.onAttribute(Car.MANUFACTURER));
+        cars.addAll(Cars.generate(20_000, 43));
+        int fords = collect(cars, equal(Car.MANUFACTURER, "Ford")).size();
+
+        java.util.concurrent.atomic.AtomicBoolean done = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
+        Thread reader = new Thread(() -> {
+            while (!done.get() && failure.get() == null) {
+                try {
+                    assertEquals(fords, collect(cars, equal(Car.MANUFACTURER, "Ford")).size());
+                    reads.incrementAndGet();
+                }
+                catch (Throwable t) {
+                    failure.set(t);
+                }
+            }
+        });
+        reader.start();
+        for (int i = 0; i < 40 && failure.get() == null; i++) {
+            persistence.optimize();
+        }
+        done.set(true);
+        reader.join();
+        if (failure.get() != null) {
+            throw new AssertionError("a query failed during optimize, after " + reads.get() + " reads",
+                    failure.get());
+        }
+        assertTrue("the reader should have overlapped the optimizes", reads.get() > 0);
+    }
+
     private static Set<Car> collect(IndexedCollection<Car> cars, Query<Car> query) {
         Set<Car> results = new HashSet<>();
         try (ResultSet<Car> resultSet = cars.retrieve(query)) {

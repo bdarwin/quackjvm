@@ -3,6 +3,7 @@ package io.quackjvm.cqengine.internal;
 import io.quackjvm.core.duckdb.ColumnDef;
 import io.quackjvm.core.duckdb.Sql;
 import io.quackjvm.core.duckdb.TableWriter;
+import io.quackjvm.core.duckdb.Transactions;
 
 import com.googlecode.concurrenttrees.common.LazyIterator;
 import com.googlecode.cqengine.attribute.Attribute;
@@ -72,10 +73,7 @@ public final class IndexTable<K, A> {
         }
         writer.createTable(connection, false);
         if (createArtIndexes) {
-            Sql.execute(connection, "CREATE INDEX IF NOT EXISTS " + Sql.quote("cqidx_" + tableName + "_value")
-                    + " ON " + Sql.quote(tableName) + " (" + Sql.quote(VALUE_COLUMN) + ")");
-            Sql.execute(connection, "CREATE INDEX IF NOT EXISTS " + Sql.quote("cqidx_" + tableName + "_key")
-                    + " ON " + Sql.quote(tableName) + " (" + Sql.quote(ObjectTable.KEY_COLUMN) + ")");
+            addArtIndexes(connection);
         }
         tableReady = true;
     }
@@ -118,21 +116,44 @@ public final class IndexTable<K, A> {
      */
     public void optimize(Connection connection) {
         String sortedTable = tableName + "_sorted";
-        Sql.execute(connection, "DROP TABLE IF EXISTS " + Sql.quote(sortedTable));
-        Sql.execute(connection, "CREATE TABLE " + Sql.quote(sortedTable) + " AS SELECT "
-                + Sql.quote(ObjectTable.KEY_COLUMN) + ", " + Sql.quote(VALUE_COLUMN)
-                + " FROM " + Sql.quote(tableName) + " ORDER BY " + Sql.quote(VALUE_COLUMN));
-        // Drop the old table with its indexes, then put the sorted copy in its place.
-        boolean hadArtIndexes = createArtIndexes;
-        drop(connection);
-        Sql.execute(connection, "ALTER TABLE " + Sql.quote(sortedTable) + " RENAME TO " + Sql.quote(tableName));
-        if (hadArtIndexes) {
-            Sql.execute(connection, "CREATE INDEX IF NOT EXISTS " + Sql.quote("cqidx_" + tableName + "_value")
-                    + " ON " + Sql.quote(tableName) + " (" + Sql.quote(VALUE_COLUMN) + ")");
-            Sql.execute(connection, "CREATE INDEX IF NOT EXISTS " + Sql.quote("cqidx_" + tableName + "_key")
-                    + " ON " + Sql.quote(tableName) + " (" + Sql.quote(ObjectTable.KEY_COLUMN) + ")");
+        // One transaction: readers take no lock, and between a drop and a rename committed on
+        // their own a query finds no index table at all. Inside it they keep seeing the old one.
+        boolean ownTransaction = Transactions.isAutoCommit(connection);
+        if (ownTransaction) {
+            Transactions.begin(connection);
         }
-        tableReady = true;
+        try {
+            Sql.execute(connection, "DROP TABLE IF EXISTS " + Sql.quote(sortedTable));
+            Sql.execute(connection, "CREATE TABLE " + Sql.quote(sortedTable) + " AS SELECT "
+                    + Sql.quote(ObjectTable.KEY_COLUMN) + ", " + Sql.quote(VALUE_COLUMN)
+                    + " FROM " + Sql.quote(tableName) + " ORDER BY " + Sql.quote(VALUE_COLUMN));
+            // Drop the old table with its indexes, then put the sorted copy in its place.
+            drop(connection);
+            Sql.execute(connection, "ALTER TABLE " + Sql.quote(sortedTable) + " RENAME TO " + Sql.quote(tableName));
+            if (createArtIndexes) {
+                addArtIndexes(connection);
+            }
+            if (ownTransaction) {
+                Transactions.commit(connection);
+            }
+        }
+        catch (RuntimeException e) {
+            if (ownTransaction) {
+                Transactions.rollbackQuietly(connection);
+            }
+            throw e;
+        }
+        finally {
+            // drop() cleared it; after a rollback the old table is still there, so it is ready either way.
+            tableReady = true;
+        }
+    }
+
+    private void addArtIndexes(Connection connection) {
+        Sql.execute(connection, "CREATE INDEX IF NOT EXISTS " + Sql.quote("cqidx_" + tableName + "_value")
+                + " ON " + Sql.quote(tableName) + " (" + Sql.quote(VALUE_COLUMN) + ")");
+        Sql.execute(connection, "CREATE INDEX IF NOT EXISTS " + Sql.quote("cqidx_" + tableName + "_key")
+                + " ON " + Sql.quote(tableName) + " (" + Sql.quote(ObjectTable.KEY_COLUMN) + ")");
     }
 
     /** Opens an appender which writes {@code (objectKey, value)} rows straight into this table. */

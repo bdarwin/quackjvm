@@ -273,18 +273,36 @@ public final class MeasureHistory {
         for (String day : days) {
             String file = fileFor(location, measure, day);
             String pending = pending(measure, day);
-            Sql.execute(live, "COPY (SELECT c.record_id, " + measure.fieldList("c") + ", c.value, r.refresh_id,"
-                    + " r.refreshed_at, r.writer, r.kind, r.seq FROM " + contributionTable(measure) + " c JOIN "
-                    + refreshTable() + " r ON r.refresh_id = c.refresh_id AND r.measure = "
-                    + MeasureTable.literal(measure.getName()) + " WHERE c.refresh_id IN (" + pending
-                    + ") ORDER BY r.seq) TO " + MeasureTable.literal(file) + " (FORMAT parquet, COMPRESSION zstd,"
-                    + " KV_METADATA {" + MeasureTable.METADATA_KEY + ": "
-                    + MeasureTable.literal(measure.definitionJson(day)) + "})");
-            contributions += Sql.queryLong(live, "SELECT count(*) FROM " + contributionTable(measure)
-                    + " WHERE refresh_id IN (" + pending + ")", List.of());
-            refreshes += Sql.executeUpdate(live, "INSERT INTO " + exportTable() + " SELECT "
-                    + MeasureTable.literal(measure.getName()) + ", refresh_id, " + MeasureTable.literal(day) + ", "
-                    + MeasureTable.literal(file) + ", now()::TIMESTAMP FROM (" + pending + ")", List.of());
+            // The file, the count and the ledger entry must agree on which refreshes are pending. In
+            // one transaction they read one snapshot; otherwise a refresh shipped in between would be
+            // recorded as exported without being in the file, and pruning would then delete it.
+            boolean ownTransaction = Transactions.isAutoCommit(live);
+            if (ownTransaction) {
+                Transactions.begin(live);
+            }
+            try {
+                Sql.execute(live, "COPY (SELECT c.record_id, " + measure.fieldList("c") + ", c.value, r.refresh_id,"
+                        + " r.refreshed_at, r.writer, r.kind, r.seq FROM " + contributionTable(measure) + " c JOIN "
+                        + refreshTable() + " r ON r.refresh_id = c.refresh_id AND r.measure = "
+                        + MeasureTable.literal(measure.getName()) + " WHERE c.refresh_id IN (" + pending
+                        + ") ORDER BY r.seq) TO " + MeasureTable.literal(file) + " (FORMAT parquet, COMPRESSION zstd,"
+                        + " KV_METADATA {" + MeasureTable.METADATA_KEY + ": "
+                        + MeasureTable.literal(measure.definitionJson(day)) + "})");
+                contributions += Sql.queryLong(live, "SELECT count(*) FROM " + contributionTable(measure)
+                        + " WHERE refresh_id IN (" + pending + ")", List.of());
+                refreshes += Sql.executeUpdate(live, "INSERT INTO " + exportTable() + " SELECT "
+                        + MeasureTable.literal(measure.getName()) + ", refresh_id, " + MeasureTable.literal(day) + ", "
+                        + MeasureTable.literal(file) + ", now()::TIMESTAMP FROM (" + pending + ")", List.of());
+                if (ownTransaction) {
+                    Transactions.commit(live);
+                }
+            }
+            catch (RuntimeException e) {
+                if (ownTransaction) {
+                    Transactions.rollbackQuietly(live);
+                }
+                throw e;
+            }
             files.add(file);
         }
         return new Exported(files, refreshes, contributions);

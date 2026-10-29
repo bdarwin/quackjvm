@@ -49,7 +49,6 @@ public final class Join<L, R> {
     private final JoinTarget<L> left;
     private final JoinTarget<R> right;
     private final Supplier<Connection> connections;
-    private final QueryOptions queryOptions = new QueryOptions();
 
     private Attribute<L, ?> leftAttribute;
     private Attribute<R, ?> rightAttribute;
@@ -174,6 +173,9 @@ public final class Join<L, R> {
      */
     private Stream<JoinPair<L, R>> applyUntranslatedRestrictions(Stream<JoinPair<L, R>> stream) {
         Stream<JoinPair<L, R>> filtered = stream;
+        // One per call: a restriction reaching another collection opens a request on these
+        // options, and the persistence refuses options shared by two threads at once.
+        QueryOptions queryOptions = new QueryOptions();
         if (untranslated(leftRestriction, left)) {
             Query<L> restriction = leftRestriction;
             filtered = filtered.filter(pair -> restriction.matches(pair.left(), queryOptions));
