@@ -163,6 +163,10 @@ public class CqEngineSwap {
  *   Java heap used     1 MB
  *   DuckDB bytes used  14 MB (native memory, not the heap)
  *
+ * Java heap is what -Xmx sizes and the garbage collector walks. DuckDB's own
+ * bytes are native memory, so the two numbers are not added together, and a
+ * fair comparison of the whole process needs resident set size, not the heap.
+ *
  * Both timings include one-off warm-up; they are not a benchmark. The two "first" cars differ
  * because neither collection promises an order unless the query asks for one.
  */
