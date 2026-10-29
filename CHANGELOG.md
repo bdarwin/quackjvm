@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-10-30
+
+### Upgrading from 1.0.0
+
+- **Built with DuckDB 2.0**: `duckdb_jdbc` 2.0.0.0, up from 1.4.1.0. **It needs 1.5.5 or later.**
+  `DuckDBConnection.duplicate()` changed its return type in DuckDB 1.5 - source-compatible, but
+  **binary**-incompatible - so with a 1.4 driver on the classpath this release fails at run time with
+  `NoSuchMethodError`. The whole suite passes on 1.5.5.1 and on 2.0.0.0.
+- **A database file created by DuckDB 2.0 cannot be opened by DuckDB 1.x**: "Trying to read a
+  database file with version number 999". Files made by 1.4 and 1.5 open, are written and read back
+  under 2.0, and the older drivers still open them afterwards - measured with all three. Only a
+  file 2.0 creates is one-way.
+- **Nothing from 1.0.0 was removed or changed**: every public signature of its 27 public classes is
+  still there. Everything below is new on top of it.
+- Two new artifacts: **`quackjvm-agent`** (guarded queries, the catalog, live tables, Java functions,
+  vector search) and **`quackjvm-dashboard`**. `quackjvm-core` still depends on nothing but DuckDB.
 
 ### Added
 - **`quackjvm-agent`, a module of its own** for SQL and data the application does not write itself - an
@@ -143,8 +158,6 @@
   same keys over and over does no SQL to resolve them after the first time, which was 2.1 ms of a
   6.5 ms refresh of 250 keys. Writing through a definition the tables disagree with is now refused
   outright, pointing at `migrate`, rather than quietly matching keys on the fields it does have.
-
-### Added
 - `MeasureTable`: values that each belong to a record and are identified by several fields - stored
   sparsely, a row per value that exists, with each distinct key held once in a dictionary - and read
   back grouped or pivoted by any of those fields through `query().rows(...).columns(...)`. A field
@@ -204,6 +217,17 @@
 - Examples `CoreConcurrency` and `CqEngineConcurrency`: dashboard users and the `threads`
   setting, your own transactions under conflict, readers during writes, per-collection write
   locks, `serializeWrites`, and the shared-`QueryOptions` guard.
+- **Materializations.** A query precomputed into a DuckDB table, so requests are served from the
+  answer rather than from the data. On ten million rows a panel ranking top makes per region costs
+  25.0 ms against the base table and 0.8 ms against its materialization. `refresh()` rebuilds it
+  without readers ever seeing it missing: the obvious `DROP` then `CREATE TABLE AS` produced 1,280
+  reader failures across fifteen refreshes with four threads reading, and the transactional swap
+  produces none. `appendDelta(...)` folds new rows in for additive measures - 3.5 ms against
+  13.8 ms for a rebuild, with an identical result.
+- `DuckDBDatabase.getStatementCacheStats()`, so the prepared-statement cache can be asserted on
+  rather than inferred from a stopwatch.
+- `SqlTrace.setEnabled(...)`, `countsByStatement()` and `executionCount(...)` - statement counts are
+  exact and machine-independent, which makes them the one part of performance a test can assert.
 
 ### Changed
 - **Built against DuckDB 2.0.0** (`duckdb_jdbc` 2.0.0.0), up from 1.5.5.1. No code change was needed
@@ -251,6 +275,13 @@
   - The dashboard and concurrency guidance was re-measured: `threads=2`, not 4, is now the best
     all-round setting for many concurrent users, and capping concurrent queries costs some
     throughput (41.2 to 34.9 panels/s) while still cutting p99 by a third.
+- `DEFAULT_APPENDER_THRESHOLD` is 16, not 1024 - the measured crossover between prepared statements
+  and the Appender is about 12. A batch of 100 objects goes from 371 µs per object to 44; a batch of
+  1,000 from 345 to 6.9.
+- Small writes delete-then-insert rather than using a conflict clause. DuckDB charges about 600 µs
+  per row for `INSERT OR IGNORE` / `OR REPLACE` whatever the batch size; a delete and a plain insert
+  do the same job for 305 µs.
+- Single-object `add()` is 716 µs, from 3.49 ms.
 
 ### Fixed
 - **A measure export could mark a refresh as exported when it was not in the file**, and pruning then
@@ -297,31 +328,6 @@
   its Javadoc no longer claims that writes through other instances are unaffected. Under steady
   replaces through a second instance it can still fail after ten attempts, rolled back with
   nothing lost; run it through the writers' own instance.
-
-## 1.1.0
-
-**Requires `duckdb_jdbc` 1.5.5 or later.** This is the reason for the minor bump rather than a
-patch: `DuckDBConnection.duplicate()` changed its return type in DuckDB 1.5, which is
-source-compatible but **binary**-incompatible. quackjvm 1.0.0 was compiled against 1.4.1, so
-anyone who brought 1.5.x got a `NoSuchMethodError` out of the published jar. Database files remain
-readable in both directions between 1.4 and 1.5; only the driver pin matters.
-
-### Added
-
-- **Materializations.** A query precomputed into a DuckDB table, so requests are served from the
-  answer rather than from the data. On ten million rows a panel ranking top makes per region costs
-  25.0 ms against the base table and 0.8 ms against its materialization. `refresh()` rebuilds it
-  without readers ever seeing it missing: the obvious `DROP` then `CREATE TABLE AS` produced 1,280
-  reader failures across fifteen refreshes with four threads reading, and the transactional swap
-  produces none. `appendDelta(...)` folds new rows in for additive measures - 3.5 ms against
-  13.8 ms for a rebuild, with an identical result.
-- `DuckDBDatabase.getStatementCacheStats()`, so the prepared-statement cache can be asserted on
-  rather than inferred from a stopwatch.
-- `SqlTrace.setEnabled(...)`, `countsByStatement()` and `executionCount(...)` - statement counts are
-  exact and machine-independent, which makes them the one part of performance a test can assert.
-
-### Fixed
-
 - **A deadlock when several collections were created at once.** Collections were kept in a
   `ConcurrentHashMap` keyed by the collection itself, and an `IndexedCollection` is a `Set`, so its
   `equals` calls `size()` - a database query, run while the map held a bin lock. Keyed by identity
@@ -332,16 +338,6 @@ readable in both directions between 1.4 and 1.5; only the driver pin matters.
   longer serialise against each other: 2,969 objects a second where it was 1,700.
 - `ConnectionPool` no longer retains a statement cache for every connection closed behind its back,
   and no longer re-pools a connection released after `close()`.
-
-### Changed
-
-- `DEFAULT_APPENDER_THRESHOLD` is 16, not 1024 - the measured crossover between prepared statements
-  and the Appender is about 12. A batch of 100 objects goes from 371 µs per object to 44; a batch of
-  1,000 from 345 to 6.9.
-- Small writes delete-then-insert rather than using a conflict clause. DuckDB charges about 600 µs
-  per row for `INSERT OR IGNORE` / `OR REPLACE` whatever the batch size; a delete and a plain insert
-  do the same job for 305 µs.
-- Single-object `add()` is 716 µs, from 3.49 ms.
 
 ## 1.0.0
 

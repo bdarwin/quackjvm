@@ -59,7 +59,7 @@ us against 40 (`AgentVectorSearch`). Not investigated beyond that.
 Same code on both drivers (`AgentGuardedQueries`, three runs on 2.0, two on 1.5), so it is 2.0's
 parser, not the node check added for 2.0. Still well under a millisecond.
 
-### D4. `docs/index.md` carries an old copy of the README's driver table
+### D4. ~~`docs/index.md` carries an old copy of the README's driver table~~ Done for 1.1.0
 It still says nested types have "no write path at all" and UDFs are "not wrapped yet", both since
 done, and its numbers are 1.5's. Replace it with the README's table, or link to it.
 
