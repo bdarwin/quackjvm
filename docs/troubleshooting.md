@@ -125,6 +125,16 @@ The same applies to `database.join(...).stream()` and `Rows.stream()`. Everythin
 `compact()` surfaces this as an error. `optimize()` and `getBytesUsed()` treat the checkpoint as
 housekeeping and carry on without it, so a leak can go unnoticed until you try to reclaim space.
 
+## `DatabaseInUse: Another process has ... open`
+
+DuckDB lets one process open a database file for writing, or any number open it read-only - never a
+writer and anyone else. `Quack.open` throws `DatabaseInUse` for that, with `holderPid()` when DuckDB
+says who (*"Could not set lock on file ... Conflicting lock is held in ... (PID 50405)"*), and a plain
+`IllegalStateException` for everything else, such as a file that is not a database - so a caller can
+open another file rather than delete one it thinks is damaged. Processes that only read can share a
+file with `Quack.builder(path).readOnly(true)`, as long as none has it open for writing. Opening the
+same file twice in one JVM is not this: the driver shares the database.
+
 ## `DuckDBPersistence has been closed`
 
 Something is still using a collection after its persistence, or the `DuckDBDatabase` that owns it,

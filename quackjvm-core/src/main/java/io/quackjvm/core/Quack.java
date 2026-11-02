@@ -130,6 +130,21 @@ public final class Quack implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Opens the file read-only: nothing can be written, and other processes may open it
+         * read-only at the same time - but not while one has it open for writing. See
+         * {@link DatabaseInUse}.
+         */
+        public Builder readOnly(boolean readOnly) {
+            if (readOnly) {
+                settings.setProperty("duckdb.read_only", "true");
+            }
+            else {
+                settings.remove("duckdb.read_only");
+            }
+            return this;
+        }
+
         /** Where the connection pool records what it does. */
         public Builder metrics(QuackMetrics metrics) {
             this.metrics = metrics;
@@ -145,6 +160,11 @@ public final class Quack implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Opens the database.
+         *
+         * @throws DatabaseInUse if another process has the file open in a way that excludes this one
+         */
         public Quack open() {
             DuckDBConnection root;
             try {
@@ -152,6 +172,10 @@ public final class Quack implements AutoCloseable {
                         path == null ? "jdbc:duckdb:" : "jdbc:duckdb:" + path, settings);
             }
             catch (SQLException e) {
+                DatabaseInUse inUse = path == null ? null : DatabaseInUse.from(path, e);
+                if (inUse != null) {
+                    throw inUse;
+                }
                 throw new IllegalStateException("Failed to open " + (path == null ? "an in-memory database" : path), e);
             }
             try {
