@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.1.1 - Unreleased
+
+### Fixed
+- **A query no longer runs what it then reports as failed** (#1). `query(...)`, `Rows` and
+  `SqlQuery.stream` passed any SQL to `executeQuery()`, which runs a statement that returns no rows
+  and only then throws - so `query("DROP TABLE car")` dropped the table and said "Failed to run SQL".
+  The same went for `COPY ... TO`, `ATTACH`, `SET`, `UPDATE`, `EXPORT DATABASE` and
+  `SELECT 1; DROP TABLE car`. They are now refused **before** they run, with an
+  `IllegalStateException` that starts "Not run:" and says to use `execute`. Measured on 1.5.5.1 and
+  2.0.0.0: preparing one statement does not run it and says whether it returns rows, so that is
+  checked after preparing; preparing several statements runs all but the last, and preparing
+  `EXPORT DATABASE` writes the export, so those are refused before preparing. Anything that returns
+  rows runs as before - `PIVOT`, `DESCRIBE`, `EXPLAIN`, `CALL`, and `INSERT ... RETURNING` too. For SQL
+  you did not write, `GuardedQuery` is still the answer.
+- **`TableWriter` no longer keeps its staging table** (#4). It emptied the table after a write and kept
+  it, and DuckDB does not give back the memory of deleted rows, so the data was held twice: 20,000
+  384-float vectors took 64 MB through `TableWriter` against 32 MB appended directly. The table is
+  now dropped when the write ends. Writes cost the same, 1.8-1.9 ms for 32 rows either way.
+- The README and docs still said the driver's appender writes scalars only (#3).
+
+### Added
+- **`Rows.timeout(Duration)`** (#2): `db.query(sql).timeout(Duration.ofSeconds(5)).list(...)` cancels
+  the query if it is still running or being read after that long, and throws the new
+  `io.quackjvm.core.sql.QueryTimedOut`. The connection answers normally afterwards. Without it, a
+  runaway query held the caller until it finished. `io.quackjvm.agent.guard.QueryTimedOut` now extends
+  it, so one catch covers both; `GuardedQuery` and `Rows` share one canceller.
+
+### Changed
+- **More than one statement in a query is refused** (#1), where before every statement but the last
+  ran while being prepared. Run setup statements with `execute`, one at a time. A single statement
+  with a trailing semicolon is still one statement.
+
+### Tests
+- `ConcurrencyStressTest.oneSnapshotNeverSeesAnAddHalfDone` (#5) counts the object table and an index
+  in one statement while adds run: 1,395 snapshots during 300 adds, none torn. The failure reported
+  in #5 was the older test's own race - two counts in two statements - fixed in 1.1.0's tooling.
+
 ## 1.1.0 - 2026-10-30
 
 ### Upgrading from 1.0.0

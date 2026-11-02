@@ -4,7 +4,7 @@
 [![Docs](https://img.shields.io/badge/docs-bdarwin.github.io%2Fquackjvm-blue.svg)](https://bdarwin.github.io/quackjvm/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
-[![Tests](https://img.shields.io/badge/tests-463%20passing-brightgreen.svg)](#building-and-benchmarking)
+[![Tests](https://img.shields.io/badge/tests-480%20passing-brightgreen.svg)](#building-and-benchmarking)
 
 **An embedded analytical engine for the JVM, built on [DuckDB](https://duckdb.org/).**
 
@@ -91,7 +91,7 @@ Measured against `duckdb_jdbc` 2.0.0 (and 1.5.5 before it), and the reason this 
 | reading results | one boxed value per call; `DuckDBVector` is package-private so the columnar chunk already in your JVM is unreachable | Arrow columnar batches - **1M rows x 4 columns: 602 ms to 60 ms** |
 | owning connections | you open, duplicate, pass and close them; one shared between threads **queues** - a quick query waited 1,136 ms behind a slow one - and lets one thread roll back another's write | `Quack`: one object owns them. Every call borrows one and gives it back, a transaction holds one start to end, and **no connection is in sight** unless you ask for one |
 | storing Java objects | write your own row mapping | `ColumnarLayout` maps records, beans or explicit accessors to typed columns |
-| bulk loading | `Appender`, scalars only | `TableWriter` with chunked staging, **2.4 µs per object** |
+| bulk loading | `Appender`: a row at a time, every value appended by hand | `TableWriter` with chunked staging, **2.4 µs per object** |
 | precomputing a query | `CREATE TABLE AS`, and a refresh that breaks readers | `Materialization`, refreshed without a window where the table is missing |
 | LIST / STRUCT / MAP / ARRAY | writable through the appender since 1.5, but every value mapped by hand | a record's own types become the columns - `List<String>` to `VARCHAR[]`, a nested record to a STRUCT, `Map<K,V>` to MAP, `float[]` to `FLOAT[768]` - written and read back, **no Arrow needed**, 59 MB/s |
 | Java UDFs and table functions | **shipped in 1.5** - raw, one callback interface | *quackjvm-agent:* `LiveTables.register(connection, "car", cars, layout)`: a collection queried and joined as a table, projection pushed down, **1M objects joined to 200k stored rows in 44.6 ms with no load step**; `Udfs.register(...)` for a Java method in SQL, nulls decided, **8.8 ns a row** |
@@ -471,7 +471,7 @@ mvn compile
 ## Building and benchmarking
 
 ```
-mvn test                        # 463 tests, across the modules
+mvn test                        # 480 tests, across the modules
 mvn -pl quackjvm-core test      # just core
 mvn -pl quackjvm-agent -am test # the agent module, and the core it builds on
 mvn -pl quackjvm-cqengine -am test  # the CQEngine plugin, and the core it builds on
