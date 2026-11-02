@@ -295,16 +295,42 @@ public final class TableWriter {
         createStagingTable(connection);
         long written = 0;
         long replaced = 0;
-        Iterator<Object[]> rows = concat(buffered.iterator(), remaining);
-        while (rows.hasNext()) {
-            long chunkRows = appendChunkToStagingTable(connection, rows);
-            if (chunkRows == 0) {
-                break;
+        boolean succeeded = false;
+        try {
+            Iterator<Object[]> rows = concat(buffered.iterator(), remaining);
+            while (rows.hasNext()) {
+                long chunkRows = appendChunkToStagingTable(connection, rows);
+                if (chunkRows == 0) {
+                    break;
+                }
+                written += chunkRows;
+                replaced += moveStagedRowsIntoTable(connection, deleteExistingKeys);
             }
-            written += chunkRows;
-            replaced += moveStagedRowsIntoTable(connection, deleteExistingKeys);
+            succeeded = true;
+        }
+        finally {
+            dropStagingTable(connection, succeeded);
         }
         return new WriteResult(written, replaced);
+    }
+
+    /**
+     * Drops the staging table once a write is done with it. Emptying it is not enough: DuckDB keeps
+     * the memory of deleted rows, so a staging table kept between writes held the data a second
+     * time - 64 MB against 32 for 20,000 384-float vectors.
+     *
+     * <p>After a failed write the drop is attempted quietly, so that it never hides the failure; if
+     * it does not happen, the next write empties the table before using it.</p>
+     */
+    private void dropStagingTable(Connection connection, boolean reportFailure) {
+        try {
+            Sql.execute(connection, "DROP TABLE IF EXISTS temp.main." + Sql.quote(stagingTableName));
+        }
+        catch (RuntimeException e) {
+            if (reportFailure) {
+                throw e;
+            }
+        }
     }
 
     private long moveStagedRowsIntoTable(Connection connection, boolean deleteExistingKeys) {
