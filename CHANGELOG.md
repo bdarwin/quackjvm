@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.1 - Unreleased
+## 1.1.1 - 2026-11-03
 
 ### Fixed
 - **A query no longer runs what it then reports as failed** (#1). `query(...)`, `Rows` and

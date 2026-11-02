@@ -73,7 +73,7 @@ examples throughout. This page is the overview; the site is the manual.
 <dependency>
     <groupId>io.github.bdarwin</groupId>
     <artifactId>quackjvm-core</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
 </dependency>
 ```
 
