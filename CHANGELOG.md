@@ -2,6 +2,37 @@
 
 ## 1.2.0 - Unreleased
 
+Nothing from 1.1.1 was removed or changed; everything here is added.
+
+### Added
+- **`DatabaseInUse`** (#8): `Quack.open` throws it when another process holds the file, with
+  `holderPid()` when DuckDB says who, so a caller can open another file instead of matching message
+  text - or deleting a file it took for damaged. Every other failure to open stays a plain
+  `IllegalStateException`. Measured on 2.0.0.0, macOS, with the file held from a second JVM: while a
+  process writes, a second is refused whether it asks to write or to read; while a process reads,
+  another reader is let in and a writer refused. The Windows message is matched but not measured.
+  **`Quack.Builder.readOnly(true)`** opens a file for reading alongside other readers.
+- **The first rows of a guarded query** (#6): `QueryPolicy.whenOver(Over.TRUNCATE)` hands back the
+  rows that fit the row or byte cap, and `GuardedResult.isTruncated()` says there were more -
+  `range(1000)` capped at 50 gives 50 rows, truncated; `range(50)` gives 50, not. Refusing stays the
+  default.
+- **Stopping a guarded query from outside** (#6): `guard.run(sql, cancelSignal)`, and
+  `cancelSignal.cancel()` from any thread stops it with `QueryCancelled` - not a `QueryTimedOut` - and
+  leaves the connection usable. Cancelled beforehand, nothing runs.
+- **`Hardening.options()`** (#9): locked down - no network, no other folder, no extension, no `SET` -
+  except for `allowedFolders(...)`, with `tempFolder`, `memoryLimit` and `threads`. `.properties()`
+  opens a database that way; `Hardening.apply(quack, options)` applies it to one already open, in the
+  order DuckDB needs, and leaves an already locked one as it is. Measured on 1.5.5.1 and 2.0.0.0: an
+  allowed folder's files and those below it are read; another folder, a neighbour whose name starts
+  the same, `..`, a URL, `INSTALL` and `SET` are refused. **An allowed folder can be written too** -
+  `COPY ... TO` and `ATTACH` work there; DuckDB has no read-only form. The temp folder is not allowed,
+  because spilling works without it: 375 MB spilled under a 200 MB limit either way.
+- **`QueryColumns`** (#7): which columns of which tables a query reads, without running it, for
+  filling a lazy column cache. Planned in a database of its own with empty copies of the source's
+  tables and views. It says when it cannot tell - several statements, a file, a table outside `main`,
+  and any `PIVOT`, whose plan on 2.0.0 leaves out exactly the columns it pivots on and sums. 6,000
+  columns: 82 ms to make the planner, 3 ms for a three-column query, 158 ms for `SELECT *`.
+
 ## 1.1.1 - 2026-11-03
 
 ### Fixed
