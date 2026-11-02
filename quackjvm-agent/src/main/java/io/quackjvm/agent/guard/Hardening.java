@@ -3,7 +3,10 @@ package io.quackjvm.agent.guard;
 import io.quackjvm.core.Quack;
 import io.quackjvm.core.duckdb.Sql;
 
+import java.nio.file.Path;
 import java.sql.Connection;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 /**
@@ -37,6 +40,23 @@ import java.util.Properties;
  *     LiveTables.register(sandbox, "car", cars, layout);        // live objects, no file access
  *     GuardedQuery.on(sandbox, QueryPolicy.readOnly()).run(sql);
  * }
+ * </pre>
+ *
+ * <h2>Locked down, but with folders of its own</h2>
+ *
+ * <p>All or nothing is too little for SQL people write over their own files. {@link #options()}
+ * keeps everything else locked - no network, no other folders, no extensions, no {@code SET} - and
+ * lets in the folders named:</p>
+ *
+ * <pre>
+ * Quack db = Quack.builder(path)
+ *         .settings(Hardening.options()
+ *                 .allowedFolders(logFolder, home)
+ *                 .tempFolder(temp)
+ *                 .memoryLimit("4GB").threads(7)
+ *                 .properties())
+ *         .open();
+ * // or, for a database already open:  Hardening.apply(db, options)
  * </pre>
  */
 public enum Hardening {
@@ -85,6 +105,169 @@ public enum Hardening {
      */
     public static Quack openSandbox() {
         return Quack.builder(null).settings(sandboxProperties()).open();
+    }
+
+    /** Hardening that lets in folders of its own, with a temp folder and limits: see {@link Options}. */
+    public static Options options() {
+        return new Options(List.of(), null, null, 0);
+    }
+
+    /**
+     * Applies options to a database that is already open, in the order DuckDB needs: the folders
+     * before external access goes, everything before the configuration is locked. A database
+     * whose configuration is locked already is left as it is - which is what a second
+     * {@code Quack} on the same file in the same JVM finds, since the two share one database.
+     */
+    public static void apply(Connection connection, Options options) {
+        if (isLocked(connection)) {
+            return;
+        }
+        if (isHardened(connection) && !options.getAllowedFolders().isEmpty()) {
+            throw new IllegalStateException("This database has had external access taken away already, and DuckDB"
+                    + " lets folders in only before that: open it with Hardening.options()...properties() instead.");
+        }
+        for (String statement : options.statements()) {
+            Sql.execute(connection, statement);
+        }
+    }
+
+    /** As {@link #apply(Connection, Options)}, on a {@link Quack}'s database. */
+    public static void apply(Quack quack, Options options) {
+        apply(quack.sharedConnection(), options);
+    }
+
+    /** Whether this database's configuration can no longer be changed. */
+    public static boolean isLocked(Connection connection) {
+        return Sql.queryLong(connection, "SELECT count(*) FROM duckdb_settings()"
+                + " WHERE name = 'lock_configuration' AND value = 'true'", java.util.List.of()) > 0;
+    }
+
+    /**
+     * A locked-down database that can still use the folders it is given.
+     *
+     * <p>Measured on duckdb_jdbc 1.5.5.1 and 2.0.0.0, with a folder allowed: files in it and in the
+     * folders below it are read; a file in any other folder, a neighbour whose name starts the same
+     * ({@code /data2} when {@code /data} is allowed), a way out through {@code ..}, a URL,
+     * {@code INSTALL} and {@code SET} are all refused.</p>
+     *
+     * <p><b>An allowed folder can be written as well as read.</b> DuckDB has no read-only form of
+     * it: {@code COPY ... TO} and {@code ATTACH} of a file in an allowed folder both work - measured.
+     * {@link GuardedQuery} refuses both statements, so SQL that goes through it only reads; SQL run
+     * on the database directly can write there.</p>
+     *
+     * <p><b>The temp folder is not added to the allowed ones.</b> DuckDB spills into it whether or
+     * not it is listed - a sort of 8 million rows under a 200 MB limit wrote 375 MB of temp files
+     * either way, measured - and listing it would let SQL read and write the spill files.</p>
+     */
+    public static final class Options {
+
+        private final List<String> allowedFolders;
+        private final String tempFolder;
+        private final String memoryLimit;
+        private final int threads;
+
+        private Options(List<String> allowedFolders, String tempFolder, String memoryLimit, int threads) {
+            this.allowedFolders = List.copyOf(allowedFolders);
+            this.tempFolder = tempFolder;
+            this.memoryLimit = memoryLimit;
+            this.threads = threads;
+        }
+
+        /** Folders whose files - and those of the folders below them - SQL may use. */
+        public Options allowedFolders(String... folders) {
+            List<String> all = new ArrayList<>(allowedFolders);
+            for (String folder : folders) {
+                all.add(Path.of(folder).toAbsolutePath().normalize().toString());
+            }
+            return new Options(all, tempFolder, memoryLimit, threads);
+        }
+
+        /** Where DuckDB spills what does not fit in memory. */
+        public Options tempFolder(String folder) {
+            return new Options(allowedFolders, Path.of(folder).toAbsolutePath().normalize().toString(), memoryLimit,
+                    threads);
+        }
+
+        /** DuckDB's {@code memory_limit}, such as {@code "4GB"}. */
+        public Options memoryLimit(String limit) {
+            return new Options(allowedFolders, tempFolder, limit, threads);
+        }
+
+        /** How many threads DuckDB may use. */
+        public Options threads(int count) {
+            if (count < 1) {
+                throw new IllegalArgumentException("At least one thread: " + count);
+            }
+            return new Options(allowedFolders, tempFolder, memoryLimit, count);
+        }
+
+        public List<String> getAllowedFolders() {
+            return allowedFolders;
+        }
+
+        /** The properties to open a database with, so that it starts this way and stays so. */
+        public Properties properties() {
+            Properties properties = new Properties();
+            if (memoryLimit != null) {
+                properties.setProperty("memory_limit", memoryLimit);
+            }
+            if (threads > 0) {
+                properties.setProperty("threads", Integer.toString(threads));
+            }
+            if (tempFolder != null) {
+                properties.setProperty("temp_directory", tempFolder);
+            }
+            properties.setProperty("autoinstall_known_extensions", "false");
+            properties.setProperty("autoload_known_extensions", "false");
+            if (!allowedFolders.isEmpty()) {
+                properties.setProperty("allowed_directories", folderList());
+            }
+            properties.setProperty("enable_external_access", "false");
+            properties.setProperty("lock_configuration", "true");
+            return properties;
+        }
+
+        /** The same as statements, in the order a running database needs them. */
+        List<String> statements() {
+            List<String> statements = new ArrayList<>();
+            if (memoryLimit != null) {
+                statements.add("SET memory_limit = " + literal(memoryLimit));
+            }
+            if (threads > 0) {
+                statements.add("SET threads = " + threads);
+            }
+            if (tempFolder != null) {
+                statements.add("SET temp_directory = " + literal(tempFolder));
+            }
+            statements.add("SET autoinstall_known_extensions = false");
+            statements.add("SET autoload_known_extensions = false");
+            if (!allowedFolders.isEmpty()) {
+                // Before external access goes: afterwards the list can no longer be changed.
+                statements.add("SET allowed_directories = " + folderList());
+            }
+            statements.add("SET enable_external_access = false");
+            // Last: once locked, nothing above could be set.
+            statements.add("SET lock_configuration = true");
+            return statements;
+        }
+
+        private String folderList() {
+            StringBuilder list = new StringBuilder("[");
+            for (int i = 0; i < allowedFolders.size(); i++) {
+                list.append(i == 0 ? "" : ", ").append(literal(allowedFolders.get(i)));
+            }
+            return list.append(']').toString();
+        }
+
+        private static String literal(String value) {
+            return "'" + value.replace("'", "''") + "'";
+        }
+
+        @Override
+        public String toString() {
+            return "Hardening.Options[folders=" + allowedFolders + ", temp=" + tempFolder + ", memory=" + memoryLimit
+                    + ", threads=" + threads + "]";
+        }
     }
 
     /** The properties to open a database with so that it starts hardened and stays that way. */

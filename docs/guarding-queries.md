@@ -78,6 +78,43 @@ QueryPolicy.readOnly()
 - **maxBytes** is counted as the values are read, and is an estimate: two bytes a character, eight for
   a number, the length of a blob.
 
+### The first rows, said to be the first
+
+Refusing is the right answer for an agent that would read a partial answer as a whole one. A person
+paging through a large result wants its first rows instead:
+
+```java
+GuardedQuery firstRows = GuardedQuery.on(quack, QueryPolicy.readOnly()
+        .maxRows(100)
+        .whenOver(QueryPolicy.Over.TRUNCATE));
+
+GuardedResult page = firstRows.run("SELECT * FROM events ORDER BY at");
+page.getRows();        // at most 100
+page.isTruncated();    // true when there were more
+```
+
+The row cap is still the `LIMIT` around the statement, one row over, so the extra row is what says
+there were more - `range(1000)` with a cap of 50 gives 50 rows and `isTruncated()`, `range(50)` gives
+50 and not. The byte cap cuts short the same way, before the row that would cross it. Refusing stays
+the default.
+
+### Stopping it from outside
+
+The timeout stops a query nobody is watching. A Stop button, or a caller that was itself cancelled,
+needs to stop it now:
+
+```java
+CancelSignal stop = new CancelSignal();
+executor.submit(() -> guard.run(sql, stop));
+...
+stop.cancel();         // the run throws QueryCancelled
+```
+
+It is the same `Statement.cancel()` the timeout uses, so the connection stays usable; tested on a
+query that would run for minutes, stopped within two seconds of the cancel. `QueryCancelled` is not a
+`QueryTimedOut`: no limit was reached. A signal cancelled before the run starts stops it before
+anything runs, and one cancelled after it finished changes nothing.
+
 ## What it can reach: hardening
 
 `Hardening.DATABASE` takes away the database's access to files, extensions and the network, so a
@@ -106,6 +143,41 @@ A second, empty database opened with external access off and the configuration l
 database can still see live Java objects through a registered table function, and can hold tables
 copied into it - both measured - so an agent gets a database with no way out while the database your
 application writes to keeps everything it had.
+
+### Locked down, with folders of its own
+
+All or nothing is too little for SQL people write over their own files. `Hardening.options()` locks
+everything else - no network, no other folder, no extension, no `SET` - and lets in the folders named:
+
+```java
+Hardening.Options options = Hardening.options()
+        .allowedFolders(logFolder, home)
+        .tempFolder(temp)
+        .memoryLimit("4GB")
+        .threads(7);
+
+Quack db = Quack.builder(path).settings(options.properties()).open();   // starts that way
+Hardening.apply(otherDb, options);                                       // or, once open
+```
+
+On a database already open, `apply` sets them in the order DuckDB needs - the folders before
+external access goes, everything before the configuration is locked - and leaves a database whose
+configuration is locked already as it is.
+
+Measured on duckdb_jdbc 1.5.5.1 and 2.0.0.0, with a folder allowed:
+
+- Its files, and those of the folders below it, are read. A file in any other folder, a neighbour
+  whose name starts the same (`/logs2` when `/logs` is allowed), a way out through `..`, a URL,
+  `INSTALL` and `SET` are all refused.
+- **An allowed folder can be written as well as read.** DuckDB has no read-only form of it:
+  `COPY ... TO` and `ATTACH` of a file there both work. `GuardedQuery` refuses both statements, so
+  SQL that goes through it only reads; SQL run on the database directly can write there.
+- **The temp folder is not added to the allowed ones**, because it does not need to be: sorting 8
+  million rows under a 200 MB limit spilled 375 MB into it either way, and listing it would let SQL
+  read and write the spill files.
+- One JVM opening the same file twice shares one database. With the same options that is fine;
+  with different ones the driver refuses - *"Can't open a connection to same database file with a
+  different configuration"* - so the second open never meets a lock it did not expect.
 
 ## What it costs
 

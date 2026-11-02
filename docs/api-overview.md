@@ -17,7 +17,8 @@ against 0 ms on its own ([`CoreConnectionFacts`](https://github.com/bdarwin/quac
 | method | notes |
 |---|---|
 | `static Quack open(path)`, `inMemory()` | A file, created if absent; or memory only. |
-| `static Builder builder(path)` | `.settings(properties)`, `.history(location)`, `.metrics(quackMetrics)`, `.connections(idle)`, then `.open()`. DuckDB settings are applied and the history attached once, at open. A null path is in memory. |
+| `static Builder builder(path)` | `.settings(properties)`, `.history(location)`, `.metrics(quackMetrics)`, `.connections(idle)`, `.readOnly(true)`, then `.open()`. DuckDB settings are applied and the history attached once, at open. A null path is in memory. |
+| `DatabaseInUse` | Thrown by `open` when another process holds the file: `getPath()`, `holderPid()`. DuckDB lets one process write a file or any number read it (`readOnly(true)`), never both. Every other failure to open is a plain `IllegalStateException`. |
 | `static Quack on(DuckDBConnection)` | A database the program already has open. Works on connections duplicated from the one given, and never uses or closes that one. |
 | `Rows query(sql, params...)`, `Rows query(MeasureQuery)` | Run at the terminal method; each borrows a connection for that. |
 | `int execute(sql, params...)` | A statement that changes something; rows changed. |
@@ -216,15 +217,21 @@ GuardedQuery guard = GuardedQuery.on(quack, QueryPolicy.readOnly()      // or on
 
 GuardedResult result = guard.run(sql);   // QueryRejected / QueryTimedOut / ResultTruncated
 String why = guard.whyRejected(sql);     // null when it would be allowed
+guard.run(sql, cancelSignal);            // QueryCancelled once cancelSignal.cancel() is called
 ```
 
 - `QueryPolicy.readOnly()` - five seconds, ten thousand rows, eight megabytes, EXPLAIN allowed;
-  `timeout`, `maxRows`, `maxBytes`, `allowExplain`, `allowUnverified(PIVOT)`, `hardening` return copies.
+  `timeout`, `maxRows`, `maxBytes`, `allowExplain`, `allowUnverified(PIVOT)`, `hardening` and
+  `whenOver(Over.REFUSE | Over.TRUNCATE)` return copies. Under `TRUNCATE` the rows that fit come back
+  and `GuardedResult.isTruncated()` says there were more.
 - The statement is checked by DuckDB's parser (`json_serialize_sql`), never by preparing it - with this
   driver, preparing a multi-statement string executes all but the last.
 - `Hardening.DATABASE` takes file, extension and network access away from **the whole database**,
   irreversibly; `Hardening.apply(quack)` does it to a `Quack`'s. `Hardening.openSandbox()` opens a
   separate `Quack` that starts that way, and `Hardening.sandbox()` a bare connection to one.
+- `Hardening.options().allowedFolders(...).tempFolder(...).memoryLimit(...).threads(...)` locks a
+  database down except for the folders named: `.properties()` to open it that way,
+  `Hardening.apply(quack, options)` once open. An allowed folder can be written as well as read.
 - `GuardedResult` carries columns, SQL types, rows, elapsed time, an estimated byte count, and
   `toText()` for something that reads text.
 
