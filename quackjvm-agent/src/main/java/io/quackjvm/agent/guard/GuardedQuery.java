@@ -2,7 +2,8 @@ package io.quackjvm.agent.guard;
 
 import io.quackjvm.core.Quack;
 import io.quackjvm.agent.guard.internal.ParserGate;
-import io.quackjvm.agent.guard.internal.SqlScanner;
+import io.quackjvm.core.internal.Deadline;
+import io.quackjvm.core.internal.SqlScanner;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -13,11 +14,6 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Runs SQL that came from somewhere you do not control.
@@ -55,12 +51,6 @@ public final class GuardedQuery {
 
     /** Named so that it cannot collide with a table in the statement being wrapped. */
     private static final String WRAPPER = "quackjvm_guarded";
-
-    private static final ScheduledExecutorService CANCELLERS = Executors.newSingleThreadScheduledExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "quackjvm-query-timeout");
-        thread.setDaemon(true);
-        return thread;
-    });
 
     private final Connection connection;
     private final QueryPolicy policy;
@@ -193,26 +183,15 @@ public final class GuardedQuery {
             }
         }
         long started = System.nanoTime();
-        AtomicBoolean cancelled = new AtomicBoolean();
+        Deadline deadline = null;
         try (PreparedStatement statement = connection.prepareStatement(toRun)) {
-            ScheduledFuture<?> canceller = CANCELLERS.schedule(() -> {
-                cancelled.set(true);
-                try {
-                    statement.cancel();
-                }
-                catch (SQLException ignored) {
-                    // The statement finished first, or the connection went away.
-                }
-            }, policy.getTimeout().toMillis(), TimeUnit.MILLISECONDS);
-            try (ResultSet rows = statement.executeQuery()) {
+            deadline = Deadline.start(statement, policy.getTimeout());
+            try (Deadline running = deadline; ResultSet rows = statement.executeQuery()) {
                 return read(rows, started, capped);
-            }
-            finally {
-                canceller.cancel(false);
             }
         }
         catch (SQLException e) {
-            if (cancelled.get()) {
+            if (deadline != null && deadline.hasExpired()) {
                 throw new QueryTimedOut(policy.getTimeout(), e);
             }
             throw new QueryRejected(sql, "DuckDB refused to run this: " + firstLine(e));

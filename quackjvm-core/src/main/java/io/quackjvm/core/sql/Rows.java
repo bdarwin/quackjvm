@@ -6,12 +6,15 @@ import io.quackjvm.core.arrow.ArrowResult;
 import io.quackjvm.core.arrow.ArrowSupport;
 import io.quackjvm.core.duckdb.DuckDBTypes;
 import io.quackjvm.core.duckdb.Sql;
+import io.quackjvm.core.internal.Deadline;
+import io.quackjvm.core.internal.ReadCheck;
 import io.quackjvm.core.layout.ColumnarLayout;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -44,24 +47,49 @@ import java.util.stream.Stream;
  *
  * <p>Each terminal method runs the query once and releases its resources, so a {@code Rows} is used
  * once. The exception is {@link #stream()}, which is lazy and must be closed.</p>
+ *
+ * <h2>It reads</h2>
+ *
+ * <p>A statement that returns no rows - {@code DROP}, {@code COPY ... TO}, {@code ATTACH},
+ * {@code SET} - is refused before it runs, as is more than one statement; run those with
+ * {@code execute}. Anything that returns rows runs, {@code INSERT ... RETURNING} included, so this
+ * guards against mistakes in your own SQL. For SQL you did not write, use {@code GuardedQuery} in
+ * quackjvm-agent.</p>
+ *
+ * <h2>Timeouts</h2>
+ *
+ * <pre>
+ * db.query(sql).timeout(Duration.ofSeconds(5)).list(String.class);   // QueryTimedOut after 5 s
+ * </pre>
  */
 public final class Rows {
 
     private final Connection connection;
     private final String sql;
     private final Object[] parameters;
+    private final Duration timeout;
 
-    private Rows(Connection connection, String sql, Object[] parameters) {
+    private Rows(Connection connection, String sql, Object[] parameters, Duration timeout) {
         this.connection = connection;
         this.sql = sql;
         this.parameters = parameters;
+        this.timeout = timeout;
     }
 
     /**
      * @param connection a connection each terminal method borrows and closes; pass a fresh one
      */
     public static Rows of(Connection connection, String sql, Object... parameters) {
-        return new Rows(connection, sql, parameters);
+        return new Rows(connection, sql, parameters, null);
+    }
+
+    /**
+     * Cancels the query if it is still running - or still being read - after this long, and throws
+     * {@link QueryTimedOut}. The connection is usable afterwards. Without it, a query runs for as
+     * long as it takes.
+     */
+    public Rows timeout(Duration timeout) {
+        return new Rows(connection, sql, parameters, Deadline.check(timeout));
     }
 
     /**
@@ -78,8 +106,10 @@ public final class Rows {
     public <T> Optional<T> scalarOptional(Class<T> type) {
         // A one-row result is not worth an Arrow export: setting up a columnar batch costs more
         // than reading one value.
+        Deadline deadline = null;
         try (PreparedStatement statement = prepare()) {
-            try (ResultSet resultSet = statement.executeQuery()) {
+            deadline = Deadline.start(statement, timeout);
+            try (Deadline running = deadline; ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
                     return Optional.empty();
                 }
@@ -88,8 +118,8 @@ public final class Rows {
                 return Optional.ofNullable(value);
             }
         }
-        catch (SQLException e) {
-            throw new IllegalStateException("Failed to run: " + sql, e);
+        catch (SQLException | RuntimeException e) {
+            throw failed(e, deadline);
         }
         finally {
             Sql.closeQuietly(connection);
@@ -163,8 +193,20 @@ public final class Rows {
     /** How many rows the query returns, without reading any of them. */
     public long count() {
         try {
-            return Rows.of(connection, "SELECT count(*) FROM (" + sql + ")", parameters)
+            // The statement itself is checked, not only the count around it, so that a refusal says why.
+            try (PreparedStatement statement = prepare()) {
+                // prepared and checked; not run
+            }
+            catch (SQLException | RuntimeException e) {
+                // The count below would have closed the connection; it is not going to run.
+                Sql.closeQuietly(connection);
+                throw e instanceof RuntimeException runtime ? runtime : new IllegalStateException("Failed to run: " + sql, e);
+            }
+            return new Rows(connection, "SELECT count(*) FROM (" + sql + ")", parameters, timeout)
                     .scalar(Long.class);
+        }
+        catch (QueryTimedOut | ReadCheck.Refused e) {
+            throw e;
         }
         catch (RuntimeException e) {
             throw new IllegalStateException("Failed to count the rows of: " + sql, e);
@@ -180,7 +222,7 @@ public final class Rows {
 
     /** A lazy stream of untyped rows. Holds the connection, so close it. */
     public Stream<SqlRow> stream() {
-        return SqlQuery.stream(connection, sql, parameters);
+        return SqlQuery.stream(connection, sql, timeout, parameters);
     }
 
     // ---------- Reading ----------
@@ -194,13 +236,19 @@ public final class Rows {
     }
 
     private void readThroughArrow(BatchConsumer consumer) {
-        try (ArrowResult result = ArrowResult.of(prepare(), ArrowResult.DEFAULT_BATCH_SIZE)) {
-            for (ArrowBatch batch : result) {
-                consumer.accept(batch);
+        Deadline deadline = null;
+        try {
+            PreparedStatement statement = prepare();
+            deadline = Deadline.start(statement, timeout);
+            try (Deadline running = deadline;
+                 ArrowResult result = ArrowResult.of(statement, ArrowResult.DEFAULT_BATCH_SIZE)) {
+                for (ArrowBatch batch : result) {
+                    consumer.accept(batch);
+                }
             }
         }
-        catch (SQLException e) {
-            throw new IllegalStateException("Failed to run: " + sql, e);
+        catch (SQLException | RuntimeException e) {
+            throw failed(e, deadline);
         }
         finally {
             Sql.closeQuietly(connection);
@@ -208,25 +256,50 @@ public final class Rows {
     }
 
     private void readThroughJdbc(RowConsumer consumer) {
+        Deadline deadline = null;
         try (PreparedStatement statement = prepare()) {
-            try (ResultSet resultSet = statement.executeQuery()) {
+            deadline = Deadline.start(statement, timeout);
+            try (Deadline running = deadline; ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     consumer.accept(resultSet);
                 }
             }
         }
-        catch (SQLException e) {
-            throw new IllegalStateException("Failed to run: " + sql, e);
+        catch (SQLException | RuntimeException e) {
+            throw failed(e, deadline);
         }
         finally {
             Sql.closeQuietly(connection);
         }
     }
 
+    /** The statement, prepared and bound but not run - and refused if running it would not just read. */
     private PreparedStatement prepare() throws SQLException {
+        ReadCheck.beforePreparing(sql);
         PreparedStatement statement = connection.prepareStatement(sql);
-        Sql.bindAll(statement, Arrays.asList(parameters), 1);
+        try {
+            ReadCheck.afterPreparing(statement, sql);
+            Sql.bindAll(statement, Arrays.asList(parameters), 1);
+        }
+        catch (SQLException | RuntimeException e) {
+            Sql.closeQuietly(statement);
+            throw e;
+        }
         return statement;
+    }
+
+    /**
+     * What to throw: a timeout if the deadline cancelled the query; otherwise an unchecked exception
+     * as it was thrown - the caller's own, from a consumer, included - and a SQLException wrapped.
+     */
+    private RuntimeException failed(Exception e, Deadline deadline) {
+        if (deadline != null && deadline.hasExpired()) {
+            return new QueryTimedOut(timeout, e);
+        }
+        if (e instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        return new IllegalStateException("Failed to run: " + sql, e);
     }
 
     private static Object convert(Object value, Class<?> type) {

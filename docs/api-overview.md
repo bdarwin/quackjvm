@@ -139,8 +139,15 @@ one; nothing runs until you ask for a shape, and the shape decides how the resul
 | `long count()` | Wraps the query in a `count(*)` rather than reading and discarding rows. |
 | `void forEachRow(Consumer<SqlRow>)` | Raw rows, for a dynamic shape such as a `PIVOT`. |
 | `Stream<SqlRow> stream()` | **Holds a connection; must be closed.** |
+| `Rows timeout(Duration)` | Cancels the query if it is still running, or still being read, after this long, and throws `QueryTimedOut`. The connection is usable afterwards. Returns a copy. |
 
 Every method except `stream()` closes the connection, statement and result set itself.
+
+**It reads.** A statement that returns no rows - `DROP`, `COPY ... TO`, `ATTACH`, `SET` - is refused
+before it runs, with an `IllegalStateException` starting "Not run:"; so is more than one statement,
+because DuckDB's driver runs all but the last while preparing them. Run those with `execute`.
+Anything that returns rows runs, `INSERT ... RETURNING` included: this guards against mistakes in
+your own SQL. For SQL you did not write, use `GuardedQuery` in quackjvm-agent.
 
 `scalar` and `scalarOptional` deliberately read through JDBC: setting up a columnar export costs
 more than reading one value. `list`, `records` and the `forEach` forms use Arrow when it is

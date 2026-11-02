@@ -1,0 +1,269 @@
+package io.quackjvm.core.sql;
+
+import io.quackjvm.core.Quack;
+import io.quackjvm.core.metrics.QuackMetrics;
+import org.duckdb.DuckDBConnection;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+
+import java.io.File;
+import java.sql.DriverManager;
+import java.time.Duration;
+import java.util.List;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+/** A query reads: it refuses what would change something, before it runs, and it can be stopped. */
+public class RowsTest {
+
+    /**
+     * Long enough to be cancelled many times over: a cross join of 90 billion rows. The tests that
+     * run it have a JUnit timeout, so that a timeout which does nothing fails rather than hangs.
+     */
+    private static final String SLOW = "SELECT sum(a.range * b.range) FROM range(300000) a, range(300000) b";
+
+    public record Item(Long id, String name) {
+    }
+
+    @Rule
+    public TemporaryFolder folder = new TemporaryFolder();
+
+    private QuackMetrics metrics;
+    private Quack db;
+
+    @Before
+    public void open() {
+        metrics = new QuackMetrics();
+        db = Quack.builder(new File(folder.getRoot(), "rows.duckdb").getPath()).metrics(metrics).connections(2).open();
+        db.execute("CREATE TABLE car AS SELECT range AS id, 'make' || range AS name FROM range(10)");
+    }
+
+    @After
+    public void close() {
+        db.close();
+    }
+
+    private String path(String name) {
+        return new File(folder.getRoot(), name).getPath();
+    }
+
+    private long cars() {
+        return db.query("SELECT count(*) FROM car WHERE id < 10").scalar(Long.class);
+    }
+
+    private double inUse() {
+        return metrics.snapshot().gauge(QuackMetrics.CONNECTIONS_IN_USE);
+    }
+
+    /** Every way of reading a query, so that each is checked. */
+    private static final List<Consumer<Rows>> READS = List.of(
+            rows -> rows.scalar(Long.class),
+            rows -> rows.scalarOptional(Long.class),
+            rows -> rows.list(Long.class),
+            rows -> rows.records(Item.class),
+            rows -> rows.forEachRow(row -> { }),
+            Rows::count,
+            rows -> {
+                try (Stream<SqlRow> stream = rows.stream()) {
+                    stream.forEach(row -> { });
+                }
+            });
+
+    private void assertRefusedAndNotRun(String sql) {
+        for (int i = 0; i < READS.size(); i++) {
+            try {
+                READS.get(i).accept(db.query(sql));
+                fail("read " + i + " ran " + sql);
+            }
+            catch (IllegalStateException expected) {
+                assertTrue("read " + i + ": " + expected.getMessage(), expected.getMessage().startsWith("Not run:"));
+            }
+            assertEquals("read " + i + " of " + sql + " changed the table", 10, cars());
+        }
+        assertEquals(0.0, inUse(), 0.0);
+    }
+
+    // ---------- #1: a read refuses what is not one, before it runs ----------
+
+    @Test
+    public void aStatementThatReturnsNoRowsIsRefusedBeforeItRuns() {
+        assertRefusedAndNotRun("DROP TABLE car");
+        assertRefusedAndNotRun("UPDATE car SET id = id + 100");
+        assertRefusedAndNotRun("DELETE FROM car");
+        assertRefusedAndNotRun("CREATE TABLE other AS SELECT 1");
+
+        assertRefusedAndNotRun("COPY car TO '" + path("car.csv") + "'");
+        assertFalse(new File(path("car.csv")).exists());
+
+        assertRefusedAndNotRun("ATTACH '" + path("other.duckdb") + "' AS other");
+        assertFalse(new File(path("other.duckdb")).exists());
+
+        assertRefusedAndNotRun("SET default_order = 'DESC'");
+        assertEquals("ASCENDING", db.query("SELECT current_setting('default_order')").scalar(String.class));
+    }
+
+    @Test
+    public void moreThanOneStatementIsRefusedWithoutAnyOfItRunning() {
+        assertRefusedAndNotRun("SELECT 1; DROP TABLE car");
+        // Preparing this would run the DROP, so it is refused before it is prepared.
+        assertRefusedAndNotRun("DROP TABLE car; SELECT 1");
+        assertRefusedAndNotRun("SELECT 1; SELECT 2");
+    }
+
+    @Test
+    public void anExportIsRefusedBeforePreparingItWritesTheFiles() {
+        assertRefusedAndNotRun("EXPORT DATABASE '" + path("dump") + "'");
+        assertFalse(new File(path("dump")).exists());
+    }
+
+    @Test
+    public void whatReturnsRowsStillRuns() {
+        assertEquals(Long.valueOf(1), db.query("SELECT 1;").scalar(Long.class));
+        assertEquals("a;b", db.query("SELECT 'a;b' -- a comment; with a semicolon\n").scalar(String.class));
+        assertEquals(Long.valueOf(10), db.query("FROM car SELECT count(*)").scalar(Long.class));
+        assertEquals(2, db.query("DESCRIBE car").list(String.class).size());
+        assertEquals(2, db.query("SUMMARIZE car").list(String.class).size());
+        assertEquals(2, db.query("PRAGMA table_info('car')").list(Integer.class).size());
+        assertEquals(1, db.query("PIVOT (SELECT name FROM car) ON name IN ('make1', 'make2') USING count(*)").count());
+        assertFalse(db.query("EXPLAIN SELECT * FROM car").list(String.class).isEmpty());
+        assertFalse(db.query("CALL pragma_version()").list(String.class).isEmpty());
+        assertEquals(List.of("car"), db.query("SHOW TABLES").list(String.class));
+        assertEquals(Long.valueOf(3), db.query("SELECT id FROM car WHERE id = ?", 3).scalar(Long.class));
+        // It returns rows, so it runs, and writes: a guard against mistakes, not against SQL you did not write.
+        assertEquals(Long.valueOf(99), db.query("INSERT INTO car VALUES (99, 'x') RETURNING id").scalar(Long.class));
+    }
+
+    @Test
+    public void theLowerLevelRefusesAsWell() throws Exception {
+        try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
+            connection.createStatement().execute("CREATE TABLE car AS SELECT range AS id FROM range(10)");
+            for (String sql : List.of("DROP TABLE car", "SELECT 1; DROP TABLE car")) {
+                try {
+                    Rows.of(connection.duplicate(), sql).forEachRow(row -> { });
+                    fail("ran " + sql);
+                }
+                catch (IllegalStateException expected) {
+                    assertTrue(expected.getMessage(), expected.getMessage().startsWith("Not run:"));
+                }
+                try {
+                    SqlQuery.stream(connection.duplicate(), sql).close();
+                    fail("ran " + sql);
+                }
+                catch (IllegalStateException expected) {
+                    assertTrue(expected.getMessage(), expected.getMessage().startsWith("Not run:"));
+                }
+            }
+            assertEquals(Long.valueOf(10), Rows.of(connection.duplicate(), "SELECT count(*) FROM car").scalar(Long.class));
+        }
+    }
+
+    @Test
+    public void aRefusalClosesTheConnectionItWasGiven() throws Exception {
+        try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
+            connection.createStatement().execute("CREATE TABLE car AS SELECT range AS id FROM range(10)");
+            for (int i = 0; i < READS.size(); i++) {
+                java.sql.Connection given = connection.duplicate();
+                try {
+                    READS.get(i).accept(Rows.of(given, "DROP TABLE car"));
+                    fail("read " + i + " ran it");
+                }
+                catch (IllegalStateException expected) {
+                    // refused
+                }
+                assertTrue("read " + i + " left its connection open", given.isClosed());
+            }
+        }
+    }
+
+    @Test
+    public void aCallersOwnExceptionComesOutAsItWasThrown() {
+        IllegalArgumentException mine = new IllegalArgumentException("mine");
+        try {
+            db.query("SELECT id FROM car").forEachRow(row -> {
+                throw mine;
+            });
+            fail("the consumer's exception was swallowed");
+        }
+        catch (IllegalArgumentException e) {
+            assertTrue(e == mine);
+        }
+        assertEquals(0.0, inUse(), 0.0);
+    }
+
+    // ---------- #2: a query can be stopped ----------
+
+    private void assertTimesOutPromptly(Consumer<Rows> read) {
+        long started = System.nanoTime();
+        try {
+            read.accept(db.query(SLOW).timeout(Duration.ofMillis(200)));
+            fail("the query should have timed out");
+        }
+        catch (QueryTimedOut expected) {
+            assertEquals(Duration.ofMillis(200), expected.getLimit());
+            assertTrue(expected.getMessage(), expected.getMessage().contains("200 ms"));
+        }
+        long ms = (System.nanoTime() - started) / 1_000_000;
+        assertTrue("took " + ms + " ms to give control back", ms < 5_000);
+        assertEquals(0.0, inUse(), 0.0);
+    }
+
+    @Test(timeout = 60_000)
+    public void aQueryPastItsTimeoutIsCancelledAndSaysSo() {
+        for (Consumer<Rows> read : READS) {
+            assertTimesOutPromptly(read);
+        }
+    }
+
+    @Test(timeout = 60_000)
+    public void theConnectionAnswersNormallyAfterATimeout() {
+        assertTimesOutPromptly(rows -> rows.scalar(Long.class));
+        // Both pooled connections, more than once each.
+        for (int i = 0; i < 6; i++) {
+            assertEquals(Long.valueOf(10), db.query("SELECT count(*) FROM car").scalar(Long.class));
+        }
+        db.inTransaction(tx -> assertEquals(Long.valueOf(10), tx.query("SELECT count(*) FROM car").scalar(Long.class)));
+    }
+
+    @Test
+    public void aQueryThatFinishesInTimeIsUntouched() {
+        for (int i = 0; i < 200; i++) {
+            assertEquals(Long.valueOf(45),
+                    db.query("SELECT sum(id) FROM car").timeout(Duration.ofSeconds(30)).scalar(Long.class));
+        }
+    }
+
+    @Test
+    public void aTimeoutMustBePositive() {
+        for (Duration bad : List.of(Duration.ZERO, Duration.ofMillis(-1))) {
+            try {
+                db.query("SELECT 1").timeout(bad);
+                fail("accepted " + bad);
+            }
+            catch (IllegalArgumentException expected) {
+                // refused
+            }
+        }
+    }
+
+    @Test(timeout = 60_000)
+    public void theLowerLevelTimesOutAsWell() throws Exception {
+        try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
+            try {
+                Rows.of(connection.duplicate(), SLOW).timeout(Duration.ofMillis(200)).scalar(Long.class);
+                fail("the query should have timed out");
+            }
+            catch (QueryTimedOut expected) {
+                // cancelled
+            }
+            assertEquals(Long.valueOf(1), Rows.of(connection.duplicate(), "SELECT 1").scalar(Long.class));
+        }
+    }
+}

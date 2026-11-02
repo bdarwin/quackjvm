@@ -1,4 +1,4 @@
-package io.quackjvm.agent.guard.internal;
+package io.quackjvm.core.internal;
 
 import java.util.Locale;
 
@@ -7,7 +7,7 @@ import java.util.Locale;
  *
  * <p>Used for two things only: finding the leading keyword of a statement, and - for the one
  * statement kind DuckDB will not serialize - deciding whether there is more than one statement.
- * Everything else is left to {@link ParserGate}, because a scanner is a worse parser than the
+ * Everything else is left to DuckDB's parser, because a scanner is a worse parser than the
  * parser.</p>
  *
  * <p>It knows what a quote is: single-quoted strings with doubled quotes inside, double-quoted
