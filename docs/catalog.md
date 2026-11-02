@@ -85,6 +85,47 @@ Profile profile = catalog.profile("car", 5);   // 5 example rows
 `SUMMARIZE` does the work - min, max, approximate distinct count, mean, standard deviation, null
 percentage per column - plus an exact row count and a few rows to look at.
 
+## Which columns a query reads
+
+A column cache filled on demand - one table per column of a file too wide to load whole - has to know
+which columns a query needs before running it. `QueryColumns` asks DuckDB to plan the query and reads
+the answer off the plan:
+
+```java
+try (QueryColumns planner = QueryColumns.of(quack)) {
+    QueryColumns.Read read = planner.read("SELECT host, sum(metric_7) FROM t WHERE metric_9 > 3 GROUP BY host");
+    read.columns();     // {t=[metric_9, host, metric_7]}
+}
+```
+
+The plan's table scans say what they read. Planning happens in a database of its own - in memory,
+with no file access, holding empty copies of the source's tables and views - so the data is never
+touched and the query never runs. Three of DuckDB's optimizers are off there, because each hides a
+column: two see the copies are empty and drop the scans, and filter pushdown moves a filter's column
+out of the scan's list. Turned back on, four of the tests fail for exactly that.
+
+Measured on DuckDB 2.0.0:
+
+| query | columns read |
+|---|---|
+| `SELECT host, sum(metric_7) FROM t WHERE metric_9 > 3 GROUP BY host` | metric_9, host, metric_7 |
+| `SELECT count(*) FROM t` | none - the table is counted, not read |
+| `SELECT * EXCLUDE (host) FROM t` | all but host |
+| `SELECT COLUMNS('metric_1.?') FROM t` | metric_1, metric_10 ... metric_19 |
+| `SELECT a.host FROM t a JOIN t b ON a.line = b.line + 1 WHERE b.metric_3 = 1` | line, host, metric_3 - both scans |
+| `SELECT "odd, ""name" FROM t ORDER BY metric_5 LIMIT 3` | `odd, "name`, metric_5 |
+| a view over `t` | the view's columns of `t`, its filter's included |
+| `DESCRIBE t` | nothing scanned |
+
+**It says when it cannot tell**, and the answer then is every column: more than one statement; a
+file, which the planner cannot reach; a table outside `main`; and any `PIVOT`. DuckDB rewrites a pivot
+into several statements and plans only the last, and on 2.0.0 the plan of `PIVOT t ON host USING
+sum(metric_8)` names every column except `host` and `metric_8` - the two it needs. Measured, so a
+pivot is never answered.
+
+On a table of 6,000 columns, the planner is made in 82 ms, a query reading three of them is answered
+in 3 ms, and `SELECT *` in 158 ms.
+
 ## What it costs
 
 Measured on this machine, DuckDB 2.0.0:

@@ -259,6 +259,27 @@ catalog.apply("car", layout);                      // writes everything the layo
 
 See [Catalog](catalog.md).
 
+### `io.quackjvm.agent.catalog.QueryColumns`
+
+Which columns of which tables a query reads, without running it - for filling a lazy column cache
+with just what a query needs.
+
+```java
+try (QueryColumns planner = QueryColumns.of(quack)) {          // or of(connection)
+    QueryColumns.Read read = planner.read(sql, parameters...);
+    read.isKnown() ? read.columns() : read.reason();            // {t=[metric_9, host, metric_7]}
+}
+```
+
+- Planned in a database of its own, in memory, with no file access, holding empty copies of the
+  source's tables and views; `refresh()` copies them again. The query is never run.
+- A table counted but not read (`count(*)`) maps to an empty set. A query it cannot answer - more than
+  one statement, a `PIVOT`, a file, a table outside `main` - says why: assume every column.
+- 6,000 columns: the planner is made in 82 ms, a three-column query answered in 3 ms, `SELECT *` in
+  158 ms.
+
+See [Catalog](catalog.md#which-columns-a-query-reads).
+
 ### `io.quackjvm.agent.live.LiveTables` / `LiveTable`
 
 Java objects queried as a table, with no load step.
