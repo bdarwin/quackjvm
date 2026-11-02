@@ -183,6 +183,31 @@ public class RowsTest {
         }
     }
 
+    /** The check costs nothing on a count that works: one prepare, as before. */
+    @Test
+    public void aCountThatWorksIsPreparedOnce() throws Exception {
+        try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
+            connection.createStatement().execute("CREATE TABLE car AS SELECT range AS id FROM range(10)");
+            java.sql.Connection target = connection.duplicate();
+            java.util.concurrent.atomic.AtomicInteger prepares = new java.util.concurrent.atomic.AtomicInteger();
+            java.sql.Connection counted = (java.sql.Connection) java.lang.reflect.Proxy.newProxyInstance(
+                    getClass().getClassLoader(), new Class<?>[] {java.sql.Connection.class}, (proxy, method, args) -> {
+                        if (method.getName().equals("prepareStatement")) {
+                            prepares.incrementAndGet();
+                        }
+                        try {
+                            return method.invoke(target, args);
+                        }
+                        catch (java.lang.reflect.InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    });
+
+            assertEquals(10, Rows.of(counted, "SELECT * FROM car WHERE id < ?", 10).count());
+            assertEquals(1, prepares.get());
+        }
+    }
+
     @Test
     public void aCallersOwnExceptionComesOutAsItWasThrown() {
         IllegalArgumentException mine = new IllegalArgumentException("mine");

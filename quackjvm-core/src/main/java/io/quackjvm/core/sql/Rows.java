@@ -192,24 +192,49 @@ public final class Rows {
 
     /** How many rows the query returns, without reading any of them. */
     public long count() {
+        Deadline deadline = null;
         try {
-            // The statement itself is checked, not only the count around it, so that a refusal says why.
-            try (PreparedStatement statement = prepare()) {
-                // prepared and checked; not run
+            ReadCheck.beforePreparing(sql);
+            PreparedStatement statement;
+            try {
+                statement = connection.prepareStatement("SELECT count(*) FROM (" + sql + ")");
             }
-            catch (SQLException | RuntimeException e) {
-                // The count below would have closed the connection; it is not going to run.
-                Sql.closeQuietly(connection);
-                throw e instanceof RuntimeException runtime ? runtime : new IllegalStateException("Failed to run: " + sql, e);
+            catch (SQLException e) {
+                // A statement that is not a query does not fit inside the count, so nothing ran.
+                // Only now is it prepared alone, to say so: a count that works costs one prepare.
+                refuseIfNotAQuery();
+                throw e;
             }
-            return new Rows(connection, "SELECT count(*) FROM (" + sql + ")", parameters, timeout)
-                    .scalar(Long.class);
+            try (PreparedStatement counting = statement) {
+                Sql.bindAll(counting, Arrays.asList(parameters), 1);
+                deadline = Deadline.start(counting, timeout);
+                try (Deadline running = deadline; ResultSet resultSet = counting.executeQuery()) {
+                    resultSet.next();
+                    return resultSet.getLong(1);
+                }
+            }
         }
         catch (QueryTimedOut | ReadCheck.Refused e) {
             throw e;
         }
-        catch (RuntimeException e) {
+        catch (SQLException | RuntimeException e) {
+            if (deadline != null && deadline.hasExpired()) {
+                throw new QueryTimedOut(timeout, e);
+            }
             throw new IllegalStateException("Failed to count the rows of: " + sql, e);
+        }
+        finally {
+            Sql.closeQuietly(connection);
+        }
+    }
+
+    /** Prepares the statement alone - which does not run one statement - and refuses it if it is not a query. */
+    private void refuseIfNotAQuery() {
+        try (PreparedStatement alone = connection.prepareStatement(sql)) {
+            ReadCheck.afterPreparing(alone, sql);
+        }
+        catch (SQLException notEvenThat) {
+            // It does not parse on its own either; the count's own error says why.
         }
     }
 
