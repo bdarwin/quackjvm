@@ -22,6 +22,12 @@ import java.util.List;
  * GuardedQuery guard = GuardedQuery.on(connection, QueryPolicy.readOnly());
  * GuardedResult result = guard.run("SELECT make, count(*) FROM car GROUP BY 1");
  * System.out.println(result.toText());
+ *
+ * // the first 100 rows of anything, saying when there were more; and a way to stop it
+ * GuardedQuery firstRows = GuardedQuery.on(connection, QueryPolicy.readOnly().maxRows(100).whenOver(Over.TRUNCATE));
+ * CancelSignal stop = new CancelSignal();
+ * GuardedResult page = firstRows.run(sql, stop);     // stop.cancel() from another thread: QueryCancelled
+ * page.isTruncated();
  * </pre>
  *
  * <p>Four things stand between the statement and the database, and each one fails with a message
@@ -37,7 +43,8 @@ import java.util.List;
  *       would have run for minutes.</li>
  *   <li><b>How much.</b> The row cap becomes a {@code LIMIT} around the statement, so the rows are
  *       never built in the first place; a query that would exceed it is refused rather than
- *       quietly cut short. The byte cap is counted as the values are read.</li>
+ *       quietly cut short - or, under {@code whenOver(Over.TRUNCATE)}, its first rows come back
+ *       marked as truncated. The byte cap is counted as the values are read.</li>
  *   <li><b>What it can reach</b>, if {@link Hardening} is turned on - and read what that says
  *       before turning it on, because it applies to the whole database.</li>
  * </ol>
@@ -84,8 +91,18 @@ public final class GuardedQuery {
      * @throws ResultTruncated if it would return more rows or bytes than the policy allows
      */
     public GuardedResult run(String sql) {
+        return run(sql, null);
+    }
+
+    /**
+     * As {@link #run(String)}, stopped early if the signal is cancelled - from another thread, a
+     * Stop button for instance.
+     *
+     * @throws QueryCancelled if the signal was cancelled before or while it ran
+     */
+    public GuardedResult run(String sql, CancelSignal signal) {
         String statement = check(sql);
-        return execute(statement, isExplain(statement));
+        return execute(statement, isExplain(statement), signal);
     }
 
     /**
@@ -164,10 +181,9 @@ public final class GuardedQuery {
                 + ". DuckDB's parser said: " + verdict.error();
     }
 
-    private GuardedResult execute(String sql, boolean explaining) {
+    private GuardedResult execute(String sql, boolean explaining, CancelSignal signal) {
         long maxRows = policy.getMaxRows();
         String toRun = sql;
-        boolean capped = false;
         if (!explaining) {
             // One more row than allowed, so that "too many" can be told from "exactly the limit". A
             // trailing semicolon would end the statement inside the bracket and break the wrapper,
@@ -179,18 +195,30 @@ public final class GuardedQuery {
             // here rather than run.
             if (ParserGate.inspect(connection, wrapped).isSingleQuery()) {
                 toRun = wrapped;
-                capped = true;
             }
         }
         long started = System.nanoTime();
         Deadline deadline = null;
         try (PreparedStatement statement = connection.prepareStatement(toRun)) {
-            deadline = Deadline.start(statement, policy.getTimeout());
-            try (Deadline running = deadline; ResultSet rows = statement.executeQuery()) {
-                return read(rows, started, capped);
+            if (signal != null && !signal.attach(statement)) {
+                throw new QueryCancelled(null);
+            }
+            try {
+                deadline = Deadline.start(statement, policy.getTimeout());
+                try (Deadline running = deadline; ResultSet rows = statement.executeQuery()) {
+                    return read(rows, started, signal);
+                }
+            }
+            finally {
+                if (signal != null) {
+                    signal.detach();
+                }
             }
         }
         catch (SQLException e) {
+            if (signal != null && signal.isCancelled()) {
+                throw new QueryCancelled(e);
+            }
             if (deadline != null && deadline.hasExpired()) {
                 throw new QueryTimedOut(policy.getTimeout(), e);
             }
@@ -198,7 +226,7 @@ public final class GuardedQuery {
         }
     }
 
-    private GuardedResult read(ResultSet rows, long started, boolean capped) throws SQLException {
+    private GuardedResult read(ResultSet rows, long started, CancelSignal signal) throws SQLException {
         ResultSetMetaData metaData = rows.getMetaData();
         int columnCount = metaData.getColumnCount();
         List<String> columns = new ArrayList<>(columnCount);
@@ -207,27 +235,43 @@ public final class GuardedQuery {
             columns.add(metaData.getColumnLabel(i));
             types.add(metaData.getColumnTypeName(i));
         }
+        boolean truncate = policy.getWhenOver() == QueryPolicy.Over.TRUNCATE;
         List<Object[]> read = new ArrayList<>();
         long bytes = 0;
+        boolean truncated = false;
         while (rows.next()) {
-            if (capped && read.size() == policy.getMaxRows()) {
+            if (signal != null && signal.isCancelled()) {
+                // Cancelled between two reads, where the driver has nothing running to interrupt.
+                throw new QueryCancelled(null);
+            }
+            // The wrapper fetched one row more than allowed, and an unwrapped statement is capped
+            // as its rows arrive: either way, a row past the limit means there were more.
+            if (read.size() == policy.getMaxRows()) {
+                if (truncate) {
+                    truncated = true;
+                    break;
+                }
                 throw ResultTruncated.rows(policy.getMaxRows());
             }
             Object[] row = new Object[columnCount];
+            long rowBytes = 0;
             for (int i = 0; i < columnCount; i++) {
                 row[i] = rows.getObject(i + 1);
-                bytes += sizeOf(row[i]);
+                rowBytes += sizeOf(row[i]);
             }
-            if (policy.getMaxBytes() > 0 && bytes > policy.getMaxBytes()) {
-                throw ResultTruncated.bytes(policy.getMaxBytes(), bytes);
+            if (policy.getMaxBytes() > 0 && bytes + rowBytes > policy.getMaxBytes()) {
+                if (truncate) {
+                    // The rows before this one fit; this one would not.
+                    truncated = true;
+                    break;
+                }
+                throw ResultTruncated.bytes(policy.getMaxBytes(), bytes + rowBytes);
             }
+            bytes += rowBytes;
             read.add(row);
-            if (!capped && read.size() > policy.getMaxRows()) {
-                // The statement could not be wrapped, so the cap is applied as the rows arrive.
-                throw ResultTruncated.rows(policy.getMaxRows());
-            }
         }
-        return new GuardedResult(columns, types, read, Duration.ofNanos(System.nanoTime() - started), bytes);
+        return new GuardedResult(columns, types, read, Duration.ofNanos(System.nanoTime() - started), bytes,
+                truncated);
     }
 
     /** Roughly what a value costs, for the byte cap. Not exact, and does not need to be. */

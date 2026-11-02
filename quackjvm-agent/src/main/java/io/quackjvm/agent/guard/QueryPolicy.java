@@ -25,15 +25,27 @@ public final class QueryPolicy {
     /** Statements DuckDB's parser cannot serialize, which may be allowed one by one. */
     public static final String PIVOT = "PIVOT";
 
+    /** What happens when a query would return more rows or bytes than the policy allows. */
+    public enum Over {
+        /** Nothing comes back: {@link ResultTruncated} is thrown. The default. */
+        REFUSE,
+        /**
+         * The rows up to the limit come back, and {@link GuardedResult#isTruncated()} says there
+         * were more - for showing the first rows of a large result rather than refusing it.
+         */
+        TRUNCATE
+    }
+
     private final Duration timeout;
     private final long maxRows;
     private final long maxBytes;
     private final Set<String> unverified;
     private final boolean allowExplain;
     private final Hardening hardening;
+    private final Over whenOver;
 
     private QueryPolicy(Duration timeout, long maxRows, long maxBytes, Set<String> unverified,
-                        boolean allowExplain, Hardening hardening) {
+                        boolean allowExplain, Hardening hardening, Over whenOver) {
         if (timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("A timeout must be positive: " + timeout);
         }
@@ -46,32 +58,41 @@ public final class QueryPolicy {
         this.unverified = Set.copyOf(unverified);
         this.allowExplain = allowExplain;
         this.hardening = hardening;
+        this.whenOver = whenOver == null ? Over.REFUSE : whenOver;
     }
 
     /** Reads only, five seconds, ten thousand rows, eight megabytes, EXPLAIN allowed. */
     public static QueryPolicy readOnly() {
         return new QueryPolicy(Duration.ofSeconds(5), 10_000, 8L * 1024 * 1024, Set.of(), true,
-                Hardening.NONE);
+                Hardening.NONE, Over.REFUSE);
     }
 
     /** How long a query may run before it is cancelled. */
     public QueryPolicy timeout(Duration timeout) {
-        return new QueryPolicy(timeout, maxRows, maxBytes, unverified, allowExplain, hardening);
+        return new QueryPolicy(timeout, maxRows, maxBytes, unverified, allowExplain, hardening, whenOver);
     }
 
-    /** How many rows a query may return before {@link ResultTruncated} is thrown. */
+    /** How many rows a query may return - more, and {@link #whenOver} decides what happens. */
     public QueryPolicy maxRows(long rows) {
-        return new QueryPolicy(timeout, rows, maxBytes, unverified, allowExplain, hardening);
+        return new QueryPolicy(timeout, rows, maxBytes, unverified, allowExplain, hardening, whenOver);
+    }
+
+    /**
+     * What to do when a query would return more than {@link #maxRows} rows or {@link #maxBytes}
+     * bytes: refuse it (the default), or hand back what fits and say it was cut short.
+     */
+    public QueryPolicy whenOver(Over over) {
+        return new QueryPolicy(timeout, maxRows, maxBytes, unverified, allowExplain, hardening, over);
     }
 
     /** Roughly how many bytes the values may add up to; zero for no limit. */
     public QueryPolicy maxBytes(long bytes) {
-        return new QueryPolicy(timeout, maxRows, bytes, unverified, allowExplain, hardening);
+        return new QueryPolicy(timeout, maxRows, bytes, unverified, allowExplain, hardening, whenOver);
     }
 
     /** Whether {@code EXPLAIN} and {@code EXPLAIN ANALYZE} of an allowed query may be run. */
     public QueryPolicy allowExplain(boolean allow) {
-        return new QueryPolicy(timeout, maxRows, maxBytes, unverified, allow, hardening);
+        return new QueryPolicy(timeout, maxRows, maxBytes, unverified, allow, hardening, whenOver);
     }
 
     /**
@@ -98,7 +119,7 @@ public final class QueryPolicy {
             }
             allowed.add(upper);
         }
-        return new QueryPolicy(timeout, maxRows, maxBytes, allowed, allowExplain, hardening);
+        return new QueryPolicy(timeout, maxRows, maxBytes, allowed, allowExplain, hardening, whenOver);
     }
 
     /**
@@ -106,7 +127,7 @@ public final class QueryPolicy {
      * checking statements - see {@link Hardening}, and read what it says about scope first.
      */
     public QueryPolicy hardening(Hardening hardening) {
-        return new QueryPolicy(timeout, maxRows, maxBytes, unverified, allowExplain, hardening);
+        return new QueryPolicy(timeout, maxRows, maxBytes, unverified, allowExplain, hardening, whenOver);
     }
 
     public Duration getTimeout() {
@@ -137,9 +158,13 @@ public final class QueryPolicy {
         return hardening;
     }
 
+    public Over getWhenOver() {
+        return whenOver;
+    }
+
     @Override
     public String toString() {
         return "QueryPolicy[timeout=" + timeout + ", maxRows=" + maxRows + ", maxBytes=" + maxBytes
-                + ", unverified=" + unverified + ", explain=" + allowExplain + ", hardening=" + hardening + "]";
+                + ", unverified=" + unverified + ", explain=" + allowExplain + ", hardening=" + hardening + ", whenOver=" + whenOver + "]";
     }
 }

@@ -8,7 +8,8 @@ import java.util.List;
  *
  * <p>Materialised rather than streamed, because the caps have to be decided before an answer is
  * handed over: a result that stopped half way, read as though it were the whole answer, is worse
- * than being told it was too big. For reading a lot of rows, use the ordinary
+ * than being told it was too big - which is why one cut short says so, in {@link #isTruncated()}.
+ * For reading a lot of rows, use the ordinary
  * {@link io.quackjvm.core.sql.Rows} API on a connection of your own.</p>
  */
 public final class GuardedResult {
@@ -18,13 +19,24 @@ public final class GuardedResult {
     private final List<Object[]> rows;
     private final Duration took;
     private final long bytes;
+    private final boolean truncated;
 
-    GuardedResult(List<String> columns, List<String> types, List<Object[]> rows, Duration took, long bytes) {
+    GuardedResult(List<String> columns, List<String> types, List<Object[]> rows, Duration took, long bytes,
+                  boolean truncated) {
         this.columns = List.copyOf(columns);
         this.types = List.copyOf(types);
         this.rows = List.copyOf(rows);
         this.took = took;
         this.bytes = bytes;
+        this.truncated = truncated;
+    }
+
+    /**
+     * Whether the query had more rows than these: true only under
+     * {@code QueryPolicy.whenOver(Over.TRUNCATE)}, when the row or byte limit cut the result short.
+     */
+    public boolean isTruncated() {
+        return truncated;
     }
 
     public List<String> getColumns() {
@@ -94,7 +106,7 @@ public final class GuardedResult {
 
     @Override
     public String toString() {
-        return "GuardedResult[" + rows.size() + " rows, " + columns.size() + " columns, " + took.toMillis()
-                + " ms]";
+        return "GuardedResult[" + rows.size() + " rows" + (truncated ? " (truncated)" : "") + ", " + columns.size()
+                + " columns, " + took.toMillis() + " ms]";
     }
 }
