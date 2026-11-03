@@ -215,7 +215,7 @@ GuardedQuery guard = GuardedQuery.on(quack, QueryPolicy.readOnly()      // or on
         .timeout(Duration.ofSeconds(2))
         .maxRows(50));
 
-GuardedResult result = guard.run(sql);   // QueryRejected / QueryTimedOut / ResultTruncated
+GuardedResult result = guard.run(sql);   // QueryRejected (QueryFailed if DuckDB could not run it) / QueryTimedOut / ResultTruncated
 String why = guard.whyRejected(sql);     // null when it would be allowed
 guard.run(sql, cancelSignal);            // QueryCancelled once cancelSignal.cancel() is called
 ```

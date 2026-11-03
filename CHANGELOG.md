@@ -2,6 +2,15 @@
 
 ## 1.3.0 - Unreleased
 
+### Added
+- **`QueryFailed`** (#10): when the guard lets SQL through and DuckDB cannot run it, `GuardedQuery.run`
+  throws `QueryFailed`, a subtype of `QueryRejected`, so `catch (QueryRejected e)` still catches it.
+  It used to throw a plain `QueryRejected` with the first line of DuckDB's message and no cause, which
+  dropped the `Candidate bindings` hint and the `LINE n:` pointer, and could not be told from the
+  guard's own refusal. Its message is now DuckDB's whole message. `LINE n:` counts the caller's lines,
+  not the wrapper's, and the `^^^` stays under the same word. `getErrorType()` gives DuckDB's error
+  kind, such as `"Binder"` or `"Catalog"`, and the cause is the `SQLException`.
+
 ### Fixed
 - **`execute` runs a statement that answers with a row.** `db.execute("CHECKPOINT")` threw, because
   the driver's `executeUpdate` refuses any statement that returns a result, and `CHECKPOINT` returns

@@ -83,5 +83,5 @@ public class AgentEntryPoint {
  * -----------------------------------
  *    SELECT count(*) FROM car -> 2
  *    DROP VIEW car -> refused: DROP is not a query, so it will not be run. Only statements that read are allowed: SELECT, WITH, FROM, TABLE, VALUES, DESCRIBE, SUMMARIZE, UNPIVOT and EXPLAIN. DuckDB's parser said: Only SELECT statements can be serialized to json!
- *    SELECT * FROM read_csv('/etc/hosts') -> refused: DuckDB refused to run this: Permission Error: Cannot access file "/etc/hosts" - file system operations are disabled by configuration
+ *    SELECT * FROM read_csv('/etc/hosts') -> refused: Permission Error: Cannot access file "/etc/hosts" - file system operations are disabled by configuration
  */

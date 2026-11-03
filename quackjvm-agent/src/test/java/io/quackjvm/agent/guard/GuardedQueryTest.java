@@ -210,8 +210,9 @@ public class GuardedQueryTest {
                     locked.run("SELECT * FROM read_csv('" + file + "')");
                     fail("expected file access to be impossible");
                 }
-                catch (QueryRejected refused) {
-                    assertTrue(refused.getMessage(), refused.getMessage().contains("refused to run this"));
+                catch (QueryFailed refused) {
+                    // DuckDB refused it, not the guard: the file is out of reach.
+                    assertEquals(refused.getMessage(), "Permission", refused.getErrorType());
                 }
             }
         }

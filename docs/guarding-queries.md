@@ -202,6 +202,12 @@ half milliseconds on DuckDB 2.0, whatever the query costs afterwards. On 1.5.5 t
 Every refusal is an exception whose message is written to be read by whoever sent the SQL:
 
 - `QueryRejected` - what was refused and what is allowed instead.
+- `QueryFailed`, a `QueryRejected` - the guard let the SQL through and DuckDB could not run it. The
+  message is DuckDB's, all of it: the `Candidate bindings` it suggests for a misspelt column, and the
+  `LINE n:` pointer with its `^^^`, numbered as the SQL was written. `getErrorType()` says
+  `"Binder"`, `"Catalog"`, `"Conversion"`, `"Permission"` and so on, and the cause is the driver's
+  `SQLException`. Catch it before `QueryRejected` to show DuckDB's message for one and "only queries
+  can run here" for the other.
 - `QueryTimedOut` - how long it was given, and that narrowing the query would help.
 - `ResultTruncated` - which cap was passed, and that a `LIMIT`, a filter or a `GROUP BY` would help.
 

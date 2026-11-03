@@ -15,6 +15,11 @@ public class QueryRejected extends RuntimeException {
         this.sql = sql;
     }
 
+    protected QueryRejected(String sql, String reason, Throwable cause) {
+        super(reason, cause);
+        this.sql = sql;
+    }
+
     /** The statement that was refused. */
     public String getSql() {
         return sql;

@@ -14,6 +14,8 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Runs SQL that came from somewhere you do not control.
@@ -222,7 +224,8 @@ public final class GuardedQuery {
             if (deadline != null && deadline.hasExpired()) {
                 throw new QueryTimedOut(policy.getTimeout(), e);
             }
-            throw new QueryRejected(sql, "DuckDB refused to run this: " + firstLine(e));
+            // The wrapper puts one line before the caller's, so DuckDB's LINE pointer is one ahead.
+            throw new QueryFailed(sql, callersLines(String.valueOf(e.getMessage()), toRun.equals(sql) ? 0 : 1), e);
         }
     }
 
@@ -299,10 +302,35 @@ public final class GuardedQuery {
         return text.isEmpty() ? text : Character.toUpperCase(text.charAt(0)) + text.substring(1);
     }
 
-    private static String firstLine(SQLException e) {
-        String message = String.valueOf(e.getMessage());
-        int newline = message.indexOf('\n');
-        return newline < 0 ? message : message.substring(0, newline);
+    private static final Pattern LINE = Pattern.compile("^LINE (\\d+):");
+
+    /**
+     * DuckDB's message with each {@code LINE n:} moved back by the lines the wrapper added. When
+     * the number loses a digit, the {@code ^} line below it loses a space, so it still points at
+     * the same place.
+     */
+    static String callersLines(String message, int added) {
+        if (added == 0) {
+            return message;
+        }
+        String[] lines = message.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            Matcher m = LINE.matcher(lines[i]);
+            if (!m.find()) {
+                continue;
+            }
+            int number = Integer.parseInt(m.group(1));
+            if (number - added < 1) {
+                continue;   // in the wrapper's own line; nothing of the caller's to point at
+            }
+            String renumbered = Integer.toString(number - added);
+            int shorter = m.group(1).length() - renumbered.length();
+            lines[i] = "LINE " + renumbered + ":" + lines[i].substring(m.end());
+            if (shorter > 0 && i + 1 < lines.length && lines[i + 1].startsWith(" ".repeat(shorter))) {
+                lines[i + 1] = lines[i + 1].substring(shorter);
+            }
+        }
+        return String.join("\n", lines);
     }
 
     @Override

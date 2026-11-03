@@ -279,8 +279,8 @@ public class AgentGuardedQueries {
  * Hardening: taking the way out away as well
  * ------------------------------------------
  *    reading a local file, checks only                          ran - the parser has no reason to refuse it
- *    the same, with Hardening.DATABASE                          DuckDB refused to run this: Permission Error: Cannot access file "/var/folders/p2/3wph7cw515d_ch9lsq6...
- *    and the environment                                        DuckDB refused to run this: Catalog Error: Scalar Function with name getenv does not exist!
+ *    the same, with Hardening.DATABASE                          Permission Error: Cannot access file "/var/folders/p2/3wph7cw515d_ch9lsq6...
+ *    and the environment                                        Catalog Error: Scalar Function with name getenv does not exist!
  *    a sandbox database still works as a database: 1 row
  *    and cannot be unlocked: Invalid Input Error: Cannot change configuration option ""enable_external_access"" - the configuratio...
  *
