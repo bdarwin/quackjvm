@@ -93,6 +93,23 @@ public class UdfsTest {
         assertEquals(1, calls.get());
     }
 
+    /**
+     * DuckDB calls a function of constants while it plans, so whatever plans a query twice calls it
+     * twice. GuardedQuery checks with the parser, which does not plan, and then runs it once.
+     */
+    @Test
+    public void aGuardedQueryCallsAFunctionOfConstantsOnce() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        Udfs.register(connection, "shout", String.class, String.class, text -> {
+            calls.incrementAndGet();
+            return text.toUpperCase();
+        });
+        io.quackjvm.agent.guard.GuardedResult result = io.quackjvm.agent.guard.GuardedQuery
+                .on(connection, io.quackjvm.agent.guard.QueryPolicy.readOnly()).run("SELECT shout('a')");
+        assertEquals("A", result.getRows().get(0)[0]);
+        assertEquals(1, calls.get());
+    }
+
     @Test
     public void aNullableFunctionSeesTheNullAndCanAnswerIt() throws Exception {
         Udfs.registerNullable(connection, "or_unknown", String.class, String.class,

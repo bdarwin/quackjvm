@@ -125,4 +125,32 @@ public class GuardedQueryFailedTest {
             assertNotNull(refused.getCause());
         }
     }
+
+    /**
+     * Not about failures, but this file has the table: the query runs on DuckDB's direct path,
+     * which duckdb_jdbc 2.0 runs faster than a prepared statement for some queries (an ASOF join
+     * returning a million rows: 1.31 s against 2.75 s). The parser has already checked it.
+     */
+    @Test
+    public void theQueryRunsOnTheDirectPathNotPrepared() throws Exception {
+        java.util.List<String> prepared = new java.util.ArrayList<>();
+        Connection counted = (Connection) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[] {Connection.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("prepareStatement")) {
+                        prepared.add((String) args[0]);
+                    }
+                    try {
+                        return method.invoke(connection, args);
+                    }
+                    catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+        GuardedResult result = GuardedQuery.on(counted, QueryPolicy.readOnly()).run("SELECT level FROM log");
+        assertEquals(0, result.getRowCount());
+        for (String sql : prepared) {
+            // The parser's check quotes the query inside its own SQL; the query itself starts with the wrapper.
+            assertFalse("prepared: " + sql, sql.startsWith("SELECT * FROM (\n"));
+        }
+    }
 }

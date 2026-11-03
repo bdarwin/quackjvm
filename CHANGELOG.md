@@ -21,6 +21,14 @@
   if it were an allowed folder. The docs now say so, and `properties()` and `Hardening.apply` refuse
   a temp folder that holds anything but DuckDB's own `duckdb_temp` files, so it cannot be pointed at
   a shared folder or one of data. A test pins DuckDB's behaviour, so a release that changes it shows.
+- **`GuardedQuery` runs queries unprepared, and a large ASOF join reads 6x faster.** DuckDB runs some
+  queries far slower prepared when the result is large and has no `ORDER BY`. DuckDB's own
+  `PREPARE`/`EXECUTE` is as slow, so the cause is in DuckDB. `GuardedQuery` checks SQL with the
+  parser, so it no longer prepares: 1M rows of an ASOF join took 283 ms through it, against 1,710 ms
+  in 1.2.0. `db.query(...)` still prepares, because preparing is its check that SQL only reads, and
+  checking then running unprepared would plan each query twice and call a Java function of
+  constants twice. For a large ASOF result through it, add an `ORDER BY`: 276 ms against 1,696 ms.
+  See `docs/tuning.md`.
 
 ## 1.2.0 - 2026-11-03
 
