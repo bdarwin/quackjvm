@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.0 - Unreleased
+## 1.3.0 - 2026-11-03
 
 ### Added
 - **`QueryFailed`** (#10): when the guard lets SQL through and DuckDB cannot run it, `GuardedQuery.run`
