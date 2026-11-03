@@ -432,4 +432,14 @@ public class QuackTest {
         }
         db.close();   // and closing twice is harmless
     }
+
+    /** CHECKPOINT returns a row, and executeUpdate refuses anything that does - so execute did too. */
+    @Test
+    public void executeRunsAStatementThatAnswersWithARow() {
+        db.execute("INSERT INTO item VALUES (3, 30)");
+        assertEquals(0, db.execute("CHECKPOINT"));
+        assertEquals(0, db.execute("FORCE CHECKPOINT"));
+        assertEquals(2, db.execute("UPDATE item SET count = count + 1 WHERE id > ?", 1));
+        assertEquals(Long.valueOf(3), db.query("SELECT count(*) FROM item").scalar(Long.class));
+    }
 }

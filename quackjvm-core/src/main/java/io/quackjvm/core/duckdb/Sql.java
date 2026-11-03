@@ -41,10 +41,18 @@ public final class Sql {
         }
     }
 
+    /**
+     * Runs a statement and returns how many rows it changed. A statement that answers with a row
+     * instead, such as {@code CHECKPOINT}, runs too and returns 0: the driver's
+     * {@code executeUpdate} refuses those.
+     */
     public static int executeUpdate(Connection connection, String sql, List<Object> parameters) {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             bindAll(statement, parameters, 1);
-            return statement.executeUpdate();
+            if (statement.execute()) {
+                return 0;
+            }
+            return (int) Math.max(0, statement.getLargeUpdateCount());
         }
         catch (SQLException e) {
             throw new IllegalStateException("Failed to execute: " + sql, e);

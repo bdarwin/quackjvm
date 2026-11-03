@@ -2,6 +2,11 @@
 
 ## 1.3.0 - Unreleased
 
+### Fixed
+- **`execute` runs a statement that answers with a row.** `db.execute("CHECKPOINT")` threw, because
+  the driver's `executeUpdate` refuses any statement that returns a result, and `CHECKPOINT` returns
+  one. It now runs and returns 0.
+
 ## 1.2.0 - 2026-11-03
 
 Nothing from 1.1.1 was removed or changed; everything here is added.
