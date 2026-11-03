@@ -133,8 +133,53 @@ public class HardeningOptionsTest {
             watcher.join();
         }
         assertTrue("spilled " + peak.get() / 1024 / 1024 + " MB", peak.get() > 50L * 1024 * 1024);
-        // ...without the temp folder being one SQL may use.
+        // ...without the temp folder being listed: DuckDB spills there either way.
         assertFalse(options().getAllowedFolders().contains(temp.getPath()));
+    }
+
+    /**
+     * Measured on 2.0.0.0: DuckDB lets SQL read and write in its temp folder, listed or not. If a
+     * later DuckDB stops doing so, this fails and the docs can say less.
+     */
+    @Test
+    public void sqlCanUseTheTempFolderAsIfItWereAnAllowedOne() throws Exception {
+        try (Quack db = Quack.builder(null).settings(options().properties()).open()) {
+            Files.writeString(new File(temp, "a.csv").toPath(), "x\n1\n");
+            assertEquals(Long.valueOf(1), db.query("SELECT count(*) FROM " + csv(temp, "a.csv")).scalar(Long.class));
+            db.execute("COPY (SELECT 1 AS x) TO '" + new File(temp, "out.csv").getPath() + "'");
+            assertTrue(new File(temp, "out.csv").exists());
+        }
+        // Without one, the same folder is out of reach.
+        try (Quack db = Quack.builder(null).settings(Hardening.options().allowedFolders(logs.getPath()).properties())
+                .open()) {
+            refused(db, "CREATE TABLE t AS SELECT * FROM " + csv(temp, "a.csv"));
+        }
+    }
+
+    /** So that it cannot be pointed at a folder of other files, which SQL could then read. */
+    @Test
+    public void aTempFolderMustHoldNothingButDuckDbsOwnFiles() throws Exception {
+        Files.writeString(new File(temp, "notes.txt").toPath(), "not DuckDB's");
+        try {
+            options().properties();
+            fail("took a temp folder with other files in it");
+        }
+        catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("notes.txt"));
+        }
+        try (Quack db = Quack.inMemory()) {
+            Hardening.apply(db, options());
+            fail("took a temp folder with other files in it");
+        }
+        catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("notes.txt"));
+        }
+
+        // What DuckDB leaves behind is fine, and so is a folder that is not there yet.
+        new File(temp, "notes.txt").delete();
+        Files.writeString(new File(temp, "duckdb_temp_4242_0_owner").toPath(), "");
+        options().properties();
+        Hardening.options().tempFolder(new File(folder.getRoot(), "not-yet").getPath()).properties();
     }
 
     @Test

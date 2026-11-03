@@ -172,9 +172,13 @@ Measured on duckdb_jdbc 1.5.5.1 and 2.0.0.0, with a folder allowed:
 - **An allowed folder can be written as well as read.** DuckDB has no read-only form of it:
   `COPY ... TO` and `ATTACH` of a file there both work. `GuardedQuery` refuses both statements, so
   SQL that goes through it only reads; SQL run on the database directly can write there.
-- **The temp folder is not added to the allowed ones**, because it does not need to be: sorting 8
-  million rows under a 200 MB limit spilled 375 MB into it either way, and listing it would let SQL
-  read and write the spill files.
+- **SQL can read and write in the temp folder, as if it were an allowed one.** DuckDB spills into it
+  without it being listed (sorting 8 million rows under a 200 MB limit spilled 375 MB into it), but
+  it also lets `read_csv`, `glob`, `COPY ... TO` and `ATTACH` reach it and the folders below it,
+  measured on 2.0.0.0. So give it a folder of its own, never a shared one such as the system's temp
+  folder: `properties()` and `Hardening.apply` refuse a temp folder that holds anything but DuckDB's
+  own `duckdb_temp` files. `GuardedQuery` refuses `COPY` and `ATTACH`, so through it SQL can only
+  read there.
 - One JVM opening the same file twice shares one database. With the same options that is fine;
   with different ones the driver refuses - *"Can't open a connection to same database file with a
   different configuration"* - so the second open never meets a lock it did not expect.

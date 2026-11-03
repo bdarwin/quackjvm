@@ -3,6 +3,9 @@ package io.quackjvm.agent.guard;
 import io.quackjvm.core.Quack;
 import io.quackjvm.core.duckdb.Sql;
 
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.util.ArrayList;
@@ -155,9 +158,14 @@ public enum Hardening {
      * {@link GuardedQuery} refuses both statements, so SQL that goes through it only reads; SQL run
      * on the database directly can write there.</p>
      *
-     * <p><b>The temp folder is not added to the allowed ones.</b> DuckDB spills into it whether or
-     * not it is listed - a sort of 8 million rows under a 200 MB limit wrote 375 MB of temp files
-     * either way, measured - and listing it would let SQL read and write the spill files.</p>
+     * <p><b>SQL can read and write in the temp folder, as if it were an allowed one.</b> DuckDB
+     * spills into it without it being listed - a sort of 8 million rows under a 200 MB limit wrote
+     * 375 MB of temp files, measured - but it also lets {@code read_csv}, {@code glob},
+     * {@code COPY ... TO} and {@code ATTACH} reach it and the folders below it, measured on 2.0.0.0.
+     * So it must be a folder of its own: {@link #properties()} and {@link Hardening#apply} refuse
+     * one that holds anything but DuckDB's own {@code duckdb_temp} files, which keeps it from being
+     * pointed at the system's temp folder or at a folder of data. {@link GuardedQuery} refuses
+     * {@code COPY} and {@code ATTACH}, so through it SQL can only read there.</p>
      */
     public static final class Options {
 
@@ -182,7 +190,10 @@ public enum Hardening {
             return new Options(all, tempFolder, memoryLimit, threads);
         }
 
-        /** Where DuckDB spills what does not fit in memory. */
+        /**
+         * Where DuckDB spills what does not fit in memory. A folder of its own: SQL can read and
+         * write in it, so one holding anything but DuckDB's files is refused when used.
+         */
         public Options tempFolder(String folder) {
             return new Options(allowedFolders, Path.of(folder).toAbsolutePath().normalize().toString(), memoryLimit,
                     threads);
@@ -207,6 +218,7 @@ public enum Hardening {
 
         /** The properties to open a database with, so that it starts this way and stays so. */
         public Properties properties() {
+            checkTempFolder();
             Properties properties = new Properties();
             if (memoryLimit != null) {
                 properties.setProperty("memory_limit", memoryLimit);
@@ -229,6 +241,7 @@ public enum Hardening {
 
         /** The same as statements, in the order a running database needs them. */
         List<String> statements() {
+            checkTempFolder();
             List<String> statements = new ArrayList<>();
             if (memoryLimit != null) {
                 statements.add("SET memory_limit = " + literal(memoryLimit));
@@ -249,6 +262,39 @@ public enum Hardening {
             // Last: once locked, nothing above could be set.
             statements.add("SET lock_configuration = true");
             return statements;
+        }
+
+        /** SQL can reach the temp folder, so it must hold nothing but what DuckDB puts there. */
+        private void checkTempFolder() {
+            if (tempFolder == null) {
+                return;
+            }
+            Path folder = Path.of(tempFolder);
+            if (!Files.exists(folder)) {
+                return;
+            }
+            if (!Files.isDirectory(folder)) {
+                throw new IllegalStateException("The temp folder is a file: " + folder);
+            }
+            List<String> others = new ArrayList<>();
+            try (DirectoryStream<Path> entries = Files.newDirectoryStream(folder)) {
+                for (Path entry : entries) {
+                    String name = entry.getFileName().toString();
+                    if (!name.startsWith("duckdb_temp")) {
+                        others.add(name);
+                    }
+                }
+            }
+            catch (IOException e) {
+                throw new IllegalStateException("Cannot list the temp folder " + folder, e);
+            }
+            if (!others.isEmpty()) {
+                java.util.Collections.sort(others);
+                throw new IllegalStateException("The temp folder " + folder + " holds files that are not DuckDB's: "
+                        + (others.size() > 5 ? others.subList(0, 5) + " and " + (others.size() - 5) + " more" : others)
+                        + ". SQL can read and write in the temp folder as if it were an allowed one, so give it a"
+                        + " folder of its own.");
+            }
         }
 
         private String folderList() {

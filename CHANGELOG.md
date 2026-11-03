@@ -6,6 +6,12 @@
 - **`execute` runs a statement that answers with a row.** `db.execute("CHECKPOINT")` threw, because
   the driver's `executeUpdate` refuses any statement that returns a result, and `CHECKPOINT` returns
   one. It now runs and returns 0.
+- **SQL can read and write in `Hardening.Options`' temp folder** (#11). The docs said the temp
+  folder was out of SQL's reach because it was not listed. Measured on 2.0.0.0, DuckDB lets
+  `read_csv`, `glob`, `COPY ... TO` and `ATTACH` reach `temp_directory` and the folders below it, as
+  if it were an allowed folder. The docs now say so, and `properties()` and `Hardening.apply` refuse
+  a temp folder that holds anything but DuckDB's own `duckdb_temp` files, so it cannot be pointed at
+  a shared folder or one of data. A test pins DuckDB's behaviour, so a release that changes it shows.
 
 ## 1.2.0 - 2026-11-03
 

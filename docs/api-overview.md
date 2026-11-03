@@ -231,7 +231,8 @@ guard.run(sql, cancelSignal);            // QueryCancelled once cancelSignal.can
   separate `Quack` that starts that way, and `Hardening.sandbox()` a bare connection to one.
 - `Hardening.options().allowedFolders(...).tempFolder(...).memoryLimit(...).threads(...)` locks a
   database down except for the folders named: `.properties()` to open it that way,
-  `Hardening.apply(quack, options)` once open. An allowed folder can be written as well as read.
+  `Hardening.apply(quack, options)` once open. An allowed folder can be written as well as read, and
+  so can the temp folder, which must hold nothing but DuckDB's own files.
 - `GuardedResult` carries columns, SQL types, rows, elapsed time, an estimated byte count, and
   `toText()` for something that reads text.
 
