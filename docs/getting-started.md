@@ -31,7 +31,7 @@ for people already using CQEngine, and nothing in the engine depends on it.
 <dependency>
     <groupId>io.github.bdarwin</groupId>
     <artifactId>quackjvm-core</artifactId>
-    <version>1.1.1</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -40,9 +40,9 @@ Add `quackjvm-cqengine` instead if you want the CQEngine plugin; it brings the c
 Gradle:
 
 ```groovy
-implementation 'io.github.bdarwin:quackjvm-core:1.1.1'
+implementation 'io.github.bdarwin:quackjvm-core:1.2.0'
 // or
-implementation 'io.github.bdarwin:quackjvm-cqengine:1.1.1'
+implementation 'io.github.bdarwin:quackjvm-cqengine:1.2.0'
 ```
 
 ## The engine: objects as columns, queried with SQL
