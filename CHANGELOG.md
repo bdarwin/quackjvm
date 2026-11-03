@@ -1,5 +1,7 @@
 # Changelog
 
+## 1.3.0 - Unreleased
+
 ## 1.2.0 - 2026-11-03
 
 Nothing from 1.1.1 was removed or changed; everything here is added.
