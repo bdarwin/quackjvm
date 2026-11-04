@@ -164,6 +164,14 @@ public final class FileTable implements AutoCloseable {
     private final TableFunctions functions = new TableFunctions();
     /** Columns the application computes, added with {@link #column}: by lower-case name, in the order added. */
     private volatile Map<String, Computed> computed = Map.of();
+    /**
+     * Computed columns stored in an earlier session with a version, not added again yet: kept, out of
+     * sight, until added again with the same version and type (then used as they are) or the table
+     * changes (then dropped). By name in lower case: {name, version, type}.
+     */
+    private final Map<String, String[]> pending = new java.util.LinkedHashMap<>();
+    /** The versions recorded in the cache, read as it opens: name in lower case to {version, type}. */
+    private final Map<String, String[]> versions = new java.util.HashMap<>();
     /** Counts changes to the columns, for a session to plan over the new ones. */
     private final java.util.concurrent.atomic.AtomicInteger columnChanges = new java.util.concurrent.atomic.AtomicInteger();
     private Object identity;
@@ -433,6 +441,22 @@ public final class FileTable implements AutoCloseable {
      * @throws IllegalArgumentException if the name is one of the parser's columns, or {@code quackjvm_row}
      */
     public void column(ColumnDef column, RowFunction value) {
+        column(column, value, null);
+    }
+
+    /**
+     * As {@link #column(ColumnDef, RowFunction)}, with a version: the values stored are kept when the
+     * cache is opened again, and used as they are when the application adds the column again with
+     * the same version and type - so a column worked out from the whole file once is not worked out
+     * again at every start. Until then they are out of sight (a query naming the column is refused,
+     * as for any column not added). They are dropped instead when it is added again with another
+     * version or type, or when rows are stored before it is (they would lack its values), or when
+     * the file was replaced. Change the version whenever the function changes what it gives.
+     *
+     * @param version what the function is, in the application's words ({@code "pool-3"}); null for
+     *                none: dropped at every opening, as {@link #column(ColumnDef, RowFunction)} does
+     */
+    public void column(ColumnDef column, RowFunction value, String version) {
         java.util.Objects.requireNonNull(column, "column");
         java.util.Objects.requireNonNull(value, "value");
         checkOpen();
@@ -452,10 +476,16 @@ public final class FileTable implements AutoCloseable {
             if (before != null) {
                 dropStored(before.column().getName());
             }
+            String[] kept = pending.remove(key);
+            boolean reuse = kept != null && version != null && version.equals(kept[1])
+                    && column.getSqlType().equalsIgnoreCase(kept[2]);
+            if (kept != null && !reuse) {
+                dropPhysical(List.of(kept[0])); // another function, or another type: worked out again
+            }
             Map<String, Computed> was = computed;
             Map<String, Computed> next = new java.util.LinkedHashMap<>(was);
             next.remove(key);
-            next.put(key, new Computed(column, value));
+            next.put(key, new Computed(column, value, version));
             // Known to the table before the planner, so a query planned with it finds it.
             computed = java.util.Collections.unmodifiableMap(next);
             try {
@@ -465,6 +495,19 @@ public final class FileTable implements AutoCloseable {
                 computed = was;
                 throw e;
             }
+            if (reuse) {
+                // the values kept from before, in sight again
+                List<String> after = new ArrayList<>(stored);
+                after.add(kept[0]);
+                quack().inTransaction(tx -> {
+                    makeView(tx.connection(), after);
+                    recordStored(tx.connection(), after);
+                });
+                stored = List.copyOf(after);
+            }
+            else if (version != null && stored.stream().anyMatch(n -> n.equalsIgnoreCase(column.getName()))) {
+                quack().inTransaction(tx -> recordStored(tx.connection(), stored));
+            }
             columnChanges.incrementAndGet();
         }
         finally {
@@ -472,12 +515,38 @@ public final class FileTable implements AutoCloseable {
         }
     }
 
+    /** Drops columns from the data, which no query can read now (kept ones out of sight). */
+    private void dropPhysical(List<String> names) {
+        if (names.isEmpty()) {
+            return;
+        }
+        quack().inTransaction(tx -> {
+            for (String name : names) {
+                Sql.execute(tx.connection(), "ALTER TABLE " + data() + " DROP COLUMN IF EXISTS " + Sql.quote(name));
+            }
+            recordStored(tx.connection(), stored);
+        });
+    }
+
+    /** Drops the kept computed columns not added again: rows are about to be stored without their values. */
+    private void dropPending() {
+        if (pending.isEmpty()) {
+            return;
+        }
+        List<String> names = new ArrayList<>();
+        for (String[] p : pending.values()) {
+            names.add(p[0]);
+        }
+        pending.clear();
+        dropPhysical(names);
+    }
+
     /** The columns added with {@link #column}, in the order added. */
     public List<ColumnDef> computedColumns() {
         return computed.values().stream().map(Computed::column).toList();
     }
 
-    private record Computed(ColumnDef column, RowFunction function) {
+    private record Computed(ColumnDef column, RowFunction function, String version) {
     }
 
     /** Drops a computed column's stored values, if it has any: it is stored again when a query reads it. */
@@ -998,6 +1067,8 @@ public final class FileTable implements AutoCloseable {
             Connection connection = tx.connection();
             Sql.execute(connection, "CREATE TABLE IF NOT EXISTS " + meta() + " (rows BIGINT, fingerprint VARCHAR,"
                     + " fingerprint_bytes BIGINT, stored VARCHAR, source VARCHAR)");
+            // the versions of computed columns kept from one session to the next (none before 1.6)
+            Sql.execute(connection, "ALTER TABLE " + meta() + " ADD COLUMN IF NOT EXISTS computed VARCHAR");
             boolean fresh = Sql.queryLong(connection, "SELECT count(*) FROM " + meta(), List.of()) == 0;
             if (fresh) {
                 StringBuilder ddl = new StringBuilder("CREATE OR REPLACE TABLE " + data() + " (" + ROW + " BIGINT");
@@ -1010,7 +1081,7 @@ public final class FileTable implements AutoCloseable {
                 }
                 Sql.execute(connection, ddl.append(')').toString());
                 try (PreparedStatement insert = connection.prepareStatement("INSERT INTO " + meta()
-                        + " VALUES (0, NULL, 0, ?, ?)")) {
+                        + " (rows, fingerprint, fingerprint_bytes, stored, source) VALUES (0, NULL, 0, ?, ?)")) {
                     insert.setString(1, String.join("\n", initial));
                     insert.setString(2, file.toString());
                     insert.executeUpdate();
@@ -1021,8 +1092,8 @@ public final class FileTable implements AutoCloseable {
             }
         });
         try (Connection connection = quack().connection();
-             PreparedStatement select = connection.prepareStatement("SELECT rows, fingerprint, fingerprint_bytes, stored"
-                     + " FROM " + meta());
+             PreparedStatement select = connection.prepareStatement("SELECT rows, fingerprint, fingerprint_bytes, stored,"
+                     + " computed FROM " + meta());
              ResultSet meta = select.executeQuery()) {
             meta.next();
             rows = meta.getLong(1);
@@ -1030,6 +1101,15 @@ public final class FileTable implements AutoCloseable {
             fingerprintBytes = meta.getLong(3);
             String list = meta.getString(4);
             stored = list == null || list.isEmpty() ? List.of() : List.of(list.split("\n"));
+            String kept = meta.getString(5);
+            if (kept != null) {
+                for (String line : kept.split("\n")) {
+                    String[] f = line.split("\t", -1);
+                    if (f.length == 3) {
+                        versions.put(f[0].toLowerCase(Locale.ROOT), new String[] {f[1], f[2]});
+                    }
+                }
+            }
         }
         catch (SQLException e) {
             throw new IllegalStateException("Failed to read the cache", e);
@@ -1069,12 +1149,24 @@ public final class FileTable implements AutoCloseable {
             if (findColumn(column) != null) {
                 after.add(column);
             }
+            else if (versions.containsKey(column.toLowerCase(Locale.ROOT))) {
+                // stored with a version: kept, out of sight, until added again
+                String[] v = versions.get(column.toLowerCase(Locale.ROOT));
+                pending.put(column.toLowerCase(Locale.ROOT), new String[] {column, v[0], v[1]});
+            }
+        }
+        if (after.size() + pending.size() == stored.size()) {
+            stored = List.copyOf(after);
+            return;
         }
         if (after.size() == stored.size()) {
             return;
         }
         List<String> forgotten = new ArrayList<>(stored);
         forgotten.removeAll(after);
+        for (String[] p : pending.values()) {
+            forgotten.remove(p[0]);
+        }
         quack().inTransaction(tx -> {
             Connection connection = tx.connection();
             Sql.execute(connection, "DROP VIEW IF EXISTS " + view());
@@ -1127,6 +1219,7 @@ public final class FileTable implements AutoCloseable {
 
     /** Stores rows {@code first .. first + count - 1}, of the columns stored, in one transaction. */
     private void appendBatch(long first, int count, CancelSignal signal) {
+        dropPending(); // rows stored now would lack the values of columns kept out of sight
         List<String> wanted = stored;
         long staged = stage(first, count, wanted, signal);
         String list = columnList(wanted);
@@ -1160,6 +1253,7 @@ public final class FileTable implements AutoCloseable {
 
     /** Empties the table, for a file that was replaced. Lazy columns already asked for stay asked for. */
     private void empty() {
+        dropPending(); // the file was replaced: what was worked out from it is no use
         quack().inTransaction(tx -> {
             Sql.execute(tx.connection(), "DELETE FROM " + data());
             Sql.execute(tx.connection(), "UPDATE " + meta() + " SET rows = 0, fingerprint = NULL, fingerprint_bytes = 0");
@@ -1246,8 +1340,23 @@ public final class FileTable implements AutoCloseable {
     }
 
     private void recordStored(Connection connection, List<String> after) {
-        try (PreparedStatement update = connection.prepareStatement("UPDATE " + meta() + " SET stored = ?")) {
-            update.setString(1, String.join("\n", after));
+        // the data's columns: those in sight, and those kept out of sight; and the versions of the computed ones
+        List<String> all = new ArrayList<>(after);
+        StringBuilder kept = new StringBuilder();
+        for (String name : after) {
+            Computed c = computed.get(name.toLowerCase(Locale.ROOT));
+            if (c != null && c.version() != null) {
+                kept.append(name).append('\t').append(c.version()).append('\t').append(c.column().getSqlType())
+                        .append('\n');
+            }
+        }
+        for (String[] p : pending.values()) {
+            all.add(p[0]);
+            kept.append(p[0]).append('\t').append(p[1]).append('\t').append(p[2]).append('\n');
+        }
+        try (PreparedStatement update = connection.prepareStatement("UPDATE " + meta() + " SET stored = ?, computed = ?")) {
+            update.setString(1, String.join("\n", all));
+            update.setString(2, kept.toString());
             update.executeUpdate();
         }
         catch (SQLException e) {

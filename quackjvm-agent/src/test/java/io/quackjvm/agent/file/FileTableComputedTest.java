@@ -499,4 +499,68 @@ public class FileTableComputedTest {
         expected.add("cpu_sum");
         assertEquals(expected, run(table, "SELECT * FROM t LIMIT 1").getColumns());
     }
+
+    @Test
+    public void aVersionedComputedColumnIsKeptAcrossReopeningAndUsedWhenAddedAgainTheSame() throws Exception {
+        FileTable table = open();
+        table.update();
+        table.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM, "sum-1");
+        checkSums(run(table, "SELECT line, cpu_sum FROM t ORDER BY line").getRows());
+        table.close();
+
+        FileTable again = open();
+        assertNotNull("not added again yet: a query naming it is refused", again.whyNot("SELECT sum(cpu_sum) FROM t"));
+        long read = again.rowsRead();
+        again.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM, "sum-1");
+        checkSums(run(again, "SELECT line, cpu_sum FROM t ORDER BY line").getRows());
+        assertEquals("the same version: used as kept, the file not read again", read, again.rowsRead());
+
+        // another version: worked out again
+        again.column(new ColumnDef("cpu_sum", Double.class), (raw, rowNo) -> {
+            Double sum = cpuSum(raw);
+            return sum == null ? null : sum * 2;
+        }, "sum-2");
+        List<Object[]> doubled = run(again, "SELECT line, cpu_sum FROM t ORDER BY line").getRows();
+        assertTrue("read again for the new function", again.rowsRead() > read);
+        for (int i = 0; i < doubled.size(); i++) {
+            Double expected = cpuSum(written.get(i));
+            if (expected == null) {
+                assertNull(doubled.get(i)[1]);
+            }
+            else {
+                assertEquals(expected * 2, ((Number) doubled.get(i)[1]).doubleValue(), 1e-9);
+            }
+        }
+    }
+
+    @Test
+    public void keptValuesAreDroppedWhenRowsAreStoredBeforeTheColumnIsAddedAgain() throws Exception {
+        FileTable table = open();
+        table.update();
+        table.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM, "sum-1");
+        run(table, "SELECT sum(cpu_sum) FROM t");
+        table.close();
+        append(ROWS, ROWS + 200);
+
+        FileTable again = open();
+        again.update(); // new rows, without the kept column's values: it can't be kept
+        long read = again.rowsRead();
+        again.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM, "sum-1");
+        checkSums(run(again, "SELECT line, cpu_sum FROM t ORDER BY line").getRows());
+        assertTrue("worked out again, for every row", again.rowsRead() > read);
+    }
+
+    @Test
+    public void unversionedOnesAreStillDroppedAtReopening() throws Exception {
+        FileTable table = open();
+        table.update();
+        table.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM);
+        run(table, "SELECT sum(cpu_sum) FROM t");
+        table.close();
+        FileTable again = open();
+        long read = again.rowsRead();
+        again.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM);
+        checkSums(run(again, "SELECT line, cpu_sum FROM t ORDER BY line").getRows());
+        assertTrue("no version: worked out again", again.rowsRead() > read);
+    }
 }

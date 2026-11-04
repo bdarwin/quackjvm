@@ -151,6 +151,17 @@ wide.update();                                                               // 
   dropped: the function that made them may have changed, and the table can't tell. Add the column
   again, and the next query reading it computes it again. Until then a query naming it is refused,
   as for any unknown column. The parser's lazy columns stay stored as before.
+- **Kept with a version.** Added with a version, `column(def, function, "pool-3")`, its values are
+  kept when the cache is opened again, out of sight. Added again with the same version and type,
+  they are used as they are, with no read of the file: a column worked out from a whole big file
+  once is not worked out again at every start. They are dropped, and worked out again when a query
+  reads the column, if it is added with another version or type, if rows are stored before it is
+  added again (they would lack its values), or if the file was replaced. Change the version
+  whenever the function changes what it gives.
+
+```java
+table.column(new ColumnDef("cpu_total", Double.class), CPU_TOTAL, "cpu-total-1");  // after a restart: as kept
+```
 - **Adding one of the same name again replaces it.** Its stored values are dropped, and the next
   query that reads it stores it again. The new one may have another type.
 - **Its name can't be one of the parser's columns**, nor `quackjvm_row`.
