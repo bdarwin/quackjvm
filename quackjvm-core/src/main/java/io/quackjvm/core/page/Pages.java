@@ -188,7 +188,10 @@ public final class Pages {
         }
     }
 
-    /** How many rows come before this key: its row's position, counted from 0. */
+    /**
+     * How many rows come before this key: its row's position, counted from 0. For a key with no row
+     * - one deleted, say - where it would be.
+     */
     public long position(PageKey key) {
         require(key);
         List<Object> all = new ArrayList<>(parameters);

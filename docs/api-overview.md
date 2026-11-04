@@ -172,13 +172,16 @@ See [Paging and journals](paging.md).
 
 ### `io.quackjvm.core.journal.Journal<O>`
 
-An application's own records, appended, updated while they stream in, paged and searched.
+An application's own records, appended, updated while they stream in, paged, searched and deleted.
 
 ```java
 Journal<Message> j = Journal.builder(quack, "message", ColumnarLayout.ofRecord(Message.class))
         .index("session", "ts").searchable("text").migrate(2, "ALTER TABLE message ADD COLUMN cost DOUBLE").open();
 j.append(m);   j.update(id, Map.of("text", soFar));   j.get(id);   j.search("connection refused", 20);
 j.pages("session = ?", id).orderBy("ts", "id");   j.version();
+j.delete(id);   j.deleteWhere("session = ?", id);
+// keys of several columns, numbered in a group: .keyColumns("chat", "seq").sequence("seq").within("chat")
+j.appendAndGet(m).seq();   j.get(PageKey.of(chat, seq));
 ```
 
 See [Paging and journals](paging.md#journal).

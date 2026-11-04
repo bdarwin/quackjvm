@@ -14,7 +14,19 @@
   a group column with few values; `Profile.distinctValues()` gives the counts, and
   `QuerySession.profile(name)` profiles a registered table.
 
+- **`Journal` deletes** (#17): `delete(key)` and `deleteWhere(where, params)`, under the writer's
+  turn and in one commit. `deleteWhere` refuses an empty condition; `deleteWhere("true")` removes
+  everything. A delete killed with `kill -9` is all there or not at all.
+- **`Journal` keys of several columns**: `keyColumns("chat", "seq")`, with `get`, `update` and
+  `delete` taking a `PageKey`. **Numbers within a group**: `sequence("seq").within("chat")` fills
+  1, 2, 3... under the writer's turn, and `appendAndGet` returns the record as stored.
+  **`newestBy("time")`** sets the order `search` gives.
+- The paging docs say how deleted rows' space is reused, and how to shrink a file by copying the
+  database into a new one.
+
 ### Changed
+- Journals over the same table of the same `Quack` share one writer's turn, instead of one per
+  journal object.
 - The group-by example now goes by a column's name (`level`, `host`, `status`...) and leaves out free
   text such as `message`. Percentiles and means skip numbers that count rows (`line`, `id`, `..._id`).
 

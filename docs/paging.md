@@ -2,8 +2,8 @@
 
 Two pieces for an application that keeps its own records and scrolls through them:
 - **`Pages`** reads any query a page at a time, for infinite scrolling.
-- **`Journal`** is an append-only table for an application's own records: written once, possibly
-  changed while still being written, then paged and searched.
+- **`Journal`** is a table for an application's own records: written once, possibly changed while
+  still being written, then paged, searched, and deleted when the person asks.
 
 For scrolling through the result of a query a user typed, see
 [result windows](query-sessions.md#result-windows).
@@ -76,14 +76,15 @@ messages.update(id, Map.of("text", soFar, "tokensOut", n));   // a message growi
 messages.get(id);
 List<Journal.Hit<Message>> hits = messages.search("connection refused", 20);   // newest first
 Pages page = messages.pages("session = ?", sessionId).orderBy("ts", "id").size(50);
+messages.delete(id);                                      // one the person removed
+messages.deleteWhere("session = ?", sessionId);           // a whole session
 ```
 
 Totals, such as usage per model per day, are plain SQL over the table.
 
 ### Writing
 
-- **`append`** adds a record. A key that is already there is refused: a journal adds records, and
-  `update` changes one. `append(records)` writes a batch in one transaction: all of it, or none if
+- **`append`** adds a record. A key that is already there is refused: `update` changes a record. `append(records)` writes a batch in one transaction: all of it, or none if
   one record is refused.
 - **`update(key, changes)`** changes some columns of one record, but never its key. It returns
   false if there is no record with that key.
@@ -96,6 +97,83 @@ Totals, such as usage per model per day, are plain SQL over the table.
   `kill -9` three times and reopens the file each time. The file opens, and every record has its
   text and its count from the same update. To check that the test can fail, the writer was changed
   to set the two in separate updates: the test then found a broken record every time.
+
+### Keys and numbers
+
+The key is the layout's first column, unless `keyColumns` names others. A key of several columns is
+passed to `get`, `update` and `delete` as a `PageKey`:
+
+```java
+Journal<ChatMessage> messages = Journal.builder(quack, "chat_message", ColumnarLayout.ofRecord(ChatMessage.class))
+        .keyColumns("chat", "seq")
+        .sequence("seq").within("chat")   // 1, 2, 3... in each chat
+        .newestBy("time")                 // search gives the newest first by this
+        .searchable("text")
+        .open();
+
+ChatMessage stored = messages.appendAndGet(new ChatMessage(chatId, null, "user", now, text));
+stored.seq();                                             // its number in the chat
+messages.update(PageKey.of(chatId, stored.seq()), Map.of("text", more));
+```
+
+- **A sequence** is filled when a record is appended with it null or 0: one more than the highest
+  in its group. Numbers given are kept, and the next one goes on from them. A batch numbers on from
+  itself. Deleting a chat's last message gives its number out again.
+- **Writers take turns over the table**, not just over one journal object: two journals over the
+  same table of the same `Quack` share the turn. With eight threads appending to four chats, every
+  chat was numbered 1 to N with no gap and no number twice. With two journal objects appending to
+  one chat, all 600 were stored.
+- **A writer outside the journal** (plain SQL taking the next number) can still take a number
+  first. The append then finds the clash, numbers again and retries, up to 10 times. In a test, the
+  journal stored all 300 of its messages while plain SQL inserted the next number every 20 ms.
+  Without the retry, the same test fails.
+- **Speed:** numbering costs one query for the highest number in the group. `appendAndGet` into one
+  of 1,000 chats of a million messages took a median of 1.3 ms (99th percentile 1.5–2.4 ms).
+- **Search order:** `search` gives the newest first by the `newestBy` columns, else by the key,
+  highest first. Without `newestBy`, a key such as (chat, seq) sorts by chat first.
+- **An existing table keyed otherwise** is refused on `open`, naming both keys. A migration can
+  change the key with `ALTER TABLE`.
+
+### Deleting
+
+`delete(key)` removes one record and says whether it was there. `deleteWhere(where, params)` takes
+a condition as `pages` does and returns how many it removed. It refuses an empty condition: to
+remove everything, write `deleteWhere("true")`.
+
+- **All or none.** Each call takes the writer's turn and commits once. A test appends a chat of
+  50,000 messages, deletes it (21–22 ms) and repeats, and kills the process with `kill -9` six
+  times while a delete runs. After every kill, the reopened file held each chat whole: four times
+  the delete had not committed, twice it had.
+- **Paging stays right.** A test pages back through one chat of 5,000 messages while another thread
+  deletes parts of the other 19 chats: every message was read exactly once. Deleting the chat
+  being paged gives empty pages, with no exception, whether it goes all at once or a row at a time.
+- **Counting and positions.** `Journal.count()` is always current. `Pages.count()` is remembered,
+  so call `recount()` after deleting. `position(key)` of a deleted key gives where it would be: the
+  number of rows before it. `around(key, n)` of a deleted key gives the rows each side of where it
+  was.
+- **Search** no longer finds deleted records.
+
+**Disk space.** DuckDB doesn't give a deleted row's space back to the file: deleting half of
+400,000 rows made a file grow from 17 to 24 MB at the next checkpoint. It does reuse the space for
+rows written later. In a test with 40,000 messages live, adding 40 chats and deleting 40 others
+each round for 20 rounds, the file stayed between 1.8 and 3.7 MB.
+
+To shrink a file after deleting most of it, copy the database into a new file, then open the new one:
+
+```java
+String name = quack.query("SELECT current_database()").scalar(String.class);
+quack.execute("ATTACH 'app-new.duckdb' AS fresh");
+quack.execute("COPY FROM DATABASE " + name + " TO fresh");
+quack.execute("DETACH fresh");
+// close, swap the files, reopen
+```
+
+With 100,000 of 400,000 entries left, that went from 10.5 to 5.8 MB in 65–88 ms. The copy keeps
+the keys, indexes, comments and the journal's version: a test reopens the journal on it, finds,
+searches and appends, and a duplicate key is still refused. Rewriting the table in place did not
+work as well: where the copy lands depends on where the free blocks are, and a rewrite of an
+already compact file doubled it. A hardened database refuses `ATTACH` to a file, so do this
+before hardening, or on the application's own connection.
 
 ### Versions
 
