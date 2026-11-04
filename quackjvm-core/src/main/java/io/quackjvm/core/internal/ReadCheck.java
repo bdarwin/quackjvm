@@ -58,6 +58,23 @@ public final class ReadCheck {
         }
     }
 
+    /**
+     * Whether the statement can run as it is, without being prepared to check it first: it has no
+     * parameters to bind, and it starts with {@code SELECT} or {@code FROM}, which always return
+     * rows. Call {@link #beforePreparing} first, which refuses more than one statement.
+     *
+     * <p>Worth doing because DuckDB runs some queries far slower prepared: an ASOF join returning
+     * 100,000 rows read in 120 ms through a plain statement against 261 ms prepared, on DuckDB 2.0.
+     * A {@code WITH} is not let through: on DuckDB 2.0 it can lead an {@code INSERT}.</p>
+     */
+    public static boolean runsUnprepared(String sql, Object[] parameters) {
+        if (parameters != null && parameters.length > 0) {
+            return false;
+        }
+        String keyword = SqlScanner.leadingKeyword(sql);
+        return "SELECT".equals(keyword) || "FROM".equals(keyword);
+    }
+
     /** After preparing, before running: it must return rows. */
     public static void afterPreparing(PreparedStatement statement, String sql) throws SQLException {
         StatementReturnType returns = returnType(statement);

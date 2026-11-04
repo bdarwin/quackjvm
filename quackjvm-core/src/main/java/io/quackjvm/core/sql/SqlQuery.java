@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -46,15 +47,26 @@ public final class SqlQuery {
 
     /** As {@link #stream(Connection, String, Object...)}, cancelled if still open after the timeout. */
     static Stream<SqlRow> stream(Connection connection, String sql, Duration timeout, Object... parameters) {
-        PreparedStatement statement = null;
+        Statement statement = null;
         Deadline deadline = null;
         try {
             ReadCheck.beforePreparing(sql);
-            statement = connection.prepareStatement(sql);
-            ReadCheck.afterPreparing(statement, sql);
-            Sql.bindAll(statement, Arrays.asList(parameters), 1);
-            deadline = Deadline.start(statement, timeout);
-            ResultSet resultSet = statement.executeQuery();
+            ResultSet resultSet;
+            // A SELECT with no parameters needs no preparing to know it reads, and DuckDB runs some
+            // queries far slower prepared; see ReadCheck.runsUnprepared.
+            if (ReadCheck.runsUnprepared(sql, parameters)) {
+                statement = connection.createStatement();
+                deadline = Deadline.start(statement, timeout);
+                resultSet = statement.executeQuery(sql);
+            }
+            else {
+                PreparedStatement prepared = connection.prepareStatement(sql);
+                statement = prepared;
+                ReadCheck.afterPreparing(prepared, sql);
+                Sql.bindAll(prepared, Arrays.asList(parameters), 1);
+                deadline = Deadline.start(statement, timeout);
+                resultSet = prepared.executeQuery();
+            }
             Deadline running = deadline;
 
             List<String> columnNames = new ArrayList<>();
@@ -64,7 +76,7 @@ public final class SqlQuery {
             // One view over the cursor, reused per row; callers keeping a row past the iteration
             // should copy it with toArray().
             SqlRow row = new SqlRow(resultSet, columnNames);
-            PreparedStatement toClose = statement;
+            Statement toClose = statement;
 
             Iterator<SqlRow> iterator = new Iterator<>() {
                 private Boolean hasNext;

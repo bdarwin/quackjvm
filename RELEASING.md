@@ -278,6 +278,21 @@ mvn -q clean verify
 git status --porcelain     # should be empty
 ```
 
+### Before a release: rerun the QuestDB comparison
+
+`docs/questdb.md` quotes measured times, and a change to the query path or a new DuckDB moves
+them. On a quiet machine, with QuestDB installed (`brew install questdb`):
+
+```sh
+benchmarks/questdb/run.sh              # this checkout, about 45 minutes
+benchmarks/questdb/run.sh -v 1.5.0     # the previous release from Maven Central, to compare
+```
+
+It starts and stops QuestDB itself, waits for a load average below 5 before each engine, and
+writes `benchmarks/questdb/results/<version>-<date>.txt` and a `.md` with the tables. Check the
+line that says every engine returned the same rows, paste the tables into `docs/questdb.md` with
+the date and versions, and commit the results files. See `benchmarks/README.md`.
+
 ### 3.2 Set the release version
 
 ```sh
