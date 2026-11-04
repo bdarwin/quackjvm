@@ -259,14 +259,19 @@ public class FileTableFunctionsTest {
 
     @Test
     public void replacingAFunctionWhileAQueryRunsKeepsTheOldOneForThatQuery() throws Exception {
+        java.util.concurrent.CountDownLatch calling = new java.util.concurrent.CountDownLatch(1);
         FileTable table = keep(wide().function("weight", Long.class, Long.class, ms -> {
+            calling.countDown();
             pause(200_000);
             return 1L;
         }).open());
         table.update();
+        run(table, "SELECT count(time) FROM t");   // time stored first, so the query below starts at once
         ExecutorService pool = Executors.newSingleThreadExecutor();
         Future<GuardedResult> running = pool.submit(() -> run(table, "SELECT sum(weight(time)) FROM t"));
-        Thread.sleep(150);
+        // Replaced once the query is calling it - not after a guessed wait, which on a slow machine
+        // can land before the query has begun.
+        assertTrue(calling.await(30, TimeUnit.SECONDS));
         assertFalse("still running when replaced", running.isDone());
         table.function("weight", Long.class, Long.class, ms -> 2L);
         assertEquals("the next query gets the new one", 2L * ROWS,
