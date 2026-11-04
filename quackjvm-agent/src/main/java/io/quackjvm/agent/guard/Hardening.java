@@ -112,7 +112,7 @@ public enum Hardening {
 
     /** Hardening that lets in folders of its own, with a temp folder and limits: see {@link Options}. */
     public static Options options() {
-        return new Options(List.of(), null, null, 0);
+        return new Options(List.of(), List.of(), null, null, 0);
     }
 
     /**
@@ -170,12 +170,15 @@ public enum Hardening {
     public static final class Options {
 
         private final List<String> allowedFolders;
+        private final List<String> allowedFiles;
         private final String tempFolder;
         private final String memoryLimit;
         private final int threads;
 
-        private Options(List<String> allowedFolders, String tempFolder, String memoryLimit, int threads) {
+        private Options(List<String> allowedFolders, List<String> allowedFiles, String tempFolder, String memoryLimit,
+                        int threads) {
             this.allowedFolders = List.copyOf(allowedFolders);
+            this.allowedFiles = List.copyOf(allowedFiles);
             this.tempFolder = tempFolder;
             this.memoryLimit = memoryLimit;
             this.threads = threads;
@@ -187,7 +190,26 @@ public enum Hardening {
             for (String folder : folders) {
                 all.add(Path.of(folder).toAbsolutePath().normalize().toString());
             }
-            return new Options(all, tempFolder, memoryLimit, threads);
+            return new Options(all, allowedFiles, tempFolder, memoryLimit, threads);
+        }
+
+        /**
+         * Files SQL may use, each on its own - DuckDB's {@code allowed_paths}. A {@link
+         * io.quackjvm.agent.session.QuerySession} lets a registered file table's cache in this way: its
+         * database, its write-ahead log and its checkpoint file, and nothing else of its folder.
+         */
+        public Options allowedFiles(String... files) {
+            List<String> all = new ArrayList<>(allowedFiles);
+            for (String file : files) {
+                all.add(Path.of(file).toAbsolutePath().normalize().toString());
+            }
+            return new Options(allowedFolders, all, tempFolder, memoryLimit, threads);
+        }
+
+        /** These options with these files in place of the ones given before. */
+        public Options withAllowedFiles(List<String> files) {
+            return new Options(allowedFolders, List.of(), tempFolder, memoryLimit, threads)
+                    .allowedFiles(files.toArray(new String[0]));
         }
 
         /**
@@ -195,13 +217,13 @@ public enum Hardening {
          * write in it, so one holding anything but DuckDB's files is refused when used.
          */
         public Options tempFolder(String folder) {
-            return new Options(allowedFolders, Path.of(folder).toAbsolutePath().normalize().toString(), memoryLimit,
-                    threads);
+            return new Options(allowedFolders, allowedFiles, Path.of(folder).toAbsolutePath().normalize().toString(),
+                    memoryLimit, threads);
         }
 
         /** DuckDB's {@code memory_limit}, such as {@code "4GB"}. */
         public Options memoryLimit(String limit) {
-            return new Options(allowedFolders, tempFolder, limit, threads);
+            return new Options(allowedFolders, allowedFiles, tempFolder, limit, threads);
         }
 
         /** How many threads DuckDB may use. */
@@ -209,11 +231,15 @@ public enum Hardening {
             if (count < 1) {
                 throw new IllegalArgumentException("At least one thread: " + count);
             }
-            return new Options(allowedFolders, tempFolder, memoryLimit, count);
+            return new Options(allowedFolders, allowedFiles, tempFolder, memoryLimit, count);
         }
 
         public List<String> getAllowedFolders() {
             return allowedFolders;
+        }
+
+        public List<String> getAllowedFiles() {
+            return allowedFiles;
         }
 
         /** The properties to open a database with, so that it starts this way and stays so. */
@@ -232,7 +258,10 @@ public enum Hardening {
             properties.setProperty("autoinstall_known_extensions", "false");
             properties.setProperty("autoload_known_extensions", "false");
             if (!allowedFolders.isEmpty()) {
-                properties.setProperty("allowed_directories", castFolderList());
+                properties.setProperty("allowed_directories", castList(allowedFolders));
+            }
+            if (!allowedFiles.isEmpty()) {
+                properties.setProperty("allowed_paths", castList(allowedFiles));
             }
             properties.setProperty("enable_external_access", "false");
             properties.setProperty("lock_configuration", "true");
@@ -254,9 +283,12 @@ public enum Hardening {
             }
             statements.add("SET autoinstall_known_extensions = false");
             statements.add("SET autoload_known_extensions = false");
+            // Before external access goes: afterwards the lists can no longer be changed.
             if (!allowedFolders.isEmpty()) {
-                // Before external access goes: afterwards the list can no longer be changed.
-                statements.add("SET allowed_directories = " + folderList());
+                statements.add("SET allowed_directories = " + sqlList(allowedFolders));
+            }
+            if (!allowedFiles.isEmpty()) {
+                statements.add("SET allowed_paths = " + sqlList(allowedFiles));
             }
             statements.add("SET enable_external_access = false");
             // Last: once locked, nothing above could be set.
@@ -297,24 +329,24 @@ public enum Hardening {
             }
         }
 
-        private String folderList() {
+        private static String sqlList(List<String> paths) {
             StringBuilder list = new StringBuilder("[");
-            for (int i = 0; i < allowedFolders.size(); i++) {
-                list.append(i == 0 ? "" : ", ").append(literal(allowedFolders.get(i)));
+            for (int i = 0; i < paths.size(); i++) {
+                list.append(i == 0 ? "" : ", ").append(literal(paths.get(i)));
             }
             return list.append(']').toString();
         }
 
         /**
-         * The list for {@link #properties()}. DuckDB turns a property's string into a list with its
+         * A list for {@link #properties()}. DuckDB turns a property's string into a list with its
          * cast, which reads a backslash as an escape and does not know SQL's doubled quote, so each
          * backslash and quote is escaped with a backslash instead (issue #12).
          */
-        private String castFolderList() {
+        private static String castList(List<String> paths) {
             StringBuilder list = new StringBuilder("[");
-            for (int i = 0; i < allowedFolders.size(); i++) {
-                String folder = allowedFolders.get(i).replace("\\", "\\\\").replace("'", "\\'");
-                list.append(i == 0 ? "" : ", ").append('\'').append(folder).append('\'');
+            for (int i = 0; i < paths.size(); i++) {
+                String path = paths.get(i).replace("\\", "\\\\").replace("'", "\\'");
+                list.append(i == 0 ? "" : ", ").append('\'').append(path).append('\'');
             }
             return list.append(']').toString();
         }
@@ -325,8 +357,8 @@ public enum Hardening {
 
         @Override
         public String toString() {
-            return "Hardening.Options[folders=" + allowedFolders + ", temp=" + tempFolder + ", memory=" + memoryLimit
-                    + ", threads=" + threads + "]";
+            return "Hardening.Options[folders=" + allowedFolders + (allowedFiles.isEmpty() ? "" : ", files=" + allowedFiles)
+                    + ", temp=" + tempFolder + ", memory=" + memoryLimit + ", threads=" + threads + "]";
         }
     }
 

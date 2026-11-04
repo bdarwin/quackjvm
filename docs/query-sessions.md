@@ -32,6 +32,7 @@ Each registration is a view, so nothing is copied:
 | `register(Path, sql)` | any SQL, named after the file |
 | `register(name, sql)` | any SQL, under that name |
 | `register(name, () -> rows, layout)` | Java objects, read where they lie: a [live table](live-tables.md) |
+| `register(name, fileTable)` or `register(fileTable)` | a [file table](file-tables.md): a big file parsed by the application, kept on disk ([below](#file-tables)) |
 
 A table registered under a name already in use replaces the old one. If the new one can't be
 made, the old one stays. For example, a file that can't be read is refused with DuckDB's reason,
@@ -139,6 +140,75 @@ Measured on two million rows, with another program busy on 4–5 cores:
 The stored result belongs to the session's database. So when the session reopens its database to
 let in a folder, the window goes with the old one: reading it then throws, saying to make it again.
 `isReadable()` tells you ahead of time.
+
+## File tables
+
+A [`FileTable`](file-tables.md) keeps a file the application parses - a log being written to, a
+CSV too wide to load - as a table on disk. Registered in a session, it joins the session's other
+tables, and `window` can read it:
+
+```java
+FileTable log = FileTables.builder(path, columns, LineSource.of(path), parser)
+        .cacheDir(cache).roomLimit(5L << 30).version("viewer-3").open();
+
+session.register("app_log", log);           // or register(log): a name from tableName(path)
+session.alias("log", "app_log");
+
+log.update(signal, progress);               // queries see each batch once it is stored
+session.run("SELECT * FROM log JOIN devices USING (device_id)", signal);
+session.window("SELECT * FROM log WHERE level = 'ERROR'", signal);
+session.unregister("app_log");              // the table stays open, still the caller's to close
+```
+
+**How.** The table's cache file is attached to the session's database, so a join reads it where it
+lies. A cache can be attached to one database at a time, so the table moves into the session's,
+and back to one of its own when it is unregistered or the session closes. While it is registered,
+it is queried through the session: `log.query(...)` says so. A table kept in memory has nothing to
+attach, so its rows are read from the file again when it moves.
+
+**Hardening.** The session lets DuckDB use exactly the cache's database, its write-ahead log and
+its checkpoint file (`allowed_paths`), and nothing else of its folder: other caches, `.used` files
+and other files there are refused. Without the checkpoint file, DuckDB 2.0 can't checkpoint the
+attached database and invalidates it. DuckDB fixes the list when the database is locked, so
+registering a file table opens the session's database again, as letting in a folder does, and
+keeps every table. A test checks the refusals after registering, after the session reopens and
+after the file is rotated: another cache, a `.used` file, a CSV and a glob of the cache folder, a
+folder not allowed and a URL; and `ATTACH`, `DETACH`, `USE` and writes to the table are refused by
+the guard.
+
+**Growing.** `update` takes the table's lock a batch at a time, so a query storing lazy columns,
+or the session reopening, goes between two batches. In a test, six threads ran joins while another
+appended 100,000 lines in ten steps, then rotated the file, while the session reopened twice:
+295–336 joins, and every one saw whole batches (its row count equal to its last line number) and
+the join's matches, with no failures.
+
+**Lazy columns.** A query reading lazy columns of a registered table stores them first, as the
+table's own `query` does. The session plans the query over empty copies of all its tables, the
+file table's with all its columns. In a test joining a 6,000-column table with a CSV, the join
+stored the two columns it read, and a later query reading one more stored one more. `whyRejected`
+says when a query would add more than `maxNewColumnsPerQuery`, or when its columns can't be told (a
+`PIVOT`). `describe` and `examples` list all the table's columns, not only those stored.
+
+**Functions.** A file table's [Java functions](file-tables.md#java-functions) can be called in the
+session's queries, and a cancel stops them as it does on the table: 3–4 ms after `cancel()`, in a
+function taking 1 ms a row.
+
+**Measured** on a 3,000,000-line log (276 MB):
+
+| | |
+|---|---|
+| Joined with a 10,000-row CSV from another folder | 12–18 ms the first time, 10–11 ms the second; the same rows as the join over `read_csv` of the log |
+| `window` of 2,000,000 of its rows, `rows(1_500_000, 100)` | median 1.05 ms |
+
+A window keeps the result it had: lines added afterwards don't change it.
+
+**Copies.** A table using a copy of its cache (`.2`...) because another process holds the first
+works the same: a test holds the cache in a second JVM and joins the copy.
+
+**Closing.** A file table closed while registered lets go of the session first. A query naming it,
+or an alias of it, then fails saying the table was closed, and `unregister` takes it away.
+`session.close()` doesn't close file tables: they go back to databases of their own, and work alone
+again.
 
 ## Example queries
 

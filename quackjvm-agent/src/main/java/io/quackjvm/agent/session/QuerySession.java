@@ -1,22 +1,32 @@
 package io.quackjvm.agent.session;
 
 import io.quackjvm.agent.catalog.Catalog;
+import io.quackjvm.agent.catalog.ColumnInfo;
+import io.quackjvm.agent.catalog.QueryColumns;
 import io.quackjvm.agent.catalog.Profile;
 import io.quackjvm.agent.catalog.QueryExamples;
 import io.quackjvm.agent.catalog.TableInfo;
 import io.quackjvm.agent.catalog.internal.SqlNames;
+import io.quackjvm.agent.file.FileTable;
+import io.quackjvm.agent.file.internal.FileTableAccess;
 import io.quackjvm.agent.guard.CancelSignal;
 import io.quackjvm.agent.guard.GuardedQuery;
 import io.quackjvm.agent.guard.GuardedResult;
 import io.quackjvm.agent.guard.Hardening;
+import io.quackjvm.agent.guard.QueryFailed;
 import io.quackjvm.agent.guard.QueryPolicy;
+import io.quackjvm.agent.guard.QueryRejected;
 import io.quackjvm.agent.live.LiveTable;
 import io.quackjvm.agent.live.LiveTables;
 import io.quackjvm.core.Quack;
+import io.quackjvm.core.duckdb.ColumnDef;
 import io.quackjvm.core.duckdb.Sql;
 import io.quackjvm.core.layout.ColumnarLayout;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -50,6 +60,11 @@ import java.util.function.Supplier;
  * <p>A view, so nothing is copied: a file is read when a query reads it, a live table is read from
  * its objects, a relation is whatever SQL it was given. {@link #register(Path)} picks DuckDB's reader
  * from the file's extension and names the table with {@link #tableName}.</p>
+ *
+ * <p>A {@link FileTable} - a big file the application parses, kept on disk - is the exception:
+ * {@link #register(String, FileTable)} attaches its cache to the session's database, letting in
+ * that cache's files and nothing else of its folder, and moves the table there until it is
+ * unregistered or the session closes.</p>
  *
  * <h2>Folders</h2>
  *
@@ -88,6 +103,11 @@ public final class QuerySession implements AutoCloseable {
     /** Counts the databases the session has had, so that a window knows when its own has gone. */
     private int generation;
     private boolean windowsAttached;
+    /** Names the caches of registered file tables are attached under. */
+    private final java.util.concurrent.atomic.AtomicLong catalogs = new java.util.concurrent.atomic.AtomicLong();
+    /** Changes with every registration, alias and reopening, so the planner knows to start again. */
+    private int schemaVersion;
+    private Planner planner;
     private final java.util.concurrent.atomic.AtomicLong windowNames = new java.util.concurrent.atomic.AtomicLong();
 
     private QuerySession(Hardening.Options options, QueryPolicy defaults) {
@@ -152,6 +172,32 @@ public final class QuerySession implements AutoCloseable {
         });
     }
 
+    /**
+     * A {@link FileTable} as a table under this name, so that queries join it with the others - and
+     * {@link #window} can read it. Its cache is attached to the session's database: SQL reads it,
+     * and none of the rest of its folder. It goes on growing with {@link FileTable#update}, and a
+     * query sees whole batches. Lazy columns a query reads are stored first. Taken away, or when the
+     * session closes, the table is still open, and still the caller's to close; closed while it is
+     * here, a query naming it says so.
+     *
+     * @throws IllegalArgumentException if it is closed, or registered in a session already
+     */
+    public void register(String name, FileTable table) {
+        change(() -> {
+            host(checkName(name), table);
+            return null;
+        });
+    }
+
+    /** As {@link #register(String, FileTable)}, named after its file as {@link #tableName} names one. */
+    public String register(FileTable table) {
+        return change(() -> {
+            String name = tableName(table.getFile(), takenNames());
+            host(name, table);
+            return name;
+        });
+    }
+
     /** Takes a table away, and any alias that stood for it. Unknown names are ignored. */
     public void unregister(String name) {
         change(() -> {
@@ -166,6 +212,7 @@ public final class QuerySession implements AutoCloseable {
                 }
             }
             gone.drop(database);
+            schemaVersion++;
             return null;
         });
     }
@@ -189,6 +236,7 @@ public final class QuerySession implements AutoCloseable {
             aliases.remove(key(aliases, alias));
             makeAlias(database, alias, table);
             aliases.put(alias, table);
+            schemaVersion++;
             return null;
         });
     }
@@ -199,6 +247,7 @@ public final class QuerySession implements AutoCloseable {
             if (aliases.remove(key(aliases, alias)) != null) {
                 Sql.execute(database.sharedConnection(), "DROP VIEW IF EXISTS " + Sql.quote(alias));
             }
+            schemaVersion++;
             return null;
         });
     }
@@ -241,7 +290,7 @@ public final class QuerySession implements AutoCloseable {
         try {
             checkOpen();
             GuardedQuery runner = policy == null ? guard : GuardedQuery.on(database, policy);
-            return runner.run(sql, signal);
+            return overFileTables(sql, signal, () -> runner.run(sql, signal));
         }
         finally {
             lock.readLock().unlock();
@@ -253,7 +302,8 @@ public final class QuerySession implements AutoCloseable {
         lock.readLock().lock();
         try {
             checkOpen();
-            return guard.whyRejected(sql);
+            String rejected = guard.whyRejected(sql);
+            return rejected != null ? rejected : whyNotLazy(sql);
         }
         finally {
             lock.readLock().unlock();
@@ -265,7 +315,7 @@ public final class QuerySession implements AutoCloseable {
         lock.readLock().lock();
         try {
             checkOpen();
-            return Catalog.of(database).describe(name);
+            return describe(Catalog.of(database), name);
         }
         finally {
             lock.readLock().unlock();
@@ -291,11 +341,11 @@ public final class QuerySession implements AutoCloseable {
             Catalog catalog = Catalog.of(database);
             List<TableInfo> others = new ArrayList<>();
             for (String other : registrations.keySet()) {
-                if (!other.equals(name) && !other.equals(aliases.get(name))) {
-                    others.add(catalog.describe(other));
+                if (!other.equals(name) && !other.equals(aliases.get(name)) && !isClosed(other)) {
+                    others.add(describe(catalog, other));
                 }
             }
-            return QueryExamples.of(catalog.describe(name), others, distinctValues);
+            return QueryExamples.of(describe(catalog, name), others, distinctValues);
         }
         finally {
             lock.readLock().unlock();
@@ -336,7 +386,7 @@ public final class QuerySession implements AutoCloseable {
             GuardedQuery runner = policy == null ? guard : GuardedQuery.on(database, policy);
             long rows;
             try {
-                rows = runner.store(sql, WINDOWS, table, signal);
+                rows = overFileTables(sql, signal, () -> runner.store(sql, WINDOWS, table, signal));
             }
             catch (RuntimeException e) {
                 Sql.execute(database.sharedConnection(), "DROP TABLE IF EXISTS " + ResultWindow.qualified(table));
@@ -485,6 +535,14 @@ public final class QuerySession implements AutoCloseable {
                 return;
             }
             closed = true;
+            for (Registration registration : registrations.values()) {
+                if (registration instanceof Hosted hosted) {
+                    hosted.goHome();
+                }
+            }
+            if (planner != null) {
+                planner.close();
+            }
             database.close();
         }
         finally {
@@ -551,13 +609,18 @@ public final class QuerySession implements AutoCloseable {
      * that if it cannot be made, the old one is still there.
      */
     private void put(Registration registration) {
+        put(registration, database);
+    }
+
+    private void put(Registration registration, Quack into) {
         String taken = key(registrations, registration.name());
         Registration before = registrations.get(taken);
-        registration.make(database);
+        registration.make(into);
+        schemaVersion++;
         if (before != null) {
             // A view made over a live table's leaves its objects registered: let them go. The live
-            // table's own view is not dropped, since it no longer reads them.
-            before.release(database);
+            // table's own view is not dropped, since it no longer reads them. A file table goes home.
+            before.replaced(into);
         }
         if (before == null || taken.equals(registration.name())) {
             registrations.put(registration.name(), registration);   // a replacement keeps its place
@@ -606,35 +669,393 @@ public final class QuerySession implements AutoCloseable {
         for (int i = 0; i < added.length; i++) {
             added[i] = folders.get(i).toString();
         }
-        Hardening.Options wider = options.allowedFolders(added);
-        Quack next = openDatabase(wider);
+        reopen(options.allowedFolders(added), null, "with " + folders);
+    }
+
+    /**
+     * A new database with these options and the files of the file tables in it, every registration
+     * made again there - and one added, if given - then the old one closed. A file table's cache can
+     * be attached to one database at a time, so each leaves the old one first, and goes back to it if
+     * the new one cannot be made.
+     */
+    private void reopen(Hardening.Options wider, Hosted adding, String why) {
+        List<String> files = new ArrayList<>();
+        for (Registration registration : registrations.values()) {
+            if (registration instanceof Hosted hosted && !hosted.closed) {
+                files.addAll(ACCESS().attachedFiles(hosted.table));
+            }
+        }
+        if (adding != null) {
+            files.addAll(ACCESS().attachedFiles(adding.table));
+        }
+        Hardening.Options next = wider.withAllowedFiles(files);
+        Quack opened = openDatabase(next);
+        List<Hosted> moved = new ArrayList<>();
         try {
             for (Registration registration : registrations.values()) {
-                registration.make(next);
+                if (registration instanceof Hosted hosted && !hosted.closed) {
+                    ACCESS().detach(hosted.table);
+                    moved.add(hosted);
+                }
+            }
+            for (Registration registration : registrations.values()) {
+                registration.make(opened);
             }
             for (Map.Entry<String, String> alias : aliases.entrySet()) {
-                makeAlias(next, alias.getKey(), alias.getValue());
+                if (!isClosed(alias.getValue())) {   // a closed file table has no view to stand for
+                    makeAlias(opened, alias.getKey(), alias.getValue());
+                }
+            }
+            if (adding != null) {
+                put(adding, opened);
             }
         }
         catch (RuntimeException e) {
-            next.close();
-            for (Registration registration : registrations.values()) {
-                registration.release(next);
+            for (Hosted hosted : moved) {
+                ACCESS().detach(hosted.table);
             }
-            throw new IllegalStateException("Could not open the session again with " + folders
-                    + "; it is as it was: " + e.getMessage(), e);
+            opened.close();
+            for (Registration registration : registrations.values()) {
+                registration.release(opened);
+            }
+            for (Hosted hosted : moved) {
+                try {
+                    hosted.make(database);
+                }
+                catch (RuntimeException again) {
+                    e.addSuppressed(again);
+                }
+            }
+            throw new IllegalStateException("Could not open the session again " + why + "; it is as it was: "
+                    + e.getMessage(), e);
         }
         Quack old = database;
-        database = next;
+        database = opened;
         generation++;
+        schemaVersion++;
         windowsAttached = false;
         options = wider;
-        guard = GuardedQuery.on(next, defaults);
+        guard = GuardedQuery.on(opened, defaults);
         old.close();
         for (Registration registration : registrations.values()) {
             registration.release(old);
         }
     }
+
+    // ---------- file tables ----------
+
+    private static FileTableAccess ACCESS() {
+        return FileTableAccess.get();
+    }
+
+    private void host(String name, FileTable table) {
+        if (table == null || !table.isOpen()) {
+            throw new IllegalArgumentException("That file table is closed");
+        }
+        if (ACCESS().isHosted(table)) {
+            throw new IllegalArgumentException(table + " is registered in a session already");
+        }
+        Hosted hosted = new Hosted(name, table, "quackjvm_file_" + catalogs.incrementAndGet());
+        List<String> files = ACCESS().attachedFiles(table);
+        if (files.isEmpty() || options.getAllowedFiles().containsAll(files)) {
+            put(hosted);
+        }
+        else {
+            // DuckDB's list of files cannot change once the database is locked: open it again.
+            reopen(options, hosted, "to let in the cache of " + table.getFile().getFileName());
+        }
+    }
+
+    /** A file table it holds was closed by the application: let go of its cache, and remember. */
+    private void closedOutside(Hosted hosted) {
+        lock.writeLock().lock();
+        try {
+            if (closed || hosted.closed || registrations.get(key(registrations, hosted.name)) != hosted) {
+                return;
+            }
+            hosted.closed = true;
+            ACCESS().detach(hosted.table);
+            Sql.execute(database.sharedConnection(), "DROP VIEW IF EXISTS " + Sql.quote(hosted.name));
+            schemaVersion++;
+        }
+        finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    private boolean isClosed(String name) {
+        return registrations.get(key(registrations, name)) instanceof Hosted hosted && hosted.closed;
+    }
+
+    private List<Hosted> openHosted() {
+        List<Hosted> open = new ArrayList<>();
+        for (Registration registration : registrations.values()) {
+            if (registration instanceof Hosted hosted && !hosted.closed) {
+                open.add(hosted);
+            }
+        }
+        return open;
+    }
+
+    private TableInfo describe(Catalog catalog, String name) {
+        String table = key(registrations, aliases.getOrDefault(key(aliases, name), name));
+        if (registrations.get(table) instanceof Hosted hosted) {
+            if (hosted.closed) {
+                throw new IllegalStateException(closedMessage(hosted.name));
+            }
+            if (ACCESS().isLazy(hosted.table)) {
+                // Its view holds only the columns stored so far: describe all of them.
+                List<ColumnInfo> columns = new ArrayList<>();
+                for (ColumnDef column : ACCESS().columns(hosted.table)) {
+                    columns.add(new ColumnInfo(column.getName(), column.getSqlType(), column.getJavaType(), true,
+                            column.getDescription(), column.getUnit(), null));
+                }
+                return new TableInfo(name, null, hosted.table.rowsLoaded(), columns);
+            }
+        }
+        return catalog.describe(name);
+    }
+
+    private interface Work<T> {
+        T run();
+    }
+
+    /**
+     * Runs a query that may read registered file tables: their lazy columns it reads stored first,
+     * their functions stopped if it is cancelled, and run again if they stopped for another query's
+     * cancel. A query naming a file table that was closed says so.
+     */
+    private <T> T overFileTables(String sql, CancelSignal signal, Work<T> work) {
+        List<Hosted> hosted = openHosted();
+        boolean anyClosed = registrations.values().stream().anyMatch(r -> r instanceof Hosted h && h.closed);
+        if (hosted.isEmpty() && !anyClosed) {
+            return work.run();
+        }
+        storeLazyColumns(sql, hosted, signal);
+        for (int attempt = 0; ; attempt++) {
+            for (Hosted h : hosted) {
+                ACCESS().enter(h.table, signal);
+            }
+            try {
+                return work.run();
+            }
+            catch (QueryFailed failed) {
+                if (ACCESS().stoppedForAnother(failed) && attempt < 10) {
+                    continue;
+                }
+                throw closedOrAsIs(sql, failed);
+            }
+            finally {
+                for (Hosted h : hosted) {
+                    ACCESS().leave(h.table, signal);
+                }
+                if (attempt < 10) {
+                    for (Hosted h : hosted) {
+                        ACCESS().awaitClear(h.table, signal);
+                    }
+                }
+            }
+        }
+    }
+
+    private QueryFailed closedOrAsIs(String sql, QueryFailed failed) {
+        String message = String.valueOf(failed.getMessage()).toLowerCase(Locale.ROOT);
+        for (Registration registration : registrations.values()) {
+            if (registration instanceof Hosted hosted && hosted.closed) {
+                Set<String> names = new HashSet<>();
+                names.add(hosted.name.toLowerCase(Locale.ROOT));
+                for (Map.Entry<String, String> alias : aliases.entrySet()) {
+                    if (alias.getValue().equalsIgnoreCase(hosted.name)) {
+                        names.add(alias.getKey().toLowerCase(Locale.ROOT));
+                    }
+                }
+                for (String name : names) {
+                    if (message.contains("name " + name + " does not exist") || message.contains("\"" + name + "\"")) {
+                        return new QueryFailed(sql, closedMessage(hosted.name) + " DuckDB said: " + failed.getMessage(),
+                                failed.getCause() instanceof SQLException e ? e : null);
+                    }
+                }
+            }
+        }
+        return failed;
+    }
+
+    private static String closedMessage(String name) {
+        return name + " is a file table that was closed while registered here: unregister it, or register a table"
+                + " under its name again.";
+    }
+
+    /** Stores the lazy columns of registered file tables that a query reads. */
+    private void storeLazyColumns(String sql, List<Hosted> hosted, CancelSignal signal) {
+        Map<Hosted, Set<String>> needed = lazyColumns(sql, hosted);
+        for (Map.Entry<Hosted, Set<String>> entry : needed.entrySet()) {
+            ACCESS().store(entry.getKey().table, entry.getValue(), sql, signal);
+        }
+    }
+
+    private String whyNotLazy(String sql) {
+        try {
+            Map<Hosted, Set<String>> needed = lazyColumns(sql, openHosted());
+            for (Map.Entry<Hosted, Set<String>> entry : needed.entrySet()) {
+                String reason = ACCESS().whyNotStore(entry.getKey().table, entry.getValue());
+                if (reason != null) {
+                    return reason;
+                }
+            }
+            return null;
+        }
+        catch (QueryRejected refused) {
+            return refused.getMessage();
+        }
+    }
+
+    /** The columns a query reads of each lazy file table, planned over empty tables with all their columns. */
+    private Map<Hosted, Set<String>> lazyColumns(String sql, List<Hosted> hosted) {
+        List<Hosted> lazy = new ArrayList<>();
+        for (Hosted h : hosted) {
+            if (ACCESS().isLazy(h.table)) {
+                lazy.add(h);
+            }
+        }
+        Map<Hosted, Set<String>> needed = new LinkedHashMap<>();
+        if (lazy.isEmpty()) {
+            return needed;
+        }
+        QueryColumns.Read read = planner().read(sql);
+        if (!read.isKnown()) {
+            if (mentionsAny(sql, lazy)) {
+                throw new QueryRejected(sql, "Only the columns a query reads are stored for "
+                        + lazy.stream().map(h -> h.name).toList() + ", and which columns this one reads cannot be told: "
+                        + read.reason() + ". Name the columns instead.");
+            }
+            return needed;
+        }
+        for (Hosted h : lazy) {
+            Set<String> names = new HashSet<>();
+            names.add(h.name.toLowerCase(Locale.ROOT));
+            for (Map.Entry<String, String> alias : aliases.entrySet()) {
+                if (alias.getValue().equalsIgnoreCase(h.name)) {
+                    names.add(alias.getKey().toLowerCase(Locale.ROOT));
+                }
+            }
+            Set<String> columns = new java.util.LinkedHashSet<>();
+            for (Map.Entry<String, Set<String>> table : read.columns().entrySet()) {
+                if (names.contains(table.getKey().toLowerCase(Locale.ROOT))) {
+                    columns.addAll(table.getValue());
+                }
+            }
+            if (!columns.isEmpty()) {
+                needed.put(h, columns);
+            }
+        }
+        return needed;
+    }
+
+    private boolean mentionsAny(String sql, List<Hosted> lazy) {
+        String lower = sql.toLowerCase(Locale.ROOT);
+        for (Hosted h : lazy) {
+            Set<String> names = new HashSet<>();
+            names.add(h.name.toLowerCase(Locale.ROOT));
+            for (Map.Entry<String, String> alias : aliases.entrySet()) {
+                if (alias.getValue().equalsIgnoreCase(h.name)) {
+                    names.add(alias.getKey().toLowerCase(Locale.ROOT));
+                }
+            }
+            for (String name : names) {
+                if (java.util.regex.Pattern.compile("(?<![a-z0-9_])" + java.util.regex.Pattern.quote(name)
+                        + "(?![a-z0-9_])").matcher(lower).find()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** The planner of lazy columns, made again when the tables, the aliases or the functions changed. */
+    private synchronized QueryColumns planner() {
+        int functions = 0;
+        for (Hosted h : openHosted()) {
+            functions += ACCESS().functions(h.table).size();
+        }
+        if (planner == null || planner.version != schemaVersion || planner.functions != functions) {
+            if (planner != null) {
+                planner.close();
+            }
+            planner = Planner.of(this, schemaVersion, functions);
+        }
+        return planner.columns;
+    }
+
+    /** Empty tables like the session's - a lazy file table's with all its columns - to plan queries over. */
+    private static final class Planner {
+        final int version;
+        final int functions;
+        final Connection source;
+        final QueryColumns columns;
+
+        private Planner(int version, int functions, Connection source, QueryColumns columns) {
+            this.version = version;
+            this.functions = functions;
+            this.source = source;
+            this.columns = columns;
+        }
+
+        static Planner of(QuerySession session, int version, int functions) {
+            Connection source;
+            try {
+                source = DriverManager.getConnection("jdbc:duckdb:");
+            }
+            catch (SQLException e) {
+                throw new IllegalStateException("Failed to open a database to plan queries in", e);
+            }
+            Catalog catalog = Catalog.of(session.database);
+            for (Map.Entry<String, Registration> entry : session.registrations.entrySet()) {
+                if (entry.getValue() instanceof Hosted hosted && hosted.closed) {
+                    continue;
+                }
+                List<String> columns = new ArrayList<>();
+                try {
+                    if (entry.getValue() instanceof Hosted hosted && ACCESS().isLazy(hosted.table)) {
+                        for (ColumnDef column : ACCESS().columns(hosted.table)) {
+                            columns.add(column.toDdl());
+                        }
+                    }
+                    else {
+                        for (ColumnInfo column : catalog.describe(entry.getKey()).columns()) {
+                            columns.add(Sql.quote(column.name()) + " " + column.sqlType());
+                        }
+                    }
+                    Sql.execute(source, "CREATE TABLE " + Sql.quote(entry.getKey()) + " (" + String.join(", ", columns) + ")");
+                }
+                catch (RuntimeException e) {
+                    // A table that cannot be described cannot be planned over either: a query
+                    // reading it fails when it runs, with DuckDB's own reason.
+                }
+            }
+            for (Map.Entry<String, String> alias : session.aliases.entrySet()) {
+                try {
+                    Sql.execute(source, "CREATE VIEW " + Sql.quote(alias.getKey()) + " AS SELECT * FROM "
+                            + Sql.quote(alias.getValue()));
+                }
+                catch (RuntimeException e) {
+                    // as above
+                }
+            }
+            QueryColumns columns = QueryColumns.of(source);
+            for (Hosted hosted : session.openHosted()) {
+                for (java.util.function.Consumer<Connection> function : ACCESS().functions(hosted.table)) {
+                    columns.register(function);
+                }
+            }
+            return new Planner(version, functions, source, columns);
+        }
+
+        void close() {
+            columns.close();
+            Sql.closeQuietly(source);
+        }
+    }
+
 
     private static Quack openDatabase(Hardening.Options options) {
         return Quack.builder(null).settings(options.properties()).open();
@@ -672,6 +1093,69 @@ public final class QuerySession implements AutoCloseable {
 
         /** Forgets what was made in a database, without dropping anything there. */
         default void release(Quack database) {
+        }
+
+        /** Another registration took its name in this database. */
+        default void replaced(Quack database) {
+            release(database);
+        }
+    }
+
+    /** A file table, its cache attached to the session's database. */
+    private final class Hosted implements Registration {
+        private final String name;
+        private final FileTable table;
+        private final String catalog;
+        private volatile boolean closed;
+
+        Hosted(String name, FileTable table, String catalog) {
+            this.name = name;
+            this.table = table;
+            this.catalog = catalog;
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public void make(Quack database) {
+            if (closed) {
+                return;
+            }
+            ACCESS().moveTo(table, database, catalog, () -> closedOutside(this));
+            try {
+                Sql.execute(database.sharedConnection(), "CREATE OR REPLACE VIEW " + Sql.quote(name) + " AS SELECT * FROM "
+                        + Sql.quote(catalog) + ".main." + Sql.quote(table.getName()));
+            }
+            catch (RuntimeException e) {
+                ACCESS().moveHome(table);
+                throw e;
+            }
+        }
+
+        @Override
+        public void drop(Quack database) {
+            Sql.execute(database.sharedConnection(), "DROP VIEW IF EXISTS " + Sql.quote(name));
+            goHome();
+        }
+
+        @Override
+        public void replaced(Quack database) {
+            goHome();
+        }
+
+        void goHome() {
+            if (!closed) {
+                try {
+                    ACCESS().moveHome(table);
+                }
+                catch (RuntimeException e) {
+                    // Its cache could not be opened again on its own: the table's own methods say so
+                    // when used. The session goes on without it.
+                }
+            }
         }
     }
 

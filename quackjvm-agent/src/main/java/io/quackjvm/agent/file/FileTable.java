@@ -95,6 +95,12 @@ import java.util.function.DoubleConsumer;
  * so even inside a slow function: DuckDB alone would let the function finish the chunk of 2,048 rows
  * it was given.</p>
  *
+ * <h2>In a query session</h2>
+ *
+ * <p>{@link io.quackjvm.agent.session.QuerySession#register(String, FileTable)} attaches the cache to
+ * the session's database, so its queries join the table with the others. While it is there, the
+ * table is queried through the session; {@link #query} says so.</p>
+ *
  * <h2>Hardening</h2>
  *
  * <p>The cache database is opened with no file, network or extension access and its settings
@@ -103,6 +109,10 @@ import java.util.function.DoubleConsumer;
  * nothing the table does not.</p>
  */
 public final class FileTable implements AutoCloseable {
+
+    static {
+        io.quackjvm.agent.file.internal.FileTableAccess.set(new Access());
+    }
 
     static final String DATA = "quackjvm_data";
     static final String META = "quackjvm_filetable";
@@ -124,9 +134,14 @@ public final class FileTable implements AutoCloseable {
     private final Path cacheDir;
     private final long roomLimit;
     private final Path cacheFile;
-    private final Quack quack;
+    /** Where the rows are: a database of the table's own, or a session's with the cache attached. */
+    private volatile Home home;
+    /** One update at a time; the writer lock is taken per batch, so other work can come between. */
+    private final ReentrantLock updating = new ReentrantLock();
     private final List<DuckDBConnection> loaders = new ArrayList<>();
     private final ReentrantLock writer = new ReentrantLock();
+    /** Signalled when the table has a database again, after a session let go of it to move it. */
+    private final java.util.concurrent.locks.Condition homed = writer.newCondition();
     private final AtomicLong rowsRead = new AtomicLong();
     private final QueryColumns planner;
     private final Connection plannerSource;
@@ -151,7 +166,7 @@ public final class FileTable implements AutoCloseable {
         this.cacheDir = b.cacheDir;
         this.roomLimit = b.roomLimit;
         this.cacheFile = cacheFile;
-        this.quack = quack;
+        this.home = Home.own(quack);
         Connection planningSource = null;
         QueryColumns planning = null;
         if (lazy) {
@@ -189,24 +204,43 @@ public final class FileTable implements AutoCloseable {
      * @param progress told the share of the rows stored so far, 0 to 1; may be null
      */
     public Updated update(CancelSignal signal, DoubleConsumer progress) {
-        writer.lock();
+        updating.lock();
         try {
-            checkOpen();
-            long target = source.rowCount();
-            Object now = source.identity();
-            boolean replaced = (identity != null && !identity.equals(now)) || target < rows || !fingerprintMatches();
-            identity = now;
-            if (replaced) {
-                empty();
+            long target;
+            boolean replaced;
+            long before;
+            writer.lock();
+            try {
+                awaitHome();
+                target = source.rowCount();
+                Object now = source.identity();
+                replaced = (identity != null && !identity.equals(now)) || target < rows || !fingerprintMatches();
+                identity = now;
+                if (replaced) {
+                    empty();
+                }
+                before = rows;
             }
-            long before = rows;
+            finally {
+                writer.unlock();
+            }
             long batch = (long) threads * BLOCKS_PER_THREAD * blockSize;
             while (rows < target) {
                 if (signal != null && signal.poll()) {
                     throw new QueryCancelled(null);
                 }
-                long count = Math.min(batch, target - rows);
-                appendBatch(rows, (int) count, signal);
+                // The writer lock per batch: a query storing lazy columns, or a session moving the
+                // table to another database, goes between two batches rather than after them all.
+                writer.lock();
+                try {
+                    awaitHome();
+                    if (rows < target) {
+                        appendBatch(rows, (int) Math.min(batch, target - rows), signal);
+                    }
+                }
+                finally {
+                    writer.unlock();
+                }
                 if (progress != null) {
                     progress.accept(target == 0 ? 1 : (double) rows / target);
                 }
@@ -218,10 +252,10 @@ public final class FileTable implements AutoCloseable {
             if (cacheDir != null) {
                 FileTables.trim(cacheDir, roomLimit);
             }
-            return new Updated(rows - before, replaced, rows);
+            return new Updated(Math.max(0, rows - before), replaced, rows);
         }
         finally {
-            writer.unlock();
+            updating.unlock();
         }
     }
 
@@ -241,6 +275,7 @@ public final class FileTable implements AutoCloseable {
      */
     public GuardedResult query(String sql, QueryPolicy policy, CancelSignal signal) {
         checkOpen();
+        checkOwnHome();
         if (lazy) {
             Set<String> needed = needed(sql);
             Set<String> missing = new LinkedHashSet<>(needed);
@@ -259,7 +294,7 @@ public final class FileTable implements AutoCloseable {
             }
         }
         used();
-        GuardedQuery guard = GuardedQuery.on(quack, policy);
+        GuardedQuery guard = GuardedQuery.on(quack(), policy);
         if (functions.isEmpty()) {
             return guard.run(sql, signal);
         }
@@ -312,7 +347,7 @@ public final class FileTable implements AutoCloseable {
 
     /** On the table's database, and on the empty one lazy columns are planned over. */
     private void register(TableFunctions.Registrar registrar) {
-        try (Connection connection = quack.connection()) {
+        try (Connection connection = quack().connection()) {
             registrar.register(connection);
         }
         catch (SQLException e) {
@@ -329,7 +364,8 @@ public final class FileTable implements AutoCloseable {
      */
     public String whyNot(String sql) {
         checkOpen();
-        String rejected = GuardedQuery.on(quack, QueryPolicy.readOnly()).whyRejected(sql);
+        checkOwnHome();
+        String rejected = GuardedQuery.on(quack(), QueryPolicy.readOnly()).whyRejected(sql);
         if (rejected != null || !lazy) {
             return rejected;
         }
@@ -378,20 +414,24 @@ public final class FileTable implements AutoCloseable {
 
     @Override
     public void close() {
+        // A session it is registered in lets it go first - under the session's lock, which comes
+        // before the table's.
+        Runnable release = home.release();
+        if (release != null) {
+            release.run();
+        }
         writer.lock();
         try {
             if (closed) {
                 return;
             }
             closed = true;
-            for (DuckDBConnection loader : loaders) {
-                Sql.closeQuietly(loader);
-            }
+            homed.signalAll();
+            leave();
             if (planner != null) {
                 planner.close();
                 Sql.closeQuietly(plannerSource);
             }
-            quack.close();
             if (cacheFile != null) {
                 FileTables.OPEN.remove(cacheFile);
             }
@@ -408,16 +448,349 @@ public final class FileTable implements AutoCloseable {
                 + (cacheFile == null ? ", in memory" : "") + "]";
     }
 
+    // ---------- moving to a session's database and back ----------
+
+    /**
+     * Moves the table into another database - a {@link io.quackjvm.agent.session.QuerySession}'s -
+     * with the cache file attached to it as {@code catalog}, so that queries there can join it. A
+     * table kept in memory has nothing to attach, so its rows are read from the file again, there.
+     * {@code release} is run, before anything else, when the table is closed.
+     */
+    void moveTo(Quack database, String catalog, Runnable release) {
+        writer.lock();
+        try {
+            checkOpen();
+            Home before = home;
+            leave();
+            try {
+                enter(attached(database, catalog, release));
+            }
+            catch (RuntimeException e) {
+                leave();
+                try {
+                    enter(reopened(before));   // back where it was
+                }
+                catch (RuntimeException again) {
+                    e.addSuppressed(again);
+                }
+                throw e;
+            }
+        }
+        finally {
+            writer.unlock();
+        }
+    }
+
+    /** Moves the table back to a database of its own: the cache file opened again, or memory. */
+    void moveHome() {
+        writer.lock();
+        try {
+            if (closed || home.owned()) {
+                return;
+            }
+            leave();
+            enter(ownHome());
+        }
+        finally {
+            writer.unlock();
+        }
+    }
+
+    /** Lets go of the session's database without going anywhere, for the table to be closed or moved. */
+    void detach() {
+        writer.lock();
+        try {
+            if (!closed && !home.owned()) {
+                leave();
+                home = new Home(null, null, null, false, null);
+            }
+        }
+        finally {
+            writer.unlock();
+        }
+    }
+
+    boolean isHosted() {
+        return !home.owned();
+    }
+
+    /** The files a session must let DuckDB use to attach the cache: none for a table in memory. */
+    List<String> attachedFiles() {
+        if (cacheFile == null) {
+            return List.of();
+        }
+        Path real;
+        try {
+            real = cacheFile.toRealPath();
+        }
+        catch (IOException e) {
+            real = cacheFile;
+        }
+        List<String> files = new ArrayList<>();
+        for (Path database : new LinkedHashSet<>(List.of(cacheFile, real))) {
+            // DuckDB 2.0 writes <db>.wal.checkpoint while it checkpoints: without it, the checkpoint
+            // fails and the attached database is invalidated - measured.
+            for (String suffix : new String[] {"", ".wal", ".wal.checkpoint"}) {
+                files.add(database + suffix);
+            }
+        }
+        return files;
+    }
+
+    List<ColumnDef> columns() {
+        return columns;
+    }
+
+    boolean isLazy() {
+        return lazy;
+    }
+
+    /** Stores lazy columns a session's query reads, refusing more than one query may add. */
+    void store(Set<String> wanted, String sql, CancelSignal signal) {
+        Set<String> missing = new LinkedHashSet<>();
+        for (String column : wanted) {
+            missing.add(column(column).getName());
+        }
+        missing.removeAll(stored);
+        if (missing.isEmpty()) {
+            return;
+        }
+        if (missing.size() > maxNewColumns) {
+            throw new QueryRejected(sql, tooMany(missing.size()));
+        }
+        writer.lock();
+        try {
+            awaitHome();
+            missing.removeAll(stored);
+            if (!missing.isEmpty()) {
+                addColumns(missing, signal);
+            }
+        }
+        finally {
+            writer.unlock();
+        }
+    }
+
+    /** Why a session's query reading these columns would be refused; null if it would not. */
+    String whyNotStore(Set<String> wanted) {
+        Set<String> missing = new LinkedHashSet<>();
+        for (String column : wanted) {
+            missing.add(column(column).getName());
+        }
+        missing.removeAll(stored);
+        return missing.size() > maxNewColumns ? tooMany(missing.size()) : null;
+    }
+
+    TableFunctions functions() {
+        return functions;
+    }
+
+    private Home attached(Quack database, String catalog, Runnable release) {
+        String target = cacheFile == null ? ":memory:" : cacheFile.toString();
+        Sql.execute(database.sharedConnection(), "ATTACH " + literal(target) + " AS " + Sql.quote(catalog));
+        return new Home(database, catalog, catalog + "_stage", false, release);
+    }
+
+    /** The home it left, again. */
+    private Home reopened(Home before) {
+        return before.owned() || before.quack() == null ? ownHome()
+                : attached(before.quack(), before.catalog(), before.release());
+    }
+
+    private Home ownHome() {
+        Quack quack = Quack.builder(cacheFile == null ? null : cacheFile.toString()).settings(Builder.hardened()).open();
+        return Home.own(quack);
+    }
+
+    /** Starts the table in a home: its tables made or read, its staging and loaders, its functions. */
+    private void enter(Home next) {
+        home = next;
+        start();
+        for (TableFunctions.Registrar registrar : functions.all()) {
+            try (Connection connection = next.quack().connection()) {
+                registrar.register(connection);
+            }
+            catch (SQLException e) {
+                throw new IllegalStateException("Failed to register a function on " + name + ": " + e.getMessage(), e);
+            }
+        }
+        if (cacheFile == null) {
+            // In memory there was nothing to take along: the rows are read from the file again.
+            identity = source.identity();
+            long target = source.rowCount();
+            long batch = (long) threads * BLOCKS_PER_THREAD * blockSize;
+            while (rows < target) {
+                appendBatch(rows, (int) Math.min(batch, target - rows), null);
+            }
+        }
+        homed.signalAll();
+    }
+
+    /** Under the writer lock: waits while a session moves the table, then checks it is open. */
+    private void awaitHome() {
+        while (!closed && home.quack() == null) {
+            homed.awaitUninterruptibly();
+        }
+        checkOpen();
+    }
+
+    /** Leaves the home it is in: loaders closed, staging and the cache detached, or its own database closed. */
+    private void leave() {
+        Home was = home;
+        for (DuckDBConnection loader : loaders) {
+            Sql.closeQuietly(loader);
+        }
+        loaders.clear();
+        if (was.quack() == null) {
+            return;
+        }
+        if (was.owned()) {
+            was.quack().close();
+            return;
+        }
+        for (String catalog : new String[] {was.stage(), was.catalog()}) {
+            try {
+                Sql.execute(was.quack().sharedConnection(), "DETACH DATABASE IF EXISTS " + Sql.quote(catalog));
+            }
+            catch (RuntimeException e) {
+                // the session's database is closing
+            }
+        }
+    }
+
+    private void checkOwnHome() {
+        if (!home.owned()) {
+            throw new IllegalStateException(name + " over " + file.getFileName() + " is registered in a QuerySession:"
+                    + " query it there, under the name it was registered with.");
+        }
+    }
+
+    private static String literal(String text) {
+        return "'" + text.replace("'", "''") + "'";
+    }
+
+    /** The bridge a session uses to host the table. */
+    private static final class Access implements io.quackjvm.agent.file.internal.FileTableAccess {
+        @Override
+        public void moveTo(FileTable table, Quack database, String catalog, Runnable release) {
+            table.moveTo(database, catalog, release);
+        }
+
+        @Override
+        public void moveHome(FileTable table) {
+            table.moveHome();
+        }
+
+        @Override
+        public void detach(FileTable table) {
+            table.detach();
+        }
+
+        @Override
+        public boolean isHosted(FileTable table) {
+            return table.isHosted();
+        }
+
+        @Override
+        public List<String> attachedFiles(FileTable table) {
+            return table.attachedFiles();
+        }
+
+        @Override
+        public List<ColumnDef> columns(FileTable table) {
+            return table.columns();
+        }
+
+        @Override
+        public boolean isLazy(FileTable table) {
+            return table.isLazy();
+        }
+
+        @Override
+        public void store(FileTable table, Set<String> columns, String sql, CancelSignal signal) {
+            table.store(columns, sql, signal);
+        }
+
+        @Override
+        public String whyNotStore(FileTable table, Set<String> columns) {
+            return table.whyNotStore(columns);
+        }
+
+        @Override
+        public List<java.util.function.Consumer<Connection>> functions(FileTable table) {
+            List<java.util.function.Consumer<Connection>> all = new ArrayList<>();
+            for (TableFunctions.Registrar registrar : table.functions().all()) {
+                all.add(registrar::register);
+            }
+            return all;
+        }
+
+        @Override
+        public void enter(FileTable table, CancelSignal signal) {
+            table.functions().enter(signal);
+        }
+
+        @Override
+        public void leave(FileTable table, CancelSignal signal) {
+            table.functions().leave(signal);
+        }
+
+        @Override
+        public void awaitClear(FileTable table, CancelSignal signal) {
+            table.functions().awaitClear(signal);
+        }
+
+        @Override
+        public boolean stoppedForAnother(Throwable failure) {
+            return TableFunctions.stoppedHere(failure);
+        }
+    }
+
+    // ---------- underneath: where the rows are ----------
+
+    /**
+     * The database the table's own tables are in, and the in-memory one it stages rows in. Owned, it
+     * is the table's and closed with it; hosted, it is a session's, with the cache attached to it under
+     * {@code catalog}, and {@code release} tells the session when the table is closed.
+     */
+    private record Home(Quack quack, String catalog, String stage, boolean owned, Runnable release) {
+
+        static Home own(Quack quack) {
+            String catalog = quack.query("SELECT current_database()").scalar(String.class);
+            return new Home(quack, catalog, STAGE, true, null);
+        }
+    }
+
+    private Quack quack() {
+        return home.quack();
+    }
+
+    private String data() {
+        return Sql.quote(home.catalog()) + ".main." + DATA;
+    }
+
+    private String meta() {
+        return Sql.quote(home.catalog()) + ".main." + META;
+    }
+
+    private String stage() {
+        return Sql.quote(home.stage());
+    }
+
+    private String view() {
+        return Sql.quote(home.catalog()) + ".main." + Sql.quote(name);
+    }
+
     // ---------- underneath: opening ----------
 
     private void start() {
-        quack.inTransaction(tx -> {
+        quack().inTransaction(tx -> {
             Connection connection = tx.connection();
-            Sql.execute(connection, "CREATE TABLE IF NOT EXISTS " + META + " (rows BIGINT, fingerprint VARCHAR,"
+            Sql.execute(connection, "CREATE TABLE IF NOT EXISTS " + meta() + " (rows BIGINT, fingerprint VARCHAR,"
                     + " fingerprint_bytes BIGINT, stored VARCHAR, source VARCHAR)");
-            boolean fresh = Sql.queryLong(connection, "SELECT count(*) FROM " + META, List.of()) == 0;
+            boolean fresh = Sql.queryLong(connection, "SELECT count(*) FROM " + meta(), List.of()) == 0;
             if (fresh) {
-                StringBuilder ddl = new StringBuilder("CREATE OR REPLACE TABLE " + DATA + " (" + ROW + " BIGINT");
+                StringBuilder ddl = new StringBuilder("CREATE OR REPLACE TABLE " + data() + " (" + ROW + " BIGINT");
                 List<String> initial = new ArrayList<>();
                 if (!lazy) {
                     for (ColumnDef column : columns) {
@@ -426,7 +799,7 @@ public final class FileTable implements AutoCloseable {
                     }
                 }
                 Sql.execute(connection, ddl.append(')').toString());
-                try (PreparedStatement insert = connection.prepareStatement("INSERT INTO " + META
+                try (PreparedStatement insert = connection.prepareStatement("INSERT INTO " + meta()
                         + " VALUES (0, NULL, 0, ?, ?)")) {
                     insert.setString(1, String.join("\n", initial));
                     insert.setString(2, file.toString());
@@ -437,9 +810,9 @@ public final class FileTable implements AutoCloseable {
                 }
             }
         });
-        try (Connection connection = quack.connection();
+        try (Connection connection = quack().connection();
              PreparedStatement select = connection.prepareStatement("SELECT rows, fingerprint, fingerprint_bytes, stored"
-                     + " FROM " + META);
+                     + " FROM " + meta());
              ResultSet meta = select.executeQuery()) {
             meta.next();
             rows = meta.getLong(1);
@@ -451,11 +824,11 @@ public final class FileTable implements AutoCloseable {
         catch (SQLException e) {
             throw new IllegalStateException("Failed to read the cache", e);
         }
-        Sql.execute(quack.sharedConnection(), "ATTACH IF NOT EXISTS ':memory:' AS " + STAGE);
-        makeView(quack.sharedConnection(), stored);
+        Sql.execute(quack().sharedConnection(), "ATTACH IF NOT EXISTS ':memory:' AS " + stage());
+        makeView(quack().sharedConnection(), stored);
         try {
             for (int i = 0; i < threads; i++) {
-                DuckDBConnection loader = quack.register(root -> {
+                DuckDBConnection loader = quack().register(root -> {
                     try {
                         return (DuckDBConnection) root.duplicate();
                     }
@@ -463,7 +836,7 @@ public final class FileTable implements AutoCloseable {
                         throw new IllegalStateException("Failed to open a loading connection", e);
                     }
                 });
-                Sql.execute(loader, "USE " + STAGE);
+                Sql.execute(loader, "USE " + stage());
                 loaders.add(loader);
             }
         }
@@ -475,7 +848,7 @@ public final class FileTable implements AutoCloseable {
     }
 
     private void makeView(Connection connection, List<String> columnsStored) {
-        StringBuilder view = new StringBuilder("CREATE OR REPLACE VIEW ").append(Sql.quote(name)).append(" AS SELECT ");
+        StringBuilder view = new StringBuilder("CREATE OR REPLACE VIEW ").append(view()).append(" AS SELECT ");
         if (columnsStored.isEmpty()) {
             // Nothing stored yet: the row number alone, so that count(*) can be answered.
             view.append(ROW);
@@ -485,7 +858,7 @@ public final class FileTable implements AutoCloseable {
                 view.append(i == 0 ? "" : ", ").append(Sql.quote(columnsStored.get(i)));
             }
         }
-        Sql.execute(connection, view.append(" FROM ").append(DATA).toString());
+        Sql.execute(connection, view.append(" FROM ").append(data()).toString());
     }
 
     // ---------- underneath: loading ----------
@@ -498,11 +871,11 @@ public final class FileTable implements AutoCloseable {
         long end = first + count;
         String[] print = fingerprintAfter();
         try {
-            quack.inTransaction(tx -> {
+            quack().inTransaction(tx -> {
                 Connection connection = tx.connection();
-                Sql.execute(connection, "INSERT INTO " + DATA + " (" + list + ") SELECT " + list + " FROM ("
+                Sql.execute(connection, "INSERT INTO " + data() + " (" + list + ") SELECT " + list + " FROM ("
                         + stageUnion() + ") ORDER BY " + ROW);
-                try (PreparedStatement update = connection.prepareStatement("UPDATE " + META
+                try (PreparedStatement update = connection.prepareStatement("UPDATE " + meta()
                         + " SET rows = ?, fingerprint = ?, fingerprint_bytes = ?")) {
                     update.setLong(1, end);
                     update.setString(2, print[0]);
@@ -524,9 +897,9 @@ public final class FileTable implements AutoCloseable {
 
     /** Empties the table, for a file that was replaced. Lazy columns already asked for stay asked for. */
     private void empty() {
-        quack.inTransaction(tx -> {
-            Sql.execute(tx.connection(), "DELETE FROM " + DATA);
-            Sql.execute(tx.connection(), "UPDATE " + META + " SET rows = 0, fingerprint = NULL, fingerprint_bytes = 0");
+        quack().inTransaction(tx -> {
+            Sql.execute(tx.connection(), "DELETE FROM " + data());
+            Sql.execute(tx.connection(), "UPDATE " + meta() + " SET rows = 0, fingerprint = NULL, fingerprint_bytes = 0");
         });
         rows = 0;
         fingerprint = null;
@@ -541,16 +914,16 @@ public final class FileTable implements AutoCloseable {
         long count = rows;
         if (count > 0) {
             long batch = (long) threads * BLOCKS_PER_THREAD * blockSize;
-            Sql.execute(quack.sharedConnection(), "CREATE OR REPLACE TABLE " + STAGE + ".main.adding AS SELECT "
-                    + ROW + " FROM " + DATA + " LIMIT 0");
+            Sql.execute(quack().sharedConnection(), "CREATE OR REPLACE TABLE " + stage() + ".main.adding AS SELECT "
+                    + ROW + " FROM " + data() + " LIMIT 0");
             for (String column : adding) {
-                Sql.execute(quack.sharedConnection(), "ALTER TABLE " + STAGE + ".main.adding ADD COLUMN "
+                Sql.execute(quack().sharedConnection(), "ALTER TABLE " + stage() + ".main.adding ADD COLUMN "
                         + column(column).toDdl());
             }
             try {
                 for (long first = 0; first < count; first += batch) {
                     stage(first, (int) Math.min(batch, count - first), adding, signal);
-                    Sql.execute(quack.sharedConnection(), "INSERT INTO " + STAGE + ".main.adding SELECT * FROM ("
+                    Sql.execute(quack().sharedConnection(), "INSERT INTO " + stage() + ".main.adding SELECT * FROM ("
                             + stageUnion() + ")");
                     dropStage();
                 }
@@ -558,26 +931,26 @@ public final class FileTable implements AutoCloseable {
                 for (String column : adding) {
                     select.append(", a.").append(Sql.quote(column));
                 }
-                quack.inTransaction(tx -> {
+                quack().inTransaction(tx -> {
                     Connection connection = tx.connection();
-                    Sql.execute(connection, "CREATE TABLE " + DATA + "_next AS " + select + " FROM " + DATA
-                            + " d JOIN " + STAGE + ".main.adding a ON d." + ROW + " = a." + ROW + " ORDER BY d." + ROW);
-                    Sql.execute(connection, "DROP VIEW IF EXISTS " + Sql.quote(name));
-                    Sql.execute(connection, "DROP TABLE " + DATA);
-                    Sql.execute(connection, "ALTER TABLE " + DATA + "_next RENAME TO " + DATA);
+                    Sql.execute(connection, "CREATE TABLE " + data() + "_next AS " + select + " FROM " + data()
+                            + " d JOIN " + stage() + ".main.adding a ON d." + ROW + " = a." + ROW + " ORDER BY d." + ROW);
+                    Sql.execute(connection, "DROP VIEW IF EXISTS " + view());
+                    Sql.execute(connection, "DROP TABLE " + data());
+                    Sql.execute(connection, "ALTER TABLE " + data() + "_next RENAME TO " + DATA);
                     makeView(connection, after);
                     recordStored(connection, after);
                 });
             }
             finally {
                 dropStage();
-                Sql.execute(quack.sharedConnection(), "DROP TABLE IF EXISTS " + STAGE + ".main.adding");
+                Sql.execute(quack().sharedConnection(), "DROP TABLE IF EXISTS " + stage() + ".main.adding");
             }
         }
         else {
-            quack.inTransaction(tx -> {
+            quack().inTransaction(tx -> {
                 for (String column : adding) {
-                    Sql.execute(tx.connection(), "ALTER TABLE " + DATA + " ADD COLUMN " + column(column).toDdl());
+                    Sql.execute(tx.connection(), "ALTER TABLE " + data() + " ADD COLUMN " + column(column).toDdl());
                 }
                 makeView(tx.connection(), after);
                 recordStored(tx.connection(), after);
@@ -586,8 +959,8 @@ public final class FileTable implements AutoCloseable {
         stored = List.copyOf(after);
     }
 
-    private static void recordStored(Connection connection, List<String> after) {
-        try (PreparedStatement update = connection.prepareStatement("UPDATE " + META + " SET stored = ?")) {
+    private void recordStored(Connection connection, List<String> after) {
+        try (PreparedStatement update = connection.prepareStatement("UPDATE " + meta() + " SET stored = ?")) {
             update.setString(1, String.join("\n", after));
             update.executeUpdate();
         }
@@ -627,8 +1000,8 @@ public final class FileTable implements AutoCloseable {
                     Iterable<Object[]> rowsOfMine = () -> new Blocks(first, count, me, used, places, wantedBits, signal);
                     LiveTable table = LiveTables.register(loader, "stage_view_" + me, () -> rowsOfMine, layout);
                     try {
-                        Sql.execute(loader, "CREATE OR REPLACE TABLE " + STAGE + ".main.stage_" + me
-                                + " AS SELECT * FROM " + STAGE + ".main.stage_view_" + me);
+                        Sql.execute(loader, "CREATE OR REPLACE TABLE " + stage() + ".main.stage_" + me
+                                + " AS SELECT * FROM " + stage() + ".main.stage_view_" + me);
                     }
                     finally {
                         table.unregister();
@@ -668,7 +1041,7 @@ public final class FileTable implements AutoCloseable {
     private String stageUnion() {
         StringBuilder union = new StringBuilder();
         for (int t = 0; t < stagedThreads; t++) {
-            union.append(t == 0 ? "" : " UNION ALL ").append("SELECT * FROM ").append(STAGE).append(".main.stage_")
+            union.append(t == 0 ? "" : " UNION ALL ").append("SELECT * FROM ").append(stage()).append(".main.stage_")
                     .append(t);
         }
         return union.toString();
@@ -677,7 +1050,7 @@ public final class FileTable implements AutoCloseable {
     private void dropStage() {
         for (int t = 0; t < threads; t++) {
             try {
-                Sql.execute(quack.sharedConnection(), "DROP TABLE IF EXISTS " + STAGE + ".main.stage_" + t);
+                Sql.execute(quack().sharedConnection(), "DROP TABLE IF EXISTS " + stage() + ".main.stage_" + t);
             }
             catch (RuntimeException ignored) {
                 // closing
@@ -804,11 +1177,15 @@ public final class FileTable implements AutoCloseable {
         Set<String> missing = new LinkedHashSet<>(needed);
         missing.removeAll(stored);
         if (missing.size() > maxNewColumns) {
-            throw new QueryRejected(sql, "This query reads " + missing.size() + " columns that are not stored yet, more"
-                    + " than the " + maxNewColumns + " a query may add for a file this wide. Read fewer columns at a"
-                    + " time - name them, or narrow COLUMNS(...).");
+            throw new QueryRejected(sql, tooMany(missing.size()));
         }
         return needed;
+    }
+
+    private String tooMany(int columns) {
+        return "This query reads " + columns + " columns that are not stored yet, more than the " + maxNewColumns
+                + " a query may add for a file this wide. Read fewer columns at a time - name them, or narrow"
+                + " COLUMNS(...).";
     }
 
     // ---------- underneath: the fingerprint ----------

@@ -173,6 +173,9 @@ Quack db = Quack.builder(path).settings(options.properties()).open();   // start
 Hardening.apply(otherDb, options);                                       // or, once open
 ```
 
+`.allowedFiles(...)` lets single files in, rather than their folders: DuckDB's `allowed_paths`. A
+[query session](query-sessions.md#file-tables) uses it for a file table's cache.
+
 On a database already open, `apply` sets them in the order DuckDB needs - the folders before
 external access goes, everything before the configuration is locked - and leaves a database whose
 configuration is locked already as it is.

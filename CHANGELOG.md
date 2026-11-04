@@ -26,6 +26,13 @@
   lazy-column planner; replacing one leaves a running query with the old one. A cancelled query
   stops within a few ms even inside a slow function (2.7 s with DuckDB alone); a query stopped
   beside it is run again.
+- **File tables in query sessions** (#16): `QuerySession.register(name, fileTable)` and
+  `register(fileTable)`. The cache is attached to the session's database, letting in exactly its
+  database, WAL and checkpoint files, so it joins the other tables, and `window` reads it. Lazy
+  columns a query reads are stored first; the table's Java functions work, and a cancel stops
+  them. Unregistered, or when the session closes, the table goes back to a database of its own. A
+  table closed while registered makes a query naming it say so.
+- `Hardening.Options.allowedFiles(...)`: single files SQL may use (DuckDB's `allowed_paths`).
 - `QueryColumns.register(...)` registers a function on the planning database, so queries calling it
   can be planned.
 - The UDF and file-table docs show that DuckDB 2.0 asks a filter in `SELECT DISTINCT ...` once per
@@ -34,6 +41,8 @@
   database into a new one.
 
 ### Changed
+- `FileTable.update` takes the table's lock a batch at a time, so a query adding lazy columns goes
+  between two batches instead of waiting for the whole update.
 - Journals over the same table of the same `Quack` share one writer's turn, instead of one per
   journal object.
 - The group-by example now goes by a column's name (`level`, `host`, `status`...) and leaves out free

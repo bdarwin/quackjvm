@@ -263,7 +263,8 @@ guard.store(sql, "db", "table", signal);         // the whole result into a new 
 - `Hardening.options().allowedFolders(...).tempFolder(...).memoryLimit(...).threads(...)` locks a
   database down except for the folders named: `.properties()` to open it that way,
   `Hardening.apply(quack, options)` once open. An allowed folder can be written as well as read, and
-  so can the temp folder, which must hold nothing but DuckDB's own files.
+  so can the temp folder, which must hold nothing but DuckDB's own files. `.allowedFiles(...)` lets
+  in single files (DuckDB's `allowed_paths`), as a session does for a file table's cache.
 - `GuardedResult` carries columns, SQL types, rows, elapsed time, an estimated byte count, and
   `toText()` for something that reads text.
 
@@ -306,6 +307,7 @@ QuerySession session = QuerySession.open(Hardening.options().tempFolder(temp), Q
 String name = session.register(Path.of("/data/readings-2026.csv"));   // "readings_2026"; lets its folder in
 session.register("recent", "SELECT * FROM readings_2026 WHERE id > 100");
 session.register("note", () -> notes, ColumnarLayout.ofRecord(Note.class));   // live objects
+session.register("app_log", fileTable);              // a FileTable, its cache attached; joins the others
 session.alias("t", name);
 session.run(sql, CancelSignal.from(stop::get));      // or run(sql), or run(sql, signal, policy)
 session.allowFolders(List.of(folder));               // reopens if needed, keeping every table

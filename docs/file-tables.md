@@ -175,9 +175,8 @@ Measured on DuckDB 2.0: SQL can then read none of the cache folder's other files
 caches. It can read only this database's own file, its write-ahead log and its temp folder, which
 hold nothing the table doesn't.
 
-## What it doesn't do yet
+## In a query session
 
-A file table is queried through its own `query`, as `t` (or the name given to `name(...)`). It
-can't yet be registered in a [`QuerySession`](query-sessions.md) to be joined with the session's
-other tables. The two would have to share a DuckDB database, and the session's hardening forbids
-attaching the cache file.
+A file table can be registered in a [`QuerySession`](query-sessions.md#file-tables), to be joined
+with the session's other tables and read through result windows. Its cache is then attached to the
+session's database, and the table is queried there instead of through its own `query`.
