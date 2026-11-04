@@ -157,6 +157,32 @@ available. This is decided per call, not configured.
 `Rows` takes ownership of the connection it is given, as `SqlQuery` does — pass a `duplicate()`.
 `DuckDBDatabase.query(...)` handles that for you and is the usual way in.
 
+### `io.quackjvm.core.page.Pages` / `Page` / `PageKey`
+
+A query read a page at a time, found from the row next to it rather than counted from the start.
+
+```java
+Pages pages = Pages.of(quack, "SELECT * FROM message WHERE session = ?", id).orderBy("ts", "id").size(50);
+Page page = pages.last();   pages.before(page.firstKey());   pages.after(page.lastKey());
+pages.around(PageKey.of(ts, id), 25);   pages.count();   pages.position(key);   pages.at(position);
+page.rows();   page.as(layout);   page.hasBefore();   page.hasAfter();
+```
+
+See [Paging and journals](paging.md).
+
+### `io.quackjvm.core.journal.Journal<O>`
+
+An application's own records, appended, updated while they stream in, paged and searched.
+
+```java
+Journal<Message> j = Journal.builder(quack, "message", ColumnarLayout.ofRecord(Message.class))
+        .index("session", "ts").searchable("text").migrate(2, "ALTER TABLE message ADD COLUMN cost DOUBLE").open();
+j.append(m);   j.update(id, Map.of("text", soFar));   j.get(id);   j.search("connection refused", 20);
+j.pages("session = ?", id).orderBy("ts", "id");   j.version();
+```
+
+See [Paging and journals](paging.md#journal).
+
 ### `io.quackjvm.core.duckdb.NestedType`
 
 Columns that hold more than one value. Usually you never name this: a record's own types are enough.
@@ -219,6 +245,7 @@ GuardedResult result = guard.run(sql);   // QueryRejected (QueryFailed if DuckDB
 String why = guard.whyRejected(sql);     // null when it would be allowed
 guard.run(sql, cancelSignal);            // QueryCancelled once cancelSignal.cancel() is called
 guard.run(sql, CancelSignal.from(stop::get));   // or once a flag you have turns true, polled every 50 ms
+guard.store(sql, "db", "table", signal);         // the whole result into a new table; returns its row count
 ```
 
 - `QueryPolicy.readOnly()` - five seconds, ten thousand rows, eight megabytes, EXPLAIN allowed;
@@ -278,6 +305,7 @@ session.alias("t", name);
 session.run(sql, CancelSignal.from(stop::get));      // or run(sql), or run(sql, signal, policy)
 session.allowFolders(List.of(folder));               // reopens if needed, keeping every table
 session.names(); session.aliases(); session.examples("t"); session.unregister("recent");
+ResultWindow w = session.window(sql, signal);    // the whole result, read with w.rows(first, n); w.sort(column, asc)
 QuerySession.tableName(Path.of("Readings 2026-Q4.tsv"), taken);   // "readings_2026_q4"
 ```
 

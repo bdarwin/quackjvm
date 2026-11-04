@@ -70,6 +70,9 @@ public final class QuerySession implements AutoCloseable {
     /** Names {@link #tableName} never gives out, so that an application can use them as aliases. */
     public static final Set<String> ALIAS_NAMES = Set.of("t", "log");
 
+    /** The in-memory database attached for {@link ResultWindow}s, so their tables are not among the session's. */
+    static final String WINDOWS = "quackjvm_windows";
+
     private static final Set<String> COMPRESSED = Set.of("gz", "gzip", "zst", "bz2", "xz", "lz4", "zip", "snappy");
 
     private final QueryPolicy defaults;
@@ -81,6 +84,10 @@ public final class QuerySession implements AutoCloseable {
     private Quack database;
     private GuardedQuery guard;
     private boolean closed;
+    /** Counts the databases the session has had, so that a window knows when its own has gone. */
+    private int generation;
+    private boolean windowsAttached;
+    private final java.util.concurrent.atomic.AtomicLong windowNames = new java.util.concurrent.atomic.AtomicLong();
 
     private QuerySession(Hardening.Options options, QueryPolicy defaults) {
         this.options = options;
@@ -283,6 +290,72 @@ public final class QuerySession implements AutoCloseable {
         }
         finally {
             lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Runs a query once and keeps its whole result, to be read a window at a time - see
+     * {@link ResultWindow}. Checked as {@link #run} checks it; the policy's time limit and the
+     * signal apply, its row and byte caps do not.
+     */
+    public ResultWindow window(String sql, CancelSignal signal) {
+        return window(sql, signal, null);
+    }
+
+    /** As {@link #window(String, CancelSignal)}, under another policy than the session's. */
+    public ResultWindow window(String sql, CancelSignal signal, QueryPolicy policy) {
+        lock.readLock().lock();
+        try {
+            checkOpen();
+            attachWindows();
+            String table = "w" + windowNames.incrementAndGet();
+            GuardedQuery runner = policy == null ? guard : GuardedQuery.on(database, policy);
+            long rows;
+            try {
+                rows = runner.store(sql, WINDOWS, table, signal);
+            }
+            catch (RuntimeException e) {
+                Sql.execute(database.sharedConnection(), "DROP TABLE IF EXISTS " + ResultWindow.qualified(table));
+                throw e;
+            }
+            return ResultWindow.describe(this, generation, database, sql, table, rows);
+        }
+        finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** Runs work on the session's database, if it is still the one a window was made in. */
+    <T> T inDatabase(int expected, java.util.function.Function<Quack, T> work) {
+        lock.readLock().lock();
+        try {
+            checkOpen();
+            if (expected != generation) {
+                throw new IllegalStateException("The session has opened its database again since this window was"
+                        + " made - to let a folder in - and the stored result went with the old one."
+                        + " Make the window again with window(sql, signal).");
+            }
+            return work.apply(database);
+        }
+        finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    boolean isCurrent(int expected) {
+        lock.readLock().lock();
+        try {
+            return !closed && expected == generation;
+        }
+        finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    private synchronized void attachWindows() {
+        if (!windowsAttached) {
+            Sql.execute(database.sharedConnection(), "ATTACH IF NOT EXISTS ':memory:' AS " + WINDOWS);
+            windowsAttached = true;
         }
     }
 
@@ -529,6 +602,8 @@ public final class QuerySession implements AutoCloseable {
         }
         Quack old = database;
         database = next;
+        generation++;
+        windowsAttached = false;
         options = wider;
         guard = GuardedQuery.on(next, defaults);
         old.close();

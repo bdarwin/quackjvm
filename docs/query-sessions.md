@@ -106,6 +106,40 @@ it see the change. A test runs six threads of queries while a table is registere
 40 times and the session reopens four times. Every query sees either the table or DuckDB's "does
 not exist", and never anything else.
 
+## Result windows
+
+A grid that shows 50 rows of a query that returned two million can't take them all at once.
+`session.window` runs the query once, keeps the whole result, and hands it out a window at a time:
+
+```java
+try (ResultWindow window = session.window(sql, CancelSignal.from(stop::get))) {
+    long total = window.rowCount();
+    List<Object[]> visible = window.rows(1_500_000, 100);
+    window.sort("level", true);       // re-sorted without running the query again
+    window.unsort();                  // back to the query's own order
+}
+```
+
+- **Checks and limits.** The query is checked as `run` checks it, and the time limit and the
+  cancel signal apply. The row and byte caps don't, because nothing is handed over at once.
+- **Where it's kept.** The result goes into a table of an in-memory database attached to the
+  session's, named `quackjvm_windows`. So it isn't among the session's tables or example joins.
+  What doesn't fit in memory spills into the session's temp folder.
+- **Reading.** A window finds its rows by position, and never reruns the query.
+- **Sorting.** A sort keeps the query's order for rows that tie, and puts nulls last either way.
+
+Measured on two million rows, with another program busy on 4–5 cores:
+
+| | Time |
+|---|---|
+| A window of 100 rows at row 1,500,000 | 0.70 ms |
+| The same, after a sort | 0.65 ms |
+| A sort by a text column | 98 ms |
+
+The stored result belongs to the session's database. So when the session reopens its database to
+let in a folder, the window goes with the old one: reading it then throws, saying to make it again.
+`isReadable()` tells you ahead of time.
+
 ## Example queries
 
 `session.examples(name)` and `Catalog.examples(table)` write ready-made queries from a table's

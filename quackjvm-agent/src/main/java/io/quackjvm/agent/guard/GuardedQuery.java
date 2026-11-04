@@ -202,6 +202,69 @@ public final class GuardedQuery {
             }
         }
         long started = System.nanoTime();
+        String running = toRun;
+        // The wrapper puts one line before the caller's, so DuckDB's LINE pointer is one ahead.
+        return guarded(sql, running.equals(sql) ? 0 : 1, signal, statement -> {
+            try (ResultSet rows = statement.executeQuery(running)) {
+                return read(rows, started, signal);
+            }
+        });
+    }
+
+    /**
+     * Checks a statement as {@link #run} does, then stores its whole result in a new table instead
+     * of returning it: for a result too big to hand over, read later a window at a time. The rows
+     * keep the statement's order. The policy's time limit and the signal apply; its row and byte
+     * caps do not, since nothing is returned.
+     *
+     * <p>The table is created by this call, so the guard writes it - nothing the statement says can
+     * write anywhere. Names are quoted as given.</p>
+     *
+     * @return how many rows were stored
+     * @throws QueryRejected if it is not a single query this policy allows, or is an EXPLAIN
+     */
+    public long store(String sql, String database, String table, CancelSignal signal) {
+        if (signal != null && signal.cancelledNow()) {
+            throw new QueryCancelled(null);
+        }
+        String statement = check(sql);
+        if (isExplain(statement)) {
+            throw new QueryRejected(sql, "EXPLAIN describes a query rather than returning its rows, so there is"
+                    + " nothing to store.");
+        }
+        String body = statement.replaceAll("[;\\s]+$", "");
+        String target = io.quackjvm.core.duckdb.Sql.quote(database) + ".main." + io.quackjvm.core.duckdb.Sql.quote(table);
+        String wrapped = "SELECT * FROM (\n" + body + "\n) AS " + WRAPPER;
+        // Each form starts the caller's statement on a line of its own, so LINE n: can be put back.
+        String create;
+        int added;
+        if (ParserGate.inspect(connection, wrapped).isSingleQuery()) {
+            create = "CREATE TABLE " + target + " AS\n" + wrapped;
+            added = 2;
+        }
+        else {
+            // A statement the policy allows unverified, such as PIVOT: already known to be one statement.
+            create = "CREATE TABLE " + target + " AS\n" + body;
+            added = 1;
+        }
+        guarded(sql, added, signal, running -> {
+            running.execute(create);
+            return null;
+        });
+        return io.quackjvm.core.duckdb.Sql.queryLong(connection, "SELECT count(*) FROM " + target, List.of());
+    }
+
+    @FunctionalInterface
+    private interface Work<T> {
+        T run(Statement statement) throws SQLException;
+    }
+
+    /**
+     * Runs work on a statement of its own, under the policy's time limit and the signal, and turns
+     * what goes wrong into the guard's exceptions. {@code added} is how many lines were put before
+     * the caller's, so that DuckDB's {@code LINE n:} can be numbered as the caller wrote it.
+     */
+    private <T> T guarded(String sql, int added, CancelSignal signal, Work<T> work) {
         Deadline deadline = null;
         // A plain statement, on DuckDB's direct path: the parser has already said this is one query,
         // and duckdb_jdbc 2.0 runs some queries far slower prepared - an ASOF join returning a
@@ -212,8 +275,8 @@ public final class GuardedQuery {
             }
             try {
                 deadline = Deadline.start(statement, policy.getTimeout());
-                try (Deadline running = deadline; ResultSet rows = statement.executeQuery(toRun)) {
-                    return read(rows, started, signal);
+                try (Deadline running = deadline) {
+                    return work.run(statement);
                 }
             }
             finally {
@@ -229,8 +292,7 @@ public final class GuardedQuery {
             if (deadline != null && deadline.hasExpired()) {
                 throw new QueryTimedOut(policy.getTimeout(), e);
             }
-            // The wrapper puts one line before the caller's, so DuckDB's LINE pointer is one ahead.
-            throw new QueryFailed(sql, callersLines(String.valueOf(e.getMessage()), toRun.equals(sql) ? 0 : 1), e);
+            throw new QueryFailed(sql, callersLines(String.valueOf(e.getMessage()), added), e);
         }
     }
 

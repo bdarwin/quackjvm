@@ -13,6 +13,22 @@
   - `run` is safe from several threads, and changes wait for the queries running.
   - `QuerySession.tableName` turns `Readings 2026-Q4.tsv` into `readings_2026_q4`, and never gives out
     `t`, `log` or a name that needs quotes.
+- **`Pages`** (#15): reads any query a page at a time, for infinite scrolling: `first`, `last`,
+  `before(key)`, `after(key)`, `around(key, n)`, `at(position)`, `count`, `position`.
+  - Each page is found from the row next to it, so a deep page costs what the first does.
+  - Rows appended while someone scrolls are never repeated or skipped (tested).
+  - A search bounded by the last page's reach brings a page back from about 6 ms to about 1 ms on
+    100,000 rows. If the bound leaves too few rows, the page is read again without it.
+- **`QuerySession.window(sql, signal)`** and **`ResultWindow`** (#15): a query's whole result, kept
+  in an attached in-memory database. Reading 100 rows at row 1,500,000 of 2 million takes 0.7 ms,
+  and a re-sort takes 98 ms; the query never reruns. `GuardedQuery.store` checks a query and stores
+  its result in a table.
+- **`Journal`** (#15): an append-only table for an application's own records.
+  - `append`, `update(key, changes)` for a record still streaming in, `get`, `pages`, and an `ILIKE`
+    `search` with snippets.
+  - Schema versions with `migrate(version, ddl)`: each step runs in a transaction, and a new table
+    starts at the latest version.
+  - A test kills the writing process with `kill -9`: every record is whole when the file is reopened.
 - **`CancelSignal.from(BooleanSupplier)`** and `CancelSignal.polling(stop, interval)` (#14): stop a
   guarded query from a flag the application already has.
   - A flag that is already set stops the run before anything is parsed.

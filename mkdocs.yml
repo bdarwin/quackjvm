@@ -62,6 +62,7 @@ nav:
       - Materializations: materializations.md
       - Measures: measures.md
       - Writing data: writing.md
+      - Paging and journals: paging.md
       - Tuning: tuning.md
       - Metrics and diagnosis: metrics.md
       - Dashboard: dashboard.md
