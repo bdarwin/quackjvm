@@ -232,7 +232,7 @@ public enum Hardening {
             properties.setProperty("autoinstall_known_extensions", "false");
             properties.setProperty("autoload_known_extensions", "false");
             if (!allowedFolders.isEmpty()) {
-                properties.setProperty("allowed_directories", folderList());
+                properties.setProperty("allowed_directories", castFolderList());
             }
             properties.setProperty("enable_external_access", "false");
             properties.setProperty("lock_configuration", "true");
@@ -301,6 +301,20 @@ public enum Hardening {
             StringBuilder list = new StringBuilder("[");
             for (int i = 0; i < allowedFolders.size(); i++) {
                 list.append(i == 0 ? "" : ", ").append(literal(allowedFolders.get(i)));
+            }
+            return list.append(']').toString();
+        }
+
+        /**
+         * The list for {@link #properties()}. DuckDB turns a property's string into a list with its
+         * cast, which reads a backslash as an escape and does not know SQL's doubled quote, so each
+         * backslash and quote is escaped with a backslash instead (issue #12).
+         */
+        private String castFolderList() {
+            StringBuilder list = new StringBuilder("[");
+            for (int i = 0; i < allowedFolders.size(); i++) {
+                String folder = allowedFolders.get(i).replace("\\", "\\\\").replace("'", "\\'");
+                list.append(i == 0 ? "" : ", ").append('\'').append(folder).append('\'');
             }
             return list.append(']').toString();
         }

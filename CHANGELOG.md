@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **`Hardening.Options.properties()` lets in folders whose path holds a backslash** (#12). DuckDB
+  turns the `allowed_directories` property into a list with its string cast, which reads a backslash
+  as an escape, so on Windows `D:\a\logs` became `D:alogs` and nothing in it could be read.
+  `properties()` now escapes each backslash and quote for that cast. `Hardening.apply` was not
+  affected: its `SET` is a SQL literal.
+
 ## 1.3.0 - 2026-11-03
 
 ### Added

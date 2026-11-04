@@ -228,4 +228,52 @@ public class HardeningOptionsTest {
             }
         }
     }
+
+    /**
+     * Folder names with characters that the two ways of handing DuckDB the list read differently.
+     * {@code properties()} goes through DuckDB's cast of a string to a list, where a backslash is an
+     * escape: on Windows every folder lost its separators - issue #12. Legal in a name on any OS.
+     */
+    private static final String[] AWKWARD = {"back\\slash", "it's", "a,b", "[square]", "two  spaces", "dq\"x", "end\\"};
+
+    private File awkward(String name) throws Exception {
+        File dir = folder.newFolder("odd", name);
+        Files.writeString(new File(dir, "a.csv").toPath(), "x\n1\n2\n");
+        return dir;
+    }
+
+    private static Hardening.Options allowing(File... dirs) {
+        String[] paths = new String[dirs.length];
+        for (int i = 0; i < dirs.length; i++) {
+            paths[i] = dirs[i].getPath();
+        }
+        return Hardening.options().allowedFolders(paths);
+    }
+
+    @Test
+    public void openedThisWayAFolderWithAnyCharacterInItsNameIsLetIn() throws Exception {
+        for (String name : AWKWARD) {
+            File dir = awkward(name);
+            try (Quack db = Quack.builder(null).settings(allowing(dir, other).properties()).open()) {
+                assertEquals(name, Long.valueOf(2), db.query("SELECT count(*) FROM read_csv('"
+                        + new File(dir, "a.csv").getPath().replace("'", "''") + "')").scalar(Long.class));
+                assertEquals(name, Long.valueOf(2), db.query("SELECT count(*) FROM " + csv(other, "a.csv")).scalar(Long.class));
+                refused(db, "CREATE TABLE t AS SELECT * FROM " + csv(neighbour, "a.csv"));
+            }
+        }
+    }
+
+    @Test
+    public void appliedToADatabaseAlreadyOpenAFolderWithAnyCharacterInItsNameIsLetIn() throws Exception {
+        for (String name : AWKWARD) {
+            File dir = awkward(name);
+            try (Quack db = Quack.inMemory()) {
+                Hardening.apply(db, allowing(dir, other));
+                assertEquals(name, Long.valueOf(2), db.query("SELECT count(*) FROM read_csv('"
+                        + new File(dir, "a.csv").getPath().replace("'", "''") + "')").scalar(Long.class));
+                assertEquals(name, Long.valueOf(2), db.query("SELECT count(*) FROM " + csv(other, "a.csv")).scalar(Long.class));
+                refused(db, "CREATE TABLE t AS SELECT * FROM " + csv(neighbour, "a.csv"));
+            }
+        }
+    }
 }
