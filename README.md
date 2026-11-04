@@ -513,6 +513,10 @@ java --add-opens=java.base/java.nio=ALL-UNNAMED -cp "$CP" io.quackjvm.cqengine.b
 java --add-opens=java.base/java.nio=ALL-UNNAMED -cp "$CP" io.quackjvm.cqengine.bench.AnalyticsBenchmark 1000000 256MB
 ```
 
+The time-series comparison with QuestDB ([docs/questdb.md](docs/questdb.md)) lives outside the
+build, in `benchmarks/questdb/`, and is rerun before each release: `benchmarks/questdb/run.sh`. See
+[benchmarks/README.md](benchmarks/README.md).
+
 The JMH benchmarks are:
 
 | benchmark | what it measures |

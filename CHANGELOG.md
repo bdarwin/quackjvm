@@ -11,6 +11,21 @@
   187 ms. A query with parameters, and anything that does not start with `SELECT` or `FROM`, is
   prepared and checked as before. Nothing is planned twice, so a Java function of constants is
   still called once.
+  At full size (1M probes, 10M readings, 1,000 devices): 2,574 ms to 1,116 through `forEachRow`,
+  1,776 to 332 through `forEachRecord`; "latest per device" at 100,000 devices 220 to 160 ms; and
+  `db.query("SELECT 1")` 147 to 76 µs.
+
+### Added
+- **`benchmarks/questdb/`**, the comparison with QuestDB, CQEngine on the heap and Java arrays
+  behind `docs/questdb.md`, outside the build. `benchmarks/questdb/run.sh` builds this checkout (or
+  fetches a release from Maven Central with `-v`), starts and stops QuestDB, waits for a quiet
+  machine, and writes the results and the tables. Rerun before each release; see `RELEASING.md`.
+
+### Docs
+- **Compared with QuestDB** (`docs/questdb.md`), measured again with 1.5.0 and this change: where
+  the time goes returning rows to Java (the JDBC driver's strings, and DuckDB's prepared path), and
+  forms of "latest per device", with a table sorted by device 7x faster at 100,000 devices.
+- **Tuning: a large result, read it as records.**
 
 ## 1.5.0 - 2026-11-04
 
