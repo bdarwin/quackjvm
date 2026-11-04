@@ -193,7 +193,8 @@ public final class GuardedQuery {
             // trailing semicolon would end the statement inside the bracket and break the wrapper,
             // so it is taken off first; the statement is already known to be a single one.
             String body = sql.replaceAll("[;\\s]+$", "");
-            String wrapped = "SELECT * FROM (\n" + body + "\n) AS " + WRAPPER + " LIMIT " + (maxRows + 1);
+            String wrapped = "SELECT * FROM (\n" + body + "\n) AS " + WRAPPER + " LIMIT "
+                    + (maxRows == Long.MAX_VALUE ? maxRows : maxRows + 1); // no row past the largest number
             // The wrapper is checked as a whole: a statement that would break out of it - by closing
             // the bracket and starting another statement - stops being a single query, and is caught
             // here rather than run.

@@ -35,6 +35,11 @@
 - `QuerySession.describe` of a file table gives the rows stored, not the source rows read.
 
 ### Fixed
+- A guarded query with no cap on its rows (`maxRows(Long.MAX_VALUE)`) failed: the cap plus one went
+  past the largest number, and DuckDB refused `LIMIT -9223372036854775808`.
+- A `FileTable` with lazy columns listed its stored columns in `SELECT *` in the order they had been
+  stored, not the table's own, so the same query gave its columns in another order depending on
+  what had been read before. They are listed in the table's order now (computed ones last).
 - A lazy column first read after the table was opened again, before any `update`, failed with
   "Rows 0 to ... are not all there yet": the source had not looked at its file yet.
 

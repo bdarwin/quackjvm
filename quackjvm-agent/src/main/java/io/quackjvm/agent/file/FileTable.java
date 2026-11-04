@@ -1093,11 +1093,34 @@ public final class FileTable implements AutoCloseable {
             view.append(ROW);
         }
         else {
-            for (int i = 0; i < columnsStored.size(); i++) {
-                view.append(i == 0 ? "" : ", ").append(Sql.quote(columnsStored.get(i)));
+            // in the order the table declares them, whatever order they were stored in: SELECT * reads
+            // the same columns in the same order as the planner's table, and as before
+            List<String> ordered = declaredOrder(columnsStored);
+            for (int i = 0; i < ordered.size(); i++) {
+                view.append(i == 0 ? "" : ", ").append(Sql.quote(ordered.get(i)));
             }
         }
         Sql.execute(connection, view.append(" FROM ").append(data()).toString());
+    }
+
+    /** These columns in the table's order: the parser's as declared, then the computed ones as stored. */
+    private List<String> declaredOrder(List<String> names) {
+        Set<String> wanted = new java.util.HashSet<>();
+        for (String name : names) {
+            wanted.add(name.toLowerCase(Locale.ROOT));
+        }
+        List<String> out = new ArrayList<>(names.size());
+        for (ColumnDef column : columns) {
+            if (wanted.remove(column.getName().toLowerCase(Locale.ROOT))) {
+                out.add(column.getName());
+            }
+        }
+        for (String name : names) {
+            if (wanted.remove(name.toLowerCase(Locale.ROOT))) {
+                out.add(name); // computed, in the order they were stored
+            }
+        }
+        return out;
     }
 
     // ---------- underneath: loading ----------

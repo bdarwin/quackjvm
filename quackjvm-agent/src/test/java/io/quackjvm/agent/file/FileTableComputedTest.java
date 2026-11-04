@@ -479,4 +479,24 @@ public class FileTableComputedTest {
             // refused
         }
     }
+
+    @Test
+    public void selectStarListsTheColumnsInTheTablesOrderWhateverOrderTheyWereStoredIn() throws Exception {
+        FileTable table = open();
+        table.update();
+        table.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM);
+        table.store(List.of("cpu_sum"), null, null);                    // the computed one first
+        List<String> backwards = new ArrayList<>();
+        for (int i = columns.size() - 1; i >= 0; i--) {
+            backwards.add(columns.get(i).getName());
+        }
+        table.store(backwards.subList(0, 150), null, null);              // then the last parser columns
+        table.store(backwards.subList(150, backwards.size()), null, null);
+        List<String> expected = new ArrayList<>();
+        for (ColumnDef c : columns) {
+            expected.add(c.getName());
+        }
+        expected.add("cpu_sum");
+        assertEquals(expected, run(table, "SELECT * FROM t LIMIT 1").getColumns());
+    }
 }
