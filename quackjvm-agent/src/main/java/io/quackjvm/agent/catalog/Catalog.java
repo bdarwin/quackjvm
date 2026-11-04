@@ -13,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * What is in the database, and what it means: the tables, their columns, what each column holds and
@@ -108,6 +109,14 @@ public final class Catalog {
      */
     public List<QueryExamples.Example> examples(String table) {
         return QueryExamples.of(describe(table), tables());
+    }
+
+    /**
+     * As {@link #examples(String)}, told roughly how many distinct values the columns hold, so the
+     * group-by examples use a column with few: {@code examples("log", profile("log").distinctValues())}.
+     */
+    public List<QueryExamples.Example> examples(String table, Map<String, Long> distinctValues) {
+        return QueryExamples.of(describe(table), tables(), distinctValues);
     }
 
     /** The names of the tables and views, for an error message or a prompt. */

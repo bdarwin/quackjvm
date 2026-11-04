@@ -143,4 +143,5 @@ let in a folder, the window goes with the old one: reading it then throws, sayin
 ## Example queries
 
 `session.examples(name)` and `Catalog.examples(table)` write ready-made queries from a table's
-columns, without reading the table. See [Catalog](catalog.md#example-queries).
+columns, without reading the table. `session.examples(name, session.profile(name).distinctValues())`
+reads it once to choose a group column with few values. See [Catalog](catalog.md#example-queries).

@@ -94,26 +94,58 @@ for (QueryExamples.Example example : catalog.examples("log")) {
 ```
 
 These are written from the columns alone, so nothing is read from the table. For a log with
-columns `line`, `time`, `level`, `thread` and `message`, the examples are:
+columns `line`, `time`, `level`, `thread`, `logger` and `message`, the examples are:
 
 ```sql
 SELECT count(*) AS rows FROM log
 SELECT * FROM log LIMIT 10
+SUMMARIZE log
 SELECT min(line) AS lowest, max(line) AS highest, avg(line) AS mean FROM log
-SELECT level, count(*) AS rows, avg(line) AS mean_line FROM log GROUP BY 1 ORDER BY 2 DESC LIMIT 20
 SELECT date_trunc('hour', time) AS hour, count(*) AS rows FROM log GROUP BY 1 ORDER BY 1
 SELECT * FROM log WHERE message ILIKE '%error%' LIMIT 50
+SELECT level, count(*) AS lines FROM log GROUP BY 1 ORDER BY 2 DESC
+SELECT date_trunc('minute', time) AS minute, count(*) AS errors FROM log WHERE upper(level) = 'ERROR' GROUP BY 1 ORDER BY 1
+SELECT regexp_replace(message, '[0-9]+', '#', 'g') AS error, count(*) AS times FROM log WHERE upper(level) = 'ERROR' GROUP BY 1 ORDER BY 2 DESC LIMIT 20
+SELECT logger, count(*) FILTER (WHERE upper(level) = 'ERROR') AS errors, count(*) FILTER (WHERE upper(level) IN ('WARN', 'WARNING')) AS warnings FROM log WHERE upper(level) = 'ERROR' OR upper(level) IN ('WARN', 'WARNING') GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 20
+SELECT line, time, message, CAST(regexp_extract(message, '([0-9]+(\.[0-9]+)?) ?ms\b', 1) AS DOUBLE) AS ms FROM log WHERE regexp_matches(message, '[0-9]+(\.[0-9]+)? ?ms\b') ORDER BY ms DESC LIMIT 20
 ```
 
-- **Families of numbered columns.** Three or more numbered columns of the same name and kind, like
-  `cpu_0001` to `cpu_1500`, are queried all at once with
-  `SELECT avg(COLUMNS('^cpu_[0-9]+$')) FROM wide`. They are left out of the other examples. A
-  table wider than 20 columns shows only its first 10 in "the first rows".
-- **Joins.** When another table has a column with the same name and kind, there is a join over it,
-  up to three of them.
-- **Quoting.** Names that need quotes get them, and every example runs as written. The tests run
-  each one, on a log, a 1,504-column table, quoted and reserved names, and a dotted family name
-  (escaped in the pattern, so it doesn't catch a similar column).
+Which examples a table gets:
+
+| Example | When |
+|---|---|
+| A count, the first rows, `SUMMARIZE` | always. Wider than 20 columns: the first 10 columns only, as `SUMMARIZE` of all 1,502 columns of a 5,000-row table took 2.5 s |
+| The range of a number | a number column |
+| Median, 95th and 99th percentiles (`quantile_cont`), and the rows with the highest value | a number that measures something: not one named `line`, `id`, `seq`, `..._id` and so on |
+| Count, mean and highest by a group column | a text column with few values (see below) |
+| Rows per hour (per month for a date) | a timestamp or date column |
+| A text search (`ILIKE '%error%'`) | a text column, preferring one named `message`, `text`, `body`... |
+| Columns found by name (`FROM (DESCRIBE t) WHERE column_name ILIKE ...`) | wider than 20 columns |
+| A family's mean; its mean per group and per minute; its total in each row (`list_sum([*COLUMNS(...)])`); its highest value (`greatest(*COLUMNS(...))`); its columns turned into rows (`UNPIVOT`) | three or more numbered columns of the same name and kind, like `cpu_0001` to `cpu_1500`. `UNPIVOT` only when they all have the same type |
+| Lines per level, errors per minute, the most frequent errors with numbers blanked, errors and warnings by logger, durations written in the messages (`... 345 ms`) slowest first | a log: a text `level` and `message`, any case. The ones needing `time` or `logger` only when those are there |
+| A join, and the other table's first rows | another table with a column of the same name and kind, up to three |
+
+**The group column.** Told how many distinct values each column holds, the examples group by the
+first text column with at most 1,000:
+
+```java
+Profile profile = catalog.profile("log");                        // reads the whole table
+catalog.examples("log", profile.distinctValues());               // or counts the application has
+```
+
+Told nothing, they go by the name (`level`, `severity`, `host`, `status`, `kind`, `type`...), else
+the first text column not named like free text. A column the counts leave out is judged by its name.
+
+- **Families of numbered columns** are left out of the other examples, so a 1,500-column table
+  doesn't get 1,500 range queries. `COLUMNS('^cpu_[0-9]+$')` must pick exactly the family: a
+  pattern that would catch another column means no family.
+- **Quoting.** Names that need quotes get them, a quote in a family's name is doubled in the
+  pattern, and a dot is escaped so it doesn't catch a similar column.
+- **Every example runs as written.** The tests run each one through `GuardedQuery` in a hardened
+  database, on an empty table and on a full one: a 5,000-line log, a 1,504-column table, quoted
+  and reserved names, every kind of column (numbers, dates, time zones, blobs, lists, structs).
+  Where Java can work out the answer - lines per level, percentiles, a row's total over 1,500
+  columns, the slowest duration - the tests check it.
 
 ## Which columns a query reads
 

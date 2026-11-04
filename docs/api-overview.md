@@ -287,8 +287,10 @@ catalog.apply("car", layout);                      // writes everything the layo
   ten million rows.
 
 `catalog.examples(table)` writes ready-made queries from a table's columns. Each `QueryExamples.Example`
-has a title and SQL, covering a count, a range, counts by a text column, rows over time, a search,
-families of numbered columns with `COLUMNS('^cpu_[0-9]+$')`, and joins to tables that share a column.
+has a title and SQL, covering a count, a summary, a range and percentiles, counts by a group column,
+rows over time, a search, families of numbered columns with `COLUMNS('^cpu_[0-9]+$')`, examples for
+logs, and joins to tables that share a column. `catalog.examples(table, profile.distinctValues())`
+chooses a group column with few values.
 
 See [Catalog](catalog.md).
 
@@ -304,7 +306,7 @@ session.register("note", () -> notes, ColumnarLayout.ofRecord(Note.class));   //
 session.alias("t", name);
 session.run(sql, CancelSignal.from(stop::get));      // or run(sql), or run(sql, signal, policy)
 session.allowFolders(List.of(folder));               // reopens if needed, keeping every table
-session.names(); session.aliases(); session.examples("t"); session.unregister("recent");
+session.names(); session.aliases(); session.examples("t"); session.profile("t"); session.unregister("recent");
 ResultWindow w = session.window(sql, signal);    // the whole result, read with w.rows(first, n); w.sort(column, asc)
 QuerySession.tableName(Path.of("Readings 2026-Q4.tsv"), taken);   // "readings_2026_q4"
 ```

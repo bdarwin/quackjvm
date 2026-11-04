@@ -1,6 +1,7 @@
 package io.quackjvm.agent.session;
 
 import io.quackjvm.agent.catalog.Catalog;
+import io.quackjvm.agent.catalog.Profile;
 import io.quackjvm.agent.catalog.QueryExamples;
 import io.quackjvm.agent.catalog.TableInfo;
 import io.quackjvm.agent.catalog.internal.SqlNames;
@@ -276,6 +277,14 @@ public final class QuerySession implements AutoCloseable {
      * column with it - see {@link QueryExamples}. Each one runs as it is.
      */
     public List<QueryExamples.Example> examples(String name) {
+        return examples(name, Map.of());
+    }
+
+    /**
+     * As {@link #examples(String)}, told roughly how many distinct values the columns hold, so the
+     * group-by examples use a column with few: {@code examples("log", profile("log").distinctValues())}.
+     */
+    public List<QueryExamples.Example> examples(String name, Map<String, Long> distinctValues) {
         lock.readLock().lock();
         try {
             checkOpen();
@@ -286,7 +295,22 @@ public final class QuerySession implements AutoCloseable {
                     others.add(catalog.describe(other));
                 }
             }
-            return QueryExamples.of(catalog.describe(name), others);
+            return QueryExamples.of(catalog.describe(name), others, distinctValues);
+        }
+        finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * What a registered table or alias holds - an exact row count, {@code SUMMARIZE} per column and
+     * five rows; see {@link Catalog#profile(String)}. It reads the whole table.
+     */
+    public Profile profile(String name) {
+        lock.readLock().lock();
+        try {
+            checkOpen();
+            return Catalog.of(database).profile(name);
         }
         finally {
             lock.readLock().unlock();

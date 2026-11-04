@@ -1,6 +1,7 @@
 package io.quackjvm.agent.session;
 
 import io.quackjvm.agent.catalog.internal.SqlNames;
+import io.quackjvm.agent.catalog.Profile;
 import io.quackjvm.agent.guard.CancelSignal;
 import io.quackjvm.agent.guard.GuardedResult;
 import io.quackjvm.agent.guard.Hardening;
@@ -535,6 +536,30 @@ public class QuerySessionTest {
         List<String> sql = session.examples("t").stream().map(e -> e.sql()).toList();
         assertTrue(sql.toString(), sql.contains("SELECT * FROM t JOIN devices USING (id) LIMIT 10"));
         assertTrue("not joined to itself: " + sql, sql.stream().noneMatch(s -> s.contains("JOIN readings_2026")));
+        for (String example : sql) {
+            session.run(example);
+        }
+    }
+
+    @Test
+    public void aProfilesDistinctCountsChooseTheGroupColumnOfTheExamples() throws Exception {
+        StringBuilder csv = new StringBuilder("visitor,colour,host,weight\n");
+        for (int x = 0; x < 2000; x++) {
+            csv.append("v").append(x).append(',').append(x % 2 == 0 ? "red" : "blue").append(",h").append(x)
+                    .append(',').append(x).append('\n');
+        }
+        Files.writeString(data.resolve("seen.csv"), csv);
+        String seen = session.register(data.resolve("seen.csv"));
+        session.alias("t", seen);
+        String byName = "SELECT host, count(*) AS rows, avg(weight) AS mean_weight, max(weight) AS highest_weight"
+                + " FROM t GROUP BY 1 ORDER BY 2 DESC LIMIT 20";
+        assertTrue(session.examples("t").stream().anyMatch(e -> e.sql().equals(byName)));
+
+        Profile profile = session.profile("t");
+        assertEquals(2000, profile.rows());
+        List<String> sql = session.examples("t", profile.distinctValues()).stream().map(e -> e.sql()).toList();
+        assertTrue(sql.toString(), sql.contains(byName.replace("host", "colour")));
+        assertFalse(sql.contains(byName));
         for (String example : sql) {
             session.run(example);
         }

@@ -1,6 +1,8 @@
 package io.quackjvm.agent.catalog;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * What a table actually holds: an exact row count, a summary per column, and a few rows.
@@ -17,6 +19,20 @@ public record Profile(String table, String description, long rows, List<ColumnPr
     public Profile {
         columns = List.copyOf(columns);
         sample = List.copyOf(sample);
+    }
+
+    /**
+     * Roughly how many distinct values each column holds, by name - for {@link QueryExamples} to choose
+     * a group column with few. Columns SUMMARIZE gave no count for are left out.
+     */
+    public Map<String, Long> distinctValues() {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (ColumnProfile column : columns) {
+            if (column.approxUnique() != null) {
+                counts.put(column.column(), column.approxUnique());
+            }
+        }
+        return counts;
     }
 
     /** The profile as text, for whatever has to decide what to ask next. */

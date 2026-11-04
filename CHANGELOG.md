@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **More query examples** (#19). `QueryExamples` adds:
+  - `SUMMARIZE`, percentiles and the highest rows of a number, and the highest value per group.
+  - For a family of numbered columns: per group, per minute, a total per row, the highest value,
+    and `UNPIVOT`.
+  - Finding a column by name in a wide table, and the first rows of a table it joins to.
+  - Examples for logs (a `level` and a `message`): lines per level, errors per minute, the most
+    frequent errors with numbers blanked, errors and warnings by logger, and durations in messages.
+- `Catalog.examples(table, distinctValues)` and `QuerySession.examples(name, distinctValues)` choose
+  a group column with few values; `Profile.distinctValues()` gives the counts, and
+  `QuerySession.profile(name)` profiles a registered table.
+
+### Changed
+- The group-by example now goes by a column's name (`level`, `host`, `status`...) and leaves out free
+  text such as `message`. Percentiles and means skip numbers that count rows (`line`, `id`, `..._id`).
+
+### Fixed
+- A quote in the name of a family of numbered columns broke its `COLUMNS('...')` examples.
+
 ## 1.4.0 - 2026-11-04
 
 ### Added
