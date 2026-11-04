@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6.1 - 2026-11-05
 
 ### Changed
 - **`db.query` runs a `SELECT` with no parameters unprepared, and a large ASOF result reads 2x
