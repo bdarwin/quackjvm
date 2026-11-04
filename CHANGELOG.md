@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-11-04
 
 ### Added
 - **`QuerySession`** (#14): one hardened, in-memory database where an application registers
