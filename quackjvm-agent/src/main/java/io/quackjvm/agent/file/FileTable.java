@@ -33,6 +33,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.Collection;
 import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -283,6 +284,46 @@ public final class FileTable implements AutoCloseable {
         }
     }
 
+    /**
+     * Stores these lazy columns now, those not stored yet, in one pass over the file - before the
+     * queries that will read them, with progress to show and a way to stop. A query would store them
+     * too, but with nothing to show for a long read of a big file. Stopped through the signal, it
+     * throws {@link QueryCancelled} and stores none of them. Parser columns and computed ones alike.
+     *
+     * @param progress told the share of the rows read so far, 0 to 1; may be null
+     * @return how many columns it stored (0 when all were there)
+     * @throws IllegalStateException for a table without lazy columns: it stores every column already
+     * @throws IllegalArgumentException for a column the table doesn't have
+     */
+    public int store(Collection<String> columnNames, CancelSignal signal, DoubleConsumer progress) {
+        checkOpen();
+        if (!lazy) {
+            throw new IllegalStateException("Only a table with lazy columns stores columns on request: " + file
+                    + " stores every column already");
+        }
+        Set<String> missing = new LinkedHashSet<>();
+        for (String name : columnNames) {
+            missing.add(column(name).getName());
+        }
+        int added;
+        writer.lock();
+        try {
+            awaitHome();
+            missing.removeAll(stored);
+            added = missing.size();
+            if (!missing.isEmpty()) {
+                addColumns(missing, signal, progress);
+            }
+        }
+        finally {
+            writer.unlock();
+        }
+        if (progress != null) {
+            progress.accept(1);
+        }
+        return added;
+    }
+
     /** As {@link #update(CancelSignal, DoubleConsumer)}, unstoppable and silent. */
     public Updated update() {
         return update(null, null);
@@ -309,7 +350,7 @@ public final class FileTable implements AutoCloseable {
                 try {
                     missing.removeAll(stored);
                     if (!missing.isEmpty()) {
-                        addColumns(missing, signal);
+                        addColumns(missing, signal, null);
                     }
                 }
                 finally {
@@ -727,7 +768,7 @@ public final class FileTable implements AutoCloseable {
             awaitHome();
             missing.removeAll(stored);
             if (!missing.isEmpty()) {
-                addColumns(missing, signal);
+                addColumns(missing, signal, null);
             }
         }
         finally {
@@ -1107,7 +1148,7 @@ public final class FileTable implements AutoCloseable {
     }
 
     /** Stores the columns a query needs that are not stored yet: the whole file read again, for those. */
-    private void addColumns(Set<String> missing, CancelSignal signal) {
+    private void addColumns(Set<String> missing, CancelSignal signal, DoubleConsumer progress) {
         List<String> adding = new ArrayList<>(missing);
         List<String> after = new ArrayList<>(stored);
         after.addAll(adding);
@@ -1129,10 +1170,14 @@ public final class FileTable implements AutoCloseable {
             }
             try {
                 for (long first = 0; first < count; first += batch) {
-                    stage(first, (int) Math.min(batch, count - first), adding, signal);
+                    int n = (int) Math.min(batch, count - first);
+                    stage(first, n, adding, signal);
                     Sql.execute(quack().sharedConnection(), "INSERT INTO " + stage() + ".main.adding SELECT * FROM ("
                             + stageUnion() + ")");
                     dropStage();
+                    if (progress != null) {
+                        progress.accept((double) (first + n) / count);
+                    }
                 }
                 // The rows the parser left out the first time are left out again; a parser deciding
                 // otherwise would leave rows without the new values, so it is refused.

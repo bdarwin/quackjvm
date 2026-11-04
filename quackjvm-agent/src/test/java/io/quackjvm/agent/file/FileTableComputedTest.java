@@ -425,4 +425,58 @@ public class FileTableComputedTest {
         table.column(new ColumnDef("slow", Double.class), CPU_SUM);
         checkSums(run(table, "SELECT line, slow FROM t ORDER BY line").getRows());
     }
+
+    @Test
+    public void storedOnRequestWithProgressBeforeAnyQueryReadsThem() throws Exception {
+        FileTable table = open();
+        table.update();
+        table.column(new ColumnDef("cpu_sum", Double.class), CPU_SUM);
+        List<Double> progress = new ArrayList<>();
+        assertEquals(3, table.store(List.of("line", "cpu_sum", "host"), null, progress::add));
+        assertTrue(table.storedColumns().containsAll(List.of("line", "cpu_sum", "host")));
+        assertFalse("it reads the file once, a batch at a time", progress.isEmpty());
+        for (int i = 1; i < progress.size(); i++) {
+            assertTrue("never goes back", progress.get(i) >= progress.get(i - 1));
+        }
+        assertEquals(1.0, progress.get(progress.size() - 1), 0);
+        checkSums(run(table, "SELECT line, cpu_sum FROM t ORDER BY line").getRows());
+        assertEquals("all there already: nothing to do", 0, table.store(List.of("cpu_sum", "line"), null, null));
+        append(ROWS, ROWS + 300);
+        table.update();
+        checkSums(run(table, "SELECT line, cpu_sum FROM t ORDER BY line").getRows());
+    }
+
+    @Test
+    public void storeStoppedStoresNothingAndRefusesWhatCantBeStored() throws Exception {
+        FileTable table = open(2, 200, cache);
+        table.update();
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        try {
+            table.store(List.of("cpu_001", "cpu_002"), CancelSignal.from(stop::get), p -> stop.set(p > 0.2));
+            fail("stopped");
+        }
+        catch (QueryCancelled expected) {
+            // stopped after a batch
+        }
+        assertFalse(table.storedColumns().contains("cpu_001"));
+        assertEquals(2, table.store(List.of("cpu_001", "cpu_002"), null, null));
+        assertEquals(ROWS, ((Number) run(table, "SELECT count(cpu_001) + count(*) - count(cpu_001) FROM t")
+                .getRows().get(0)[0]).longValue());
+        try {
+            table.store(List.of("no_such_column"), null, null);
+            fail("a column the table doesn't have");
+        }
+        catch (IllegalArgumentException expected) {
+            // refused
+        }
+        FileTable plain = FileTables.builder(csv, columns, LineSource.of(csv).skip(1), parser).version("plain-2").open();
+        opened.add(plain);
+        try {
+            plain.store(List.of("host"), null, null);
+            fail("a table without lazy columns stores every column already");
+        }
+        catch (IllegalStateException expected) {
+            // refused
+        }
+    }
 }

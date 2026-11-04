@@ -83,6 +83,14 @@ again for just those columns, in one transaction. Only then does it run the quer
 - **Refusals:** a query whose columns can't be told (a `PIVOT`, say) is refused with the reason, and
   so is one that would add more than `maxNewColumnsPerQuery` columns. `whyNot` gives that reason
   without running anything.
+- **Stored ahead, with progress:** `store(columns, signal, progress)` stores the ones not stored yet,
+  in one pass, before any query reads them. A query would store them too, but a big file's read
+  then shows nothing for minutes; this one reports the share read and stops on the signal, storing
+  none of them. It returns how many it added, 0 when all were there.
+
+```java
+int added = wide.store(List.of("host", "cpu_0001"), signal, share -> bar.setValue((int) (share * 100)));
+```
 
 ## Rows that aren't rows
 

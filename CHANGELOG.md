@@ -16,6 +16,9 @@
   by the table and by a `QuerySession` it is registered in. The cache file's name doesn't change.
   Adding one of the same name again replaces it and drops its stored values; reopening the cache
   drops them too, until the column is added again. `computedColumns()` lists them.
+- **Lazy columns stored ahead, with progress:** `FileTable.store(columns, signal, progress)` stores
+  the ones not stored yet in one pass, before a query reads them, telling the share read and stopping
+  on the signal (then none is stored). For an application that shows a bar while a big file is read.
 
 ### Changed
 - **Query examples, closer to what people ask** (found moving Logsift's own examples onto quackjvm):
