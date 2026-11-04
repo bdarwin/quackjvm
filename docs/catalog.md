@@ -100,10 +100,9 @@ columns `line`, `time`, `level`, `thread`, `logger` and `message`, the examples 
 SELECT count(*) AS rows FROM log
 SELECT * FROM log LIMIT 10
 SUMMARIZE log
-SELECT min(line) AS lowest, max(line) AS highest, avg(line) AS mean FROM log
-SELECT date_trunc('hour', time) AS hour, count(*) AS rows FROM log GROUP BY 1 ORDER BY 1
+SELECT date_trunc('hour', time) AS hour, count(*) AS rows FROM log WHERE time IS NOT NULL GROUP BY 1 ORDER BY 1
 SELECT * FROM log WHERE message ILIKE '%error%' LIMIT 50
-SELECT level, count(*) AS lines FROM log GROUP BY 1 ORDER BY 2 DESC
+SELECT level, count(*) AS lines FROM log WHERE level IS NOT NULL GROUP BY 1 ORDER BY 2 DESC
 SELECT date_trunc('minute', time) AS minute, count(*) AS errors FROM log WHERE upper(level) = 'ERROR' GROUP BY 1 ORDER BY 1
 SELECT regexp_replace(message, '[0-9]+', '#', 'g') AS error, count(*) AS times FROM log WHERE upper(level) = 'ERROR' GROUP BY 1 ORDER BY 2 DESC LIMIT 20
 SELECT logger, count(*) FILTER (WHERE upper(level) = 'ERROR') AS errors, count(*) FILTER (WHERE upper(level) IN ('WARN', 'WARNING')) AS warnings FROM log WHERE upper(level) = 'ERROR' OR upper(level) IN ('WARN', 'WARNING') GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 20
@@ -115,13 +114,13 @@ Which examples a table gets:
 | Example | When |
 |---|---|
 | A count, the first rows, `SUMMARIZE` | always. Wider than 20 columns: the first 10 columns only, as `SUMMARIZE` of all 1,502 columns of a 5,000-row table took 2.5 s |
-| The range of a number | a number column |
+| The range of a number | a number that measures something (not one that counts rows: see below) |
 | Median, 95th and 99th percentiles (`quantile_cont`), and the rows with the highest value | a number that measures something: not one named `line`, `id`, `seq`, `..._id` and so on |
 | Count, mean and highest by a group column | a text column with few values (see below) |
-| Rows per hour (per month for a date) | a timestamp or date column |
+| Rows per hour (per month for a date), with the mean of the measure if there is one | a timestamp or date column. Rows without a time are left out rather than shown as a group of their own |
 | A text search (`ILIKE '%error%'`) | a text column, preferring one named `message`, `text`, `body`... |
 | Columns found by name (`FROM (DESCRIBE t) WHERE column_name ILIKE ...`) | wider than 20 columns |
-| A family's mean; its mean per group and per minute; its total in each row (`list_sum([*COLUMNS(...)])`); its highest value (`greatest(*COLUMNS(...))`); its columns turned into rows (`UNPIVOT`) | three or more numbered columns of the same name and kind, like `cpu_0001` to `cpu_1500`. `UNPIVOT` only when they all have the same type |
+| A family's mean; its mean per group and per minute; its total in each row (`list_sum([*COLUMNS(...)])`); the rows with its highest value (`greatest(*COLUMNS(...))`); each column's mean and highest, highest mean first (`UNPIVOT`, then grouped) |  three or more numbered columns of the same name and kind, like `cpu_0001` to `cpu_1500`. `UNPIVOT` only when they all have the same type |
 | Lines per level, errors per minute, the most frequent errors with numbers blanked, errors and warnings by logger, durations written in the messages (`... 345 ms`) slowest first | a log: a text `level` and `message`, any case. The ones needing `time` or `logger` only when those are there |
 | A join, and the other table's first rows | another table with a column of the same name and kind, up to three |
 

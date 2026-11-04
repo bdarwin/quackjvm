@@ -69,6 +69,15 @@ public class GuardedQueryTest {
     }
 
     @Test
+    public void noCapOnRowsIsTheLargestNumberAndRuns() {
+        // Long.MAX_VALUE + 1 went past the largest number: LIMIT -9223372036854775808, refused by DuckDB
+        GuardedResult all = GuardedQuery.on(connection, QueryPolicy.readOnly().maxRows(Long.MAX_VALUE))
+                .run("SELECT id FROM car");
+        assertEquals(100, all.getRowCount());
+        assertFalse(all.isTruncated());
+    }
+
+    @Test
     public void theQueryFormsThatReadAreAllAllowed() {
         for (String sql : List.of(
                 "SELECT 1",

@@ -188,6 +188,10 @@ file table's with all its columns. In a test joining a 6,000-column table with a
 stored the two columns it read, and a later query reading one more stored one more. `whyRejected`
 says when a query would add more than `maxNewColumnsPerQuery`, or when its columns can't be told (a
 `PIVOT`). `describe` and `examples` list all the table's columns, not only those stored.
+[Computed columns](file-tables.md#columns-the-application-computes) added to the table while it
+is registered are planned over too, and stored by the first query that reads them; a test joins
+one with another table and checks its totals against Java's. `describe` counts the rows stored,
+leaving out rows the [parser left out](file-tables.md#rows-that-arent-rows).
 
 **Functions.** A file table's [Java functions](file-tables.md#java-functions) can be called in the
 session's queries, and a cancel stops them as it does on the table: 3–4 ms after `cancel()`, in a

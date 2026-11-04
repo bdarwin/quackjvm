@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **A `FileTable` parser can leave rows out**: `RowParser.isRow(raw, rowNo)`, true unless
+  overridden. A CSV's header, blank lines and the lines inside a quoted value that spans lines are
+  then not stored, so `count(*)` counts the real rows. Rows kept keep their source row numbers;
+  `rowsLoaded()` still counts every source row read, so growing and resuming work as before, and
+  the new `rowsStored()` counts the rows held. `isRow` must decide from the raw row and its number
+  alone: a lazy column whose pass keeps other rows is refused with that reason.
+- **Columns the application computes**, added to an open table with lazy columns:
+  `FileTable.column(ColumnDef, RowFunction)`, where `RowFunction` works out a value from the whole
+  raw row - a total over 1,500 columns, say. Stored by the first query that reads it, with one pass
+  over the file that calls `isRow` but not `parse`, and filled by `update` from then on. Planned
+  by the table and by a `QuerySession` it is registered in. The cache file's name doesn't change.
+  Adding one of the same name again replaces it and drops its stored values; reopening the cache
+  drops them too, until the column is added again. `computedColumns()` lists them.
+- **Computed columns kept from one start to the next**, with a version: `FileTable.column(def,
+  function, version)`. Added again with the same version and type, the values stored before are used
+  as they are; another version, rows stored first, or a replaced file drops them. Without a version
+  they're dropped at reopening, as before.
+- `FileTable.unstore(columns)` lets stored lazy columns go; they're stored again when read.
+- **Lazy columns stored ahead, with progress:** `FileTable.store(columns, signal, progress)` stores
+  the ones not stored yet in one pass, before a query reads them, telling the share read and stopping
+  on the signal (then none is stored). For an application that shows a bar while a big file is read.
+
+### Changed
+- **Query examples, closer to what people ask** (found moving Logsift's own examples onto quackjvm):
+  - Rows per hour (and per minute for a family) leave out rows without a time, which made a group of
+    their own, and show the measure's mean beside the count.
+  - Lines per level leave out lines with no level, such as a stack trace's.
+  - The range is of a number that measures something; a column that counts rows (`line`, `id`...)
+    no longer gets one.
+  - A family of numbered columns gets the rows with its highest value, rather than only the value,
+    and each column's mean and highest, highest mean first, rather than the raw `UNPIVOT` rows.
+    Text families keep the raw rows.
+  - Two tables that each number their rows (`line`, `row`, `index`...) aren't offered a join on that
+    number: a row's place in its own table says nothing about another's. They still join on what
+    they share, an id say.
+- Loading threads ask the cancel signal at most every millisecond within a block, not only between
+  blocks, so a slow parser or computed column stops 3-5 ms after a cancel.
+- `QuerySession.describe` of a file table gives the rows stored, not the source rows read.
+
+### Fixed
+- A guarded query with no cap on its rows (`maxRows(Long.MAX_VALUE)`) failed: the cap plus one went
+  past the largest number, and DuckDB refused `LIMIT -9223372036854775808`.
+- A `FileTable` with lazy columns listed its stored columns in `SELECT *` in the order they had been
+  stored, not the table's own, so the same query gave its columns in another order depending on
+  what had been read before. They are listed in the table's order now (computed ones last).
+- A lazy column first read after the table was opened again, before any `update`, failed with
+  "Rows 0 to ... are not all there yet": the source had not looked at its file yet.
+
 ## 1.5.0 - 2026-11-04
 
 ### Added

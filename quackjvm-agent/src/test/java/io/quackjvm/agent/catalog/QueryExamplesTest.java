@@ -100,10 +100,10 @@ public class QueryExamplesTest {
                 "SELECT count(*) AS rows FROM log",
                 "SELECT * FROM log LIMIT 10",
                 "SUMMARIZE log",
-                "SELECT min(line) AS lowest, max(line) AS highest, avg(line) AS mean FROM log",
-                "SELECT date_trunc('hour', time) AS hour, count(*) AS rows FROM log GROUP BY 1 ORDER BY 1",
+                "SELECT date_trunc('hour', time) AS hour, count(*) AS rows FROM log WHERE time IS NOT NULL"
+                        + " GROUP BY 1 ORDER BY 1",
                 "SELECT * FROM log WHERE message ILIKE '%error%' LIMIT 50",
-                "SELECT level, count(*) AS lines FROM log GROUP BY 1 ORDER BY 2 DESC",
+                "SELECT level, count(*) AS lines FROM log WHERE level IS NOT NULL GROUP BY 1 ORDER BY 2 DESC",
                 "SELECT date_trunc('minute', time) AS minute, count(*) AS errors FROM log WHERE upper(level) = 'ERROR'"
                         + " GROUP BY 1 ORDER BY 1",
                 "SELECT regexp_replace(message, '[0-9]+', '#', 'g') AS error, count(*) AS times FROM log"
@@ -183,7 +183,7 @@ public class QueryExamplesTest {
         db.execute("CREATE TABLE \"Plain Log\" (\"Level\" VARCHAR, \"Message\" VARCHAR)");
         List<String> sql = sql("Plain Log");
         assertTrue(sql.toString(), sql.contains("SELECT \"Level\", count(*) AS lines FROM \"Plain Log\""
-                + " GROUP BY 1 ORDER BY 2 DESC"));
+                + " WHERE \"Level\" IS NOT NULL GROUP BY 1 ORDER BY 2 DESC"));
         assertTrue(sql.stream().noneMatch(s -> s.contains("'minute'") || s.contains("FILTER")));
         assertTrue(sql.toString(), sql.stream().anyMatch(s -> s.startsWith("SELECT \"Message\", CAST(regexp_extract(")));
         allRunEmptyAndFull("Plain Log", "INSERT INTO \"Plain Log\" VALUES ('error', 'disk 3 full'),"
@@ -245,10 +245,12 @@ public class QueryExamplesTest {
                 "SELECT avg(" + all + ") FROM wide",
                 "SELECT avg(COLUMNS('^mem_[0-9]+$')) FROM wide",
                 "SELECT host, avg(" + all + ") FROM wide GROUP BY 1 ORDER BY 1 LIMIT 20",
-                "SELECT date_trunc('minute', time) AS minute, avg(" + all + ") FROM wide GROUP BY 1 ORDER BY 1",
+                "SELECT date_trunc('minute', time) AS minute, avg(" + all + ") FROM wide WHERE time IS NOT NULL"
+                        + " GROUP BY 1 ORDER BY 1",
                 "SELECT host, list_sum([*" + all + "]) AS cpu_total FROM wide LIMIT 10",
-                "SELECT max(greatest(*" + all + ")) AS highest FROM wide",
-                "SELECT * FROM (UNPIVOT wide ON " + all + " INTO NAME series VALUE value) LIMIT 20",
+                "SELECT host, greatest(*" + all + ") AS highest FROM wide ORDER BY highest DESC NULLS LAST LIMIT 10",
+                "SELECT series, avg(value) AS mean, max(value) AS highest FROM (UNPIVOT (SELECT " + all
+                        + " FROM wide) ON COLUMNS(*) INTO NAME series VALUE value) GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 20",
                 "SELECT column_name, column_type FROM (DESCRIBE wide) WHERE column_name ILIKE '%cpu%'",
                 "SELECT min(disk2) AS lowest, max(disk2) AS highest, avg(disk2) AS mean FROM wide")) {
             assertTrue(expected + " in " + sql, sql.contains(expected));
@@ -279,12 +281,29 @@ public class QueryExamplesTest {
             expected += (7L * i) % 1009;
         }
         assertEquals(expected, ((Number) rowTotals.getRows().get(0)[1]).doubleValue(), 0);
-        assertEquals(1008.0, ((Number) guard.run(find("wide", "The highest value in any of the 1500"))
-                .getRows().get(0)[0]).doubleValue(), 0);
-        GuardedResult unpivoted = guard.run(find("wide", "The 1500 cpu_N columns as rows"));
-        assertEquals(20, unpivoted.getRowCount());
-        assertEquals(List.of("series", "value"), unpivoted.getColumns().subList(unpivoted.getColumns().size() - 2,
-                unpivoted.getColumns().size()));
+        GuardedResult highest = guard.run(find("wide", "The rows with the highest value in any of the 1500"));
+        assertEquals(10, highest.getRowCount());
+        assertEquals(1008.0, ((Number) highest.getRows().get(0)[1]).doubleValue(), 0);
+        // each column's mean, worked out in Java: the highest first
+        double best = -1;
+        String bestName = null;
+        for (int i = 1; i <= 1500; i++) {
+            long sum = 0;
+            for (long x = 0; x < 5000; x++) {
+                sum += (x * i) % 1009;
+            }
+            double mean = sum / 5000.0;
+            String name = String.format("cpu_%04d", i);
+            if (mean > best + 1e-9 || (Math.abs(mean - best) <= 1e-9 && name.compareTo(bestName) < 0)) {
+                best = mean;
+                bestName = name;
+            }
+        }
+        GuardedResult perColumn = guard.run(find("wide", "Each of the 1500 cpu_N columns"));
+        assertEquals(20, perColumn.getRowCount());
+        assertEquals(List.of("series", "mean", "highest"), perColumn.getColumns());
+        assertEquals(bestName, perColumn.getRows().get(0)[0]);
+        assertEquals(best, ((Number) perColumn.getRows().get(0)[1]).doubleValue(), 1e-9);
         assertEquals(1500, guard.run(find("wide", "Columns whose name")).getRowCount());
     }
 
@@ -340,8 +359,8 @@ public class QueryExamplesTest {
         List<String> sql = sql("Odd Names");
         assertEquals("SELECT count(*) AS rows FROM \"Odd Names\"", sql.get(0));
         assertTrue(sql.contains("SUMMARIZE \"Odd Names\""));
-        assertTrue(sql.toString(), sql.contains("SELECT date_trunc('month', \"when\") AS month, count(*) AS rows"
-                + " FROM \"Odd Names\" GROUP BY 1 ORDER BY 1"));
+        assertTrue(sql.toString(), sql.contains("SELECT date_trunc('month', \"when\") AS month, count(*) AS rows,"
+                + " avg(\"order\") AS mean_order FROM \"Odd Names\" WHERE \"when\" IS NOT NULL GROUP BY 1 ORDER BY 1"));
         allRunEmptyAndFull("Odd Names", "INSERT INTO \"Odd Names\" VALUES (1, 'a', DATE '2026-01-05'),"
                 + " (2, 'b', DATE '2026-02-05')");
     }
@@ -436,5 +455,31 @@ public class QueryExamplesTest {
                 + " TIMESTAMPTZ '2026-01-02 03:04:05+00', TIMESTAMP_NS '2026-01-02 03:04:05', 'x', 'y'::BLOB, [1],"
                 + " {'a': 1})");
         assertTrue(Arrays.toString(sql("kinds").toArray()), sql("kinds").stream().anyMatch(s -> s.contains("quantile")));
+    }
+
+    @Test
+    public void rowsWithoutATimeOrALevelAreNoGroupOfTheirOwn() {
+        db.execute(LOG);
+        db.execute("INSERT INTO log VALUES (1, TIMESTAMP '2026-01-01 10:00:00', 'ERROR', 'w', 'app', 'boom'),"
+                + " (2, NULL, NULL, 'w', 'app', '    at app.Main.run(Main.java:12)'),"
+                + " (3, TIMESTAMP '2026-01-01 11:30:00', 'INFO', 'w', 'app', 'ok')");
+        GuardedResult hours = guard.run(find("log", "Rows each hour"));
+        assertEquals("10:00 and 11:00, no hour for the stack trace's line", 2, hours.getRowCount());
+        GuardedResult levels = guard.run(find("log", "Lines per level"));
+        assertEquals(2, levels.getRowCount());
+        assertTrue(levels.getRows().stream().noneMatch(r -> r[0] == null));
+        assertTrue("line counts rows: no range of it", catalog.examples("log").stream()
+                .noneMatch(e -> e.title().equals("The range of line")));
+    }
+
+    @Test
+    public void tablesThatEachNumberTheirLinesJoinOnWhatTheyShareNotOnTheLineNumber() {
+        db.execute("CREATE TABLE orders (line BIGINT, order_id BIGINT, customer_id BIGINT, amount DOUBLE)");
+        db.execute("CREATE TABLE customers (line BIGINT, customer_id BIGINT, name VARCHAR)");
+        db.execute("CREATE TABLE prices (line BIGINT, sku VARCHAR, price DOUBLE)");
+        List<String> sql = sql("orders");
+        assertTrue(sql.toString(), sql.contains("SELECT * FROM orders JOIN customers USING (customer_id) LIMIT 10"));
+        assertTrue("only line in common: no join", sql.stream().noneMatch(s -> s.contains("USING (line)")
+                || s.contains("JOIN prices")));
     }
 }

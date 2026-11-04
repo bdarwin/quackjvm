@@ -31,7 +31,11 @@ public interface FileTableAccess {
     /** The files DuckDB must be let use for the cache to be attached. */
     List<String> attachedFiles(FileTable table);
 
+    /** All its columns: the parser's, then those the application computes. */
     List<ColumnDef> columns(FileTable table);
+
+    /** Changes when its columns change - a computed one added - for the session to plan again. */
+    int columnChanges(FileTable table);
 
     boolean isLazy(FileTable table);
 
