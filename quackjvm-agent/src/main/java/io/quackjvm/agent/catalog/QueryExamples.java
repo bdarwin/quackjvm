@@ -106,7 +106,6 @@ public final class QueryExamples {
         private final Set<String> inFamily = new HashSet<>();
         private final List<Example> examples = new ArrayList<>();
 
-        private final ColumnInfo number;
         private final ColumnInfo measure;
         private final ColumnInfo time;
         private final ColumnInfo group;
@@ -128,7 +127,6 @@ public final class QueryExamples {
                     inFamily.add(column.name());
                 }
             }
-            this.number = first(Kind.NUMBER);
             this.measure = measure();
             ColumnInfo when = first(Kind.TIME);
             this.time = when != null ? when : first(Kind.DATE);
@@ -152,13 +150,11 @@ public final class QueryExamples {
                 add("The first rows", "SELECT * FROM " + from + " LIMIT 10");
                 add("A summary of every column: range, distinct values, nulls", "SUMMARIZE " + from);
             }
-            if (number != null) {
-                String n = SqlNames.write(number.name());
-                add("The range of " + number.name(),
-                        "SELECT min(" + n + ") AS lowest, max(" + n + ") AS highest, avg(" + n + ") AS mean FROM " + from);
-            }
             if (measure != null) {
+                // a number that counts rows (line, id...) has no range worth showing
                 String m = SqlNames.write(measure.name());
+                add("The range of " + measure.name(),
+                        "SELECT min(" + m + ") AS lowest, max(" + m + ") AS highest, avg(" + m + ") AS mean FROM " + from);
                 add("The median and percentiles of " + measure.name(), "SELECT quantile_cont(" + m + ", 0.5) AS median,"
                         + " quantile_cont(" + m + ", 0.95) AS p95, quantile_cont(" + m + ", 0.99) AS p99 FROM " + from);
                 add("The rows with the highest " + measure.name(),
@@ -177,9 +173,13 @@ public final class QueryExamples {
             }
             if (time != null) {
                 String unit = kind(time) == Kind.DATE ? "month" : "hour";
-                add("Rows each " + unit + " by " + time.name(), "SELECT date_trunc('" + unit + "', "
-                        + SqlNames.write(time.name()) + ") AS " + unit + ", count(*) AS rows FROM " + from
-                        + " GROUP BY 1 ORDER BY 1");
+                String t = SqlNames.write(time.name());
+                String mean = measure == null ? "" : ", avg(" + SqlNames.write(measure.name()) + ") AS mean_"
+                        + plain(measure.name());
+                // rows without a time would be a group of their own, first or last: they're left out
+                add("Rows each " + unit + " by " + time.name() + (measure == null ? "" : ", with the mean "
+                        + measure.name()), "SELECT date_trunc('" + unit + "', " + t + ") AS " + unit + ", count(*) AS rows"
+                        + mean + " FROM " + from + " WHERE " + t + " IS NOT NULL GROUP BY 1 ORDER BY 1");
             }
             if (searched != null) {
                 add("Rows whose " + searched.name() + " mentions a word", "SELECT * FROM " + from + " WHERE "
@@ -225,17 +225,21 @@ public final class QueryExamples {
                         "SELECT " + g + ", avg(" + all + ") FROM " + from + " GROUP BY 1 ORDER BY 1 LIMIT 20");
             }
             if (time != null && kind(time) == Kind.TIME) {
-                add("The mean of each of " + named + " each minute", "SELECT date_trunc('minute', "
-                        + SqlNames.write(time.name()) + ") AS minute, avg(" + all + ") FROM " + from
-                        + " GROUP BY 1 ORDER BY 1");
+                String t = SqlNames.write(time.name());
+                add("The mean of each of " + named + " each minute", "SELECT date_trunc('minute', " + t
+                        + ") AS minute, avg(" + all + ") FROM " + from + " WHERE " + t + " IS NOT NULL GROUP BY 1 ORDER BY 1");
             }
             String lead = group != null ? SqlNames.write(group.name()) + ", "
                     : time != null ? SqlNames.write(time.name()) + ", " : "";
             add("The total of the " + named + " in each row", "SELECT " + lead + "list_sum([*" + all + "]) AS "
                     + plain(prefix) + "_total FROM " + from + " LIMIT 10");
-            add("The highest value in any of the " + named, "SELECT max(greatest(*" + all + ")) AS highest FROM " + from);
+            add("The rows with the highest value in any of the " + named, "SELECT " + lead + "greatest(*" + all
+                    + ") AS highest FROM " + from + " ORDER BY highest DESC NULLS LAST LIMIT 10");
             if (sameType(members)) {
-                add("The " + named + " as rows: one per row and column", unpivot(all));
+                // turned into rows and summed up per column: which of them run highest
+                add("Each of the " + named + ": its mean and highest, highest mean first", "SELECT series, avg(value)"
+                        + " AS mean, max(value) AS highest FROM (UNPIVOT (SELECT " + all + " FROM " + from
+                        + ") ON COLUMNS(*) INTO NAME series VALUE value) GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 20");
             }
         }
 
@@ -396,8 +400,9 @@ public final class QueryExamples {
             String lv = SqlNames.write(level.name());
             String msg = SqlNames.write(message.name());
             String error = ERROR.replace("level", lv);
-            writer.add("Lines per level", "SELECT " + lv + ", count(*) AS lines FROM " + from
-                    + " GROUP BY 1 ORDER BY 2 DESC");
+            // lines with no level (a stack trace's) aren't a level of their own
+            writer.add("Lines per level", "SELECT " + lv + ", count(*) AS lines FROM " + from + " WHERE " + lv
+                    + " IS NOT NULL GROUP BY 1 ORDER BY 2 DESC");
             if (time != null && kind(time) == Kind.TIME) {
                 writer.add("Errors per minute", "SELECT date_trunc('minute', " + SqlNames.write(time.name())
                         + ") AS minute, count(*) AS errors FROM " + from + " WHERE " + error + " GROUP BY 1 ORDER BY 1");
