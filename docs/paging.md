@@ -58,6 +58,10 @@ cores:
 | A journal's pages of one session, 33,333 of 100,000 rows | 1.68–1.79 ms | 2.26–2.41 ms |
 | The same `before()` without the bound | about 6 ms | |
 
+On a 2-core GitHub runner, `before()` gave a median of 1.74 ms and a 99th percentile of 2.09 ms.
+But while another thread appended to the same database file, a few journal pages took over 100 ms
+(median 2.6 ms), most likely waiting on those commits to disk.
+
 ## Journal
 
 ```java
