@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **A `FileTable` parser can leave rows out**: `RowParser.isRow(raw, rowNo)`, true unless
+  overridden. A CSV's header, blank lines and the lines inside a quoted value that spans lines are
+  then not stored, so `count(*)` counts the real rows. Rows kept keep their source row numbers;
+  `rowsLoaded()` still counts every source row read, so growing and resuming work as before, and
+  the new `rowsStored()` counts the rows held. `isRow` must decide from the raw row and its number
+  alone: a lazy column whose pass keeps other rows is refused with that reason.
+- **Columns the application computes**, added to an open table with lazy columns:
+  `FileTable.column(ColumnDef, RowFunction)`, where `RowFunction` works out a value from the whole
+  raw row - a total over 1,500 columns, say. Stored by the first query that reads it, with one pass
+  over the file that calls `isRow` but not `parse`, and filled by `update` from then on. Planned
+  by the table and by a `QuerySession` it is registered in. The cache file's name doesn't change.
+  Adding one of the same name again replaces it and drops its stored values; reopening the cache
+  drops them too, until the column is added again. `computedColumns()` lists them.
+
+### Changed
+- Loading threads ask the cancel signal at most every millisecond within a block, not only between
+  blocks, so a slow parser or computed column stops 3-5 ms after a cancel.
+- `QuerySession.describe` of a file table gives the rows stored, not the source rows read.
+
+### Fixed
+- A lazy column first read after the table was opened again, before any `update`, failed with
+  "Rows 0 to ... are not all there yet": the source had not looked at its file yet.
+
 ## 1.5.0 - 2026-11-04
 
 ### Added

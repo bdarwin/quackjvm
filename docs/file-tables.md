@@ -84,6 +84,75 @@ again for just those columns, in one transaction. Only then does it run the quer
   so is one that would add more than `maxNewColumnsPerQuery` columns. `whyNot` gives that reason
   without running anything.
 
+## Rows that aren't rows
+
+Some lines of a file are not rows: a CSV's header, a blank line, or a line that goes on with a
+quoted value begun on the line before. The parser leaves them out with `isRow`:
+
+```java
+RowParser parser = new RowParser() {
+    @Override
+    public boolean isRow(String raw, long rowNo) {
+        return rowNo > 0 && !raw.isBlank() && startsARecord(raw);   // the header, blank lines and value lines: no
+    }
+
+    @Override
+    public void parse(String raw, long rowNo, Object[] cells) {
+        cells[0] = rowNo + 1;                                         // the line number, to show
+        ...
+    }
+};
+```
+
+- **A row left out is not stored.** `count(*)` counts the real rows, and no query has to filter out
+  rows of nulls. `parse` is not called for it.
+- **Row numbers stay the source's.** `rowNo`, and the table's own `quackjvm_row`, are the row's
+  number in the file, gaps and all. A column filled from `rowNo` gives the line numbers to show.
+- **It still counts as read.** `rowsLoaded()` and `Updated.rows()` count every source row, so
+  growing and resuming work as before. `rowsStored()` counts the rows the table holds.
+- **Decide from `raw` and `rowNo` alone.** Never from `wanted`, and never from rows seen before:
+  each lazy column is stored by reading the file again, and every pass must leave out the same rows.
+  When a pass keeps a different number of rows than were stored, the column is not stored and the
+  query fails with that reason.
+
+Tested on a CSV with a header, blank lines and values on two lines: cached, in memory, reopened,
+grown, replaced, and in a query session; and with lazy columns added later, which line up row by
+row.
+
+## Columns the application computes
+
+A column can be worked out from the whole raw row, by the application, and added to the open table
+when it is needed. Say a person picks `cpu_*`, 1,500 of 6,000 columns, and wants their total per
+row. Storing the 1,500 columns would take about 300 times the room of storing the total.
+
+```java
+wide.column(new ColumnDef("cpu_sum", Double.class), (raw, rowNo) -> sumOfCpuCells(raw));
+wide.query("SELECT host, avg(cpu_sum) FROM t GROUP BY 1", policy, signal);   // stores cpu_sum, then runs
+wide.update();                                                               // fills cpu_sum for new rows
+```
+
+- **Only with lazy columns.** On a table without `lazyColumns(true)`, `column` throws
+  `IllegalStateException`.
+- **Stored when a query first reads it**, as a lazy column is: by reading the file once more, for
+  just that column. A pass for computed columns alone calls `isRow` but not `parse`. From then on
+  `update` fills it for new rows.
+- **Planned like the others.** `whyNot` and `query` know it, and so does a query session it is
+  registered in, even when the column is added after registering.
+- **Not part of the cache's name.** The cache file is the same with or without computed columns.
+- **Dropped on reopen.** When the cache is opened again, the stored values of computed columns are
+  dropped: the function that made them may have changed, and the table can't tell. Add the column
+  again, and the next query reading it computes it again. Until then a query naming it is refused,
+  as for any unknown column. The parser's lazy columns stay stored as before.
+- **Adding one of the same name again replaces it.** Its stored values are dropped, and the next
+  query that reads it stores it again. The new one may have another type.
+- **Its name can't be one of the parser's columns**, nor `quackjvm_row`.
+- **Called on the loading threads**, several at once, like the parser, so it must keep no state
+  between rows. A test computes on 8 threads, in blocks of 37 rows, and on 1 thread, and gets the
+  same values as plain Java. It is called only for rows the parser keeps.
+- **Cancelling.** The loading threads ask the signal at each block, and at most every millisecond
+  within one. Storing a column that takes 1 ms a row stopped 3–5 ms after its cancel, and nothing
+  was stored. This holds for a slow parser too.
+
 ## The cache folder
 
 Each source file gets one DuckDB file, named from:

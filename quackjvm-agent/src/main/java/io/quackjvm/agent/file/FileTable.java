@@ -86,6 +86,21 @@ import java.util.function.DoubleConsumer;
  * A query that cannot be planned, or would add more columns than {@link
  * Builder#maxNewColumnsPerQuery}, is refused with the reason; {@link #whyNot} says so beforehand.</p>
  *
+ * <h2>Rows that are not rows</h2>
+ *
+ * <p>A parser can leave out a source row - a header, a blank line, a line inside a quoted value -
+ * through {@link RowParser#isRow}. It is not stored, but counts as read ({@link #rowsLoaded()}), so
+ * growing and resuming are as before; {@link #rowsStored()} counts the rows held. The rows kept keep
+ * their source row numbers. Every pass over the file must leave out the same rows: a lazy column
+ * whose pass does not is refused.</p>
+ *
+ * <h2>Columns the application computes</h2>
+ *
+ * <p>{@link #column(ColumnDef, RowFunction)} adds, to an open table with lazy columns, a column the
+ * application works out from the whole raw row - a total over many cells. It is planned and stored
+ * as a lazy column is, and filled by updates from then on. It is not part of the cache's name, and
+ * its stored values are dropped when the cache is opened again, until it is added again.</p>
+ *
  * <h2>Java functions</h2>
  *
  * <p>{@link Builder#function} adds a Java function its queries can call - a label for a time in the
@@ -146,8 +161,14 @@ public final class FileTable implements AutoCloseable {
     private final QueryColumns planner;
     private final Connection plannerSource;
     private final TableFunctions functions = new TableFunctions();
+    /** Columns the application computes, added with {@link #column}: by lower-case name, in the order added. */
+    private volatile Map<String, Computed> computed = Map.of();
+    /** Counts changes to the columns, for a session to plan over the new ones. */
+    private final java.util.concurrent.atomic.AtomicInteger columnChanges = new java.util.concurrent.atomic.AtomicInteger();
     private Object identity;
     private volatile long rows;
+    /** The rows stored: {@link #rows} less those the parser left out. */
+    private volatile long kept;
     private volatile List<String> stored;
     private String fingerprint;
     private long fingerprintBytes;
@@ -192,7 +213,10 @@ public final class FileTable implements AutoCloseable {
 
     // ---------- updating ----------
 
-    /** What an update did. */
+    /**
+     * What an update did. {@code rowsAdded} and {@code rows} count the source's rows read, those the
+     * parser left out included; {@link #rowsStored()} leaves them out.
+     */
     public record Updated(long rowsAdded, boolean rebuilt, long rows) {
     }
 
@@ -345,6 +369,134 @@ public final class FileTable implements AutoCloseable {
         register(functions.add(name, returns, a, b, c, function));
     }
 
+    // ---------- columns the application computes ----------
+
+    /**
+     * Adds a column whose value the application works out from the whole raw row - the total of a
+     * row's {@code cpu_*} cells, say. Queries can read it from now on. It is stored as a lazy column
+     * is: the first time a query reads it, by reading the file again for just that column; from then
+     * on {@link #update} fills it for new rows. Rows the parser leaves out get no value: they are not
+     * stored.
+     *
+     * <p>It belongs to this session of the application, not to the cache: the cache file's name does
+     * not depend on it. Values stored for one are dropped when the cache is opened again, so a column
+     * of that name must be added again, and is computed again when a query reads it - never read
+     * from a function that may since have changed.</p>
+     *
+     * <p>Adding one of the same name again replaces it: values stored by the earlier function are
+     * dropped, and the next query reading it stores it again.</p>
+     *
+     * @param value called on the loading threads, several at once: it must keep no state between rows
+     * @throws IllegalStateException    if the table does not have {@link Builder#lazyColumns lazy
+     *                                  columns}, or is closed
+     * @throws IllegalArgumentException if the name is one of the parser's columns, or {@code quackjvm_row}
+     */
+    public void column(ColumnDef column, RowFunction value) {
+        java.util.Objects.requireNonNull(column, "column");
+        java.util.Objects.requireNonNull(value, "value");
+        checkOpen();
+        if (!lazy) {
+            throw new IllegalStateException("Computed columns need a table with lazyColumns(true): they are stored"
+                    + " when a query first reads them");
+        }
+        String key = column.getName().toLowerCase(Locale.ROOT);
+        if (column.getName().equalsIgnoreCase(ROW) || columns.stream().anyMatch(c -> c.getName().equalsIgnoreCase(key))) {
+            throw new IllegalArgumentException("Column " + column.getName() + " is one of the parser's columns, or "
+                    + ROW + ", which the table uses itself");
+        }
+        writer.lock();
+        try {
+            awaitHome();
+            Computed before = computed.get(key);
+            if (before != null) {
+                dropStored(before.column().getName());
+            }
+            Map<String, Computed> was = computed;
+            Map<String, Computed> next = new java.util.LinkedHashMap<>(was);
+            next.remove(key);
+            next.put(key, new Computed(column, value));
+            // Known to the table before the planner, so a query planned with it finds it.
+            computed = java.util.Collections.unmodifiableMap(next);
+            try {
+                replan(before == null ? null : before.column(), column);
+            }
+            catch (RuntimeException e) {
+                computed = was;
+                throw e;
+            }
+            columnChanges.incrementAndGet();
+        }
+        finally {
+            writer.unlock();
+        }
+    }
+
+    /** The columns added with {@link #column}, in the order added. */
+    public List<ColumnDef> computedColumns() {
+        return computed.values().stream().map(Computed::column).toList();
+    }
+
+    private record Computed(ColumnDef column, RowFunction function) {
+    }
+
+    /** Drops a computed column's stored values, if it has any: it is stored again when a query reads it. */
+    private void dropStored(String column) {
+        String have = stored.stream().filter(s -> s.equalsIgnoreCase(column)).findFirst().orElse(null);
+        if (have == null) {
+            return;
+        }
+        List<String> after = new ArrayList<>(stored);
+        after.remove(have);
+        quack().inTransaction(tx -> {
+            Connection connection = tx.connection();
+            Sql.execute(connection, "DROP VIEW IF EXISTS " + view());
+            Sql.execute(connection, "ALTER TABLE " + data() + " DROP COLUMN " + Sql.quote(have));
+            makeView(connection, after);
+            recordStored(connection, after);
+        });
+        stored = List.copyOf(after);
+    }
+
+    /** The empty table lazy columns are planned over, with a computed column added or replaced. */
+    private void replan(ColumnDef before, ColumnDef now) {
+        try {
+            if (before != null) {
+                Sql.execute(plannerSource, "ALTER TABLE " + Sql.quote(name) + " DROP COLUMN " + Sql.quote(before.getName()));
+            }
+            Sql.execute(plannerSource, "ALTER TABLE " + Sql.quote(name) + " ADD COLUMN " + now.toDdl());
+        }
+        catch (RuntimeException e) {
+            if (before != null) {
+                try {
+                    Sql.execute(plannerSource, "ALTER TABLE " + Sql.quote(name) + " ADD COLUMN IF NOT EXISTS "
+                            + before.toDdl());
+                }
+                catch (RuntimeException again) {
+                    e.addSuppressed(again);
+                }
+            }
+            throw new IllegalArgumentException("Cannot add column " + now.getName() + " to " + name + ": " + e.getMessage(), e);
+        }
+        planner.refresh();
+    }
+
+    /** All the columns queries can read: the parser's, then the computed ones. */
+    List<ColumnDef> allColumns() {
+        Map<String, Computed> now = computed;
+        if (now.isEmpty()) {
+            return columns;
+        }
+        List<ColumnDef> all = new ArrayList<>(columns);
+        for (Computed c : now.values()) {
+            all.add(c.column());
+        }
+        return all;
+    }
+
+    int columnChanges() {
+        return columnChanges.get();
+    }
+
     /** On the table's database, and on the empty one lazy columns are planned over. */
     private void register(TableFunctions.Registrar registrar) {
         try (Connection connection = quack().connection()) {
@@ -380,12 +532,24 @@ public final class FileTable implements AutoCloseable {
 
     // ---------- what is there ----------
 
-    /** How many rows are stored. */
+    /**
+     * How many of the source's rows have been read in: the next {@link #update} goes on from there.
+     * Rows the parser left out ({@link RowParser#isRow}) are counted; {@link #rowsStored()} leaves
+     * them out.
+     */
     public long rowsLoaded() {
         return rows;
     }
 
-    /** The columns stored: all of them, or with lazy columns those queries have asked for. */
+    /** How many rows the table holds: {@link #rowsLoaded()} less the rows the parser left out. */
+    public long rowsStored() {
+        return kept;
+    }
+
+    /**
+     * The columns stored: all of them, or with lazy columns those queries have asked for - computed
+     * ones ({@link #column}) included.
+     */
     public List<String> storedColumns() {
         return stored;
     }
@@ -444,7 +608,7 @@ public final class FileTable implements AutoCloseable {
     @Override
     public String toString() {
         return "FileTable[" + file.getFileName() + " as " + name + ", " + rows + " rows"
-                + (lazy ? ", " + stored.size() + " of " + columns.size() + " columns" : "")
+                + (lazy ? ", " + stored.size() + " of " + allColumns().size() + " columns" : "")
                 + (cacheFile == null ? ", in memory" : "") + "]";
     }
 
@@ -698,7 +862,12 @@ public final class FileTable implements AutoCloseable {
 
         @Override
         public List<ColumnDef> columns(FileTable table) {
-            return table.columns();
+            return table.allColumns();
+        }
+
+        @Override
+        public int columnChanges(FileTable table) {
+            return table.columnChanges();
         }
 
         @Override
@@ -824,6 +993,8 @@ public final class FileTable implements AutoCloseable {
         catch (SQLException e) {
             throw new IllegalStateException("Failed to read the cache", e);
         }
+        dropForgotten();
+        kept = Sql.queryLong(quack().sharedConnection(), "SELECT count(*) FROM " + data(), List.of());
         Sql.execute(quack().sharedConnection(), "ATTACH IF NOT EXISTS ':memory:' AS " + stage());
         makeView(quack().sharedConnection(), stored);
         try {
@@ -847,6 +1018,33 @@ public final class FileTable implements AutoCloseable {
         used();
     }
 
+    /**
+     * Drops the stored computed columns not added in this session: values from a function that may
+     * have changed since. A column added again is stored again when a query reads it.
+     */
+    private void dropForgotten() {
+        List<String> after = new ArrayList<>();
+        for (String column : stored) {
+            if (findColumn(column) != null) {
+                after.add(column);
+            }
+        }
+        if (after.size() == stored.size()) {
+            return;
+        }
+        List<String> forgotten = new ArrayList<>(stored);
+        forgotten.removeAll(after);
+        quack().inTransaction(tx -> {
+            Connection connection = tx.connection();
+            Sql.execute(connection, "DROP VIEW IF EXISTS " + view());
+            for (String column : forgotten) {
+                Sql.execute(connection, "ALTER TABLE " + data() + " DROP COLUMN IF EXISTS " + Sql.quote(column));
+            }
+            recordStored(connection, after);
+        });
+        stored = List.copyOf(after);
+    }
+
     private void makeView(Connection connection, List<String> columnsStored) {
         StringBuilder view = new StringBuilder("CREATE OR REPLACE VIEW ").append(view()).append(" AS SELECT ");
         if (columnsStored.isEmpty()) {
@@ -866,7 +1064,7 @@ public final class FileTable implements AutoCloseable {
     /** Stores rows {@code first .. first + count - 1}, of the columns stored, in one transaction. */
     private void appendBatch(long first, int count, CancelSignal signal) {
         List<String> wanted = stored;
-        stage(first, count, wanted, signal);
+        long staged = stage(first, count, wanted, signal);
         String list = columnList(wanted);
         long end = first + count;
         String[] print = fingerprintAfter();
@@ -891,6 +1089,7 @@ public final class FileTable implements AutoCloseable {
             dropStage();
         }
         rows = end;
+        kept += staged;
         fingerprint = print[0];
         fingerprintBytes = Long.parseLong(print[1]);
     }
@@ -902,6 +1101,7 @@ public final class FileTable implements AutoCloseable {
             Sql.execute(tx.connection(), "UPDATE " + meta() + " SET rows = 0, fingerprint = NULL, fingerprint_bytes = 0");
         });
         rows = 0;
+        kept = 0;
         fingerprint = null;
         fingerprintBytes = 0;
     }
@@ -913,6 +1113,13 @@ public final class FileTable implements AutoCloseable {
         after.addAll(adding);
         long count = rows;
         if (count > 0) {
+            // A source opened since the rows were stored - after a restart - may not have looked
+            // at its file yet: a LineSource finds its lines when asked how many there are.
+            long there = source.rowCount();
+            if (there < count) {
+                throw new IllegalStateException("Cannot store " + adding + " for " + file + ": it has " + there
+                        + " rows now, fewer than the " + count + " stored. It was replaced: update the table first.");
+            }
             long batch = (long) threads * BLOCKS_PER_THREAD * blockSize;
             Sql.execute(quack().sharedConnection(), "CREATE OR REPLACE TABLE " + stage() + ".main.adding AS SELECT "
                     + ROW + " FROM " + data() + " LIMIT 0");
@@ -926,6 +1133,17 @@ public final class FileTable implements AutoCloseable {
                     Sql.execute(quack().sharedConnection(), "INSERT INTO " + stage() + ".main.adding SELECT * FROM ("
                             + stageUnion() + ")");
                     dropStage();
+                }
+                // The rows the parser left out the first time are left out again; a parser deciding
+                // otherwise would leave rows without the new values, so it is refused.
+                long have = Sql.queryLong(quack().sharedConnection(), "SELECT count(*) FROM " + data(), List.of());
+                long got = Sql.queryLong(quack().sharedConnection(), "SELECT count(*) FROM " + stage() + ".main.adding",
+                        List.of());
+                if (have != got) {
+                    throw new IllegalStateException("Cannot store " + adding + " for " + file + ": of its first " + count
+                            + " rows, the parser kept " + got + " this time and " + have + " when they were stored. Its"
+                            + " isRow must decide from the raw row and its number alone; if the file changed, update"
+                            + " the table first.");
                 }
                 StringBuilder select = new StringBuilder("SELECT d.*");
                 for (String column : adding) {
@@ -976,13 +1194,25 @@ public final class FileTable implements AutoCloseable {
      * chunk at a time - measured at 1.2 s for 3 million rows of 8 columns on 8 threads, where an
      * appender took 8.6 s.
      */
-    private void stage(long first, int count, List<String> wanted, CancelSignal signal) {
+    private long stage(long first, int count, List<String> wanted, CancelSignal signal) {
         int[] places = new int[wanted.size()];
+        RowFunction[] computing = new RowFunction[wanted.size()];
         BitSet wantedBits = new BitSet(columns.size());
+        Map<String, Computed> computedNow = computed;
         for (int i = 0; i < places.length; i++) {
-            places[i] = columns.indexOf(column(wanted.get(i)));
-            wantedBits.set(places[i]);
+            Computed c = computedNow.get(wanted.get(i).toLowerCase(Locale.ROOT));
+            if (c != null) {
+                places[i] = -1;
+                computing[i] = c.function();
+            }
+            else {
+                places[i] = columns.indexOf(column(wanted.get(i)));
+                wantedBits.set(places[i]);
+            }
         }
+        // A pass storing computed columns alone needs nothing of the parser but isRow.
+        boolean parse = !wantedBits.isEmpty() || java.util.Arrays.stream(computing).allMatch(java.util.Objects::isNull);
+        AtomicLong staged = new AtomicLong();
         ColumnarLayout<Object[]> layout = layout(wanted);
         int blocks = (count + blockSize - 1) / blockSize;
         int used = Math.min(threads, Math.max(1, blocks));
@@ -997,7 +1227,8 @@ public final class FileTable implements AutoCloseable {
                 int me = t;
                 parts.add(pool.submit(() -> {
                     DuckDBConnection loader = loaders.get(me);
-                    Iterable<Object[]> rowsOfMine = () -> new Blocks(first, count, me, used, places, wantedBits, signal);
+                    Iterable<Object[]> rowsOfMine = () -> new Blocks(first, count, me, used, places, computing, wantedBits,
+                            parse, wanted, staged, signal);
                     LiveTable table = LiveTables.register(loader, "stage_view_" + me, () -> rowsOfMine, layout);
                     try {
                         Sql.execute(loader, "CREATE OR REPLACE TABLE " + stage() + ".main.stage_" + me
@@ -1034,6 +1265,7 @@ public final class FileTable implements AutoCloseable {
             dropStage();
             throw new QueryCancelled(null);
         }
+        return staged.get();
     }
 
     private int stagedThreads;
@@ -1058,49 +1290,98 @@ public final class FileTable implements AutoCloseable {
         }
     }
 
-    /** One loading thread's rows: its blocks, read and parsed a block at a time as DuckDB asks. */
+    /**
+     * One loading thread's rows: its blocks, read and parsed a block at a time as DuckDB asks. Rows
+     * the parser leaves out are passed over. The signal is asked at each block, and at most every
+     * millisecond within one, so a slow parser or computed column stops soon after a cancel.
+     */
     private final class Blocks implements Iterator<Object[]> {
+        private static final long POLL_NANOS = 1_000_000;
         private final long first;
         private final int count;
         private final int step;
         private final int[] places;
+        private final RowFunction[] computing;
         private final BitSet wanted;
+        private final boolean parse;
+        private final List<String> names;
+        private final AtomicLong staged;
         private final CancelSignal signal;
         private int block;
         private String[] raw = new String[0];
         private int inBlock;
         private int index;
         private long blockFirst;
+        private boolean ready;
+        private boolean stopped;
+        private long polled = System.nanoTime();
+        /** Rows kept since last added to {@code staged}: added a block at a time, not a row. */
+        private long mine;
 
-        Blocks(long first, int count, int me, int step, int[] places, BitSet wanted, CancelSignal signal) {
+        Blocks(long first, int count, int me, int step, int[] places, RowFunction[] computing, BitSet wanted,
+               boolean parse, List<String> names, AtomicLong staged, CancelSignal signal) {
             this.first = first;
             this.count = count;
             this.step = step;
             this.places = places;
+            this.computing = computing;
             this.wanted = wanted;
+            this.parse = parse;
+            this.names = names;
+            this.staged = staged;
             this.signal = signal;
             this.block = me - step;
         }
 
         @Override
         public boolean hasNext() {
-            if (index < inBlock) {
+            if (ready) {
                 return true;
             }
-            block += step;
-            long start = (long) block * blockSize;
-            if (start >= count || (signal != null && signal.poll())) {
-                return false;
+            while (!stopped) {
+                while (index < inBlock) {
+                    if (signal != null) {
+                        long now = System.nanoTime();
+                        if (now - polled >= POLL_NANOS) {
+                            polled = now;
+                            if (signal.poll()) {
+                                stop();
+                                return false;
+                            }
+                        }
+                    }
+                    long rowNo = blockFirst + index;
+                    boolean isRow;
+                    try {
+                        isRow = parser.isRow(raw[index], rowNo);
+                    }
+                    catch (RuntimeException e) {
+                        throw new IllegalStateException("Failed to tell whether row " + rowNo + " of " + file
+                                + " is a row: " + e.getMessage(), e);
+                    }
+                    if (isRow) {
+                        ready = true;
+                        return true;
+                    }
+                    index++;
+                }
+                block += step;
+                long start = (long) block * blockSize;
+                if (start >= count || (signal != null && signal.poll())) {
+                    stop();
+                    return false;
+                }
+                polled = System.nanoTime();
+                inBlock = (int) Math.min(blockSize, count - start);
+                blockFirst = first + start;
+                if (raw.length < inBlock) {
+                    raw = new String[inBlock];
+                }
+                source.read(blockFirst, inBlock, raw);
+                rowsRead.addAndGet(inBlock);
+                index = 0;
             }
-            inBlock = (int) Math.min(blockSize, count - start);
-            blockFirst = first + start;
-            if (raw.length < inBlock) {
-                raw = new String[inBlock];
-            }
-            source.read(blockFirst, inBlock, raw);
-            rowsRead.addAndGet(inBlock);
-            index = 0;
-            return true;
+            return false;
         }
 
         @Override
@@ -1108,21 +1389,44 @@ public final class FileTable implements AutoCloseable {
             if (!hasNext()) {
                 throw new NoSuchElementException();
             }
+            ready = false;
             long rowNo = blockFirst + index;
-            Object[] cells = new Object[columns.size()];
-            try {
-                parser.parse(raw[index], rowNo, cells, wanted);
-            }
-            catch (RuntimeException e) {
-                throw new IllegalStateException("Failed to parse row " + rowNo + " of " + file + ": " + e.getMessage(), e);
-            }
+            String line = raw[index];
             index++;
+            Object[] cells = null;
+            if (parse) {
+                cells = new Object[columns.size()];
+                try {
+                    parser.parse(line, rowNo, cells, wanted);
+                }
+                catch (RuntimeException e) {
+                    throw new IllegalStateException("Failed to parse row " + rowNo + " of " + file + ": " + e.getMessage(), e);
+                }
+            }
             Object[] row = new Object[places.length + 1];
             row[0] = rowNo;
             for (int i = 0; i < places.length; i++) {
-                row[i + 1] = cells[places[i]];
+                if (places[i] >= 0) {
+                    row[i + 1] = cells[places[i]];
+                }
+                else {
+                    try {
+                        row[i + 1] = computing[i].apply(line, rowNo);
+                    }
+                    catch (RuntimeException e) {
+                        throw new IllegalStateException("Failed to compute " + names.get(i) + " for row " + rowNo + " of "
+                                + file + ": " + e.getMessage(), e);
+                    }
+                }
             }
+            mine++;
             return row;
+        }
+
+        private void stop() {
+            stopped = true;
+            staged.addAndGet(mine);
+            mine = 0;
         }
     }
 
@@ -1148,12 +1452,22 @@ public final class FileTable implements AutoCloseable {
     }
 
     private ColumnDef column(String name) {
+        ColumnDef column = findColumn(name);
+        if (column == null) {
+            throw new IllegalArgumentException("No column " + name + " in " + file);
+        }
+        return column;
+    }
+
+    /** One of the parser's columns or a computed one; null if there is none of that name. */
+    private ColumnDef findColumn(String name) {
         for (ColumnDef column : columns) {
             if (column.getName().equalsIgnoreCase(name)) {
                 return column;
             }
         }
-        throw new IllegalArgumentException("No column " + name + " in " + file);
+        Computed c = computed.get(name.toLowerCase(Locale.ROOT));
+        return c == null ? null : c.column();
     }
 
     // ---------- underneath: lazy columns ----------

@@ -810,7 +810,7 @@ public final class QuerySession implements AutoCloseable {
                     columns.add(new ColumnInfo(column.getName(), column.getSqlType(), column.getJavaType(), true,
                             column.getDescription(), column.getUnit(), null));
                 }
-                return new TableInfo(name, null, hosted.table.rowsLoaded(), columns);
+                return new TableInfo(name, null, hosted.table.rowsStored(), columns);
             }
         }
         return catalog.describe(name);
@@ -971,17 +971,24 @@ public final class QuerySession implements AutoCloseable {
         return false;
     }
 
-    /** The planner of lazy columns, made again when the tables, the aliases or the functions changed. */
+    /**
+     * The planner of lazy columns, made again when the tables, the aliases, the functions or a file
+     * table's columns - a computed one added - changed.
+     */
     private synchronized QueryColumns planner() {
         int functions = 0;
+        List<Integer> columnChanges = new ArrayList<>();
         for (Hosted h : openHosted()) {
             functions += ACCESS().functions(h.table).size();
+            columnChanges.add(ACCESS().columnChanges(h.table));
         }
-        if (planner == null || planner.version != schemaVersion || planner.functions != functions) {
+        if (planner == null || planner.version != schemaVersion || planner.functions != functions
+                || !planner.columnChanges.equals(columnChanges)) {
             if (planner != null) {
                 planner.close();
             }
             planner = Planner.of(this, schemaVersion, functions);
+            planner.columnChanges = columnChanges;
         }
         return planner.columns;
     }
@@ -992,6 +999,8 @@ public final class QuerySession implements AutoCloseable {
         final int functions;
         final Connection source;
         final QueryColumns columns;
+        /** Each open file table's {@code columnChanges}, when this was made. */
+        List<Integer> columnChanges = List.of();
 
         private Planner(int version, int functions, Connection source, QueryColumns columns) {
             this.version = version;
