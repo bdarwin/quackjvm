@@ -1,4 +1,4 @@
-# Prompt: adopt quackjvm 1.4.0 in an existing codebase
+# Prompt: adopt quackjvm 1.5.0 in an existing codebase
 
 Paste everything below the line into a new session opened in the codebase that is adopting
 quackjvm. Run **Phase 1** with a strong model (Opus 5.5 or Fable 5.1); it ends by writing a plan
@@ -6,14 +6,14 @@ file and stops. Run **Phase 2** with Sonnet 5.5, in a fresh session, pointing it
 
 ---
 
-You are refactoring this codebase to use **quackjvm 1.4.0**, a Java 17 library for DuckDB, in place
+You are refactoring this codebase to use **quackjvm 1.5.0**, a Java 17 library for DuckDB, in place
 of hand-written DuckDB/JDBC code. The code here was written by hand and differently from quackjvm,
 so this is a refactor, not a version bump: every change must **preserve behaviour**. When quackjvm
 does not fit a piece of code, leave that code alone - it is a valid outcome.
 
 ## What quackjvm is (verified against 1.1.0)
 
-Maven Central, group `io.github.bdarwin`, version `1.4.0`:
+Maven Central, group `io.github.bdarwin`, version `1.5.0`:
 
 | artifact | use it for |
 |---|---|

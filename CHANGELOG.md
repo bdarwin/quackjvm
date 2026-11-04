@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5.0 - 2026-11-04
 
 ### Added
 - **More query examples** (#19). `QueryExamples` adds:
