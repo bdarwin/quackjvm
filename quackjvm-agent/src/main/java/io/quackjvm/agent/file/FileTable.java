@@ -332,6 +332,40 @@ public final class FileTable implements AutoCloseable {
         return added;
     }
 
+    /**
+     * Lets go of these lazy columns' stored values: they are stored again when a query reads them,
+     * or {@link #store} asks. For an application undoing a request that was stopped - columns added
+     * to an empty table, say, then the first {@link #update} stopped - or freeing room.
+     *
+     * @return how many were stored and are let go
+     * @throws IllegalStateException for a table without lazy columns: it keeps every column
+     */
+    public int unstore(Collection<String> columnNames) {
+        checkOpen();
+        if (!lazy) {
+            throw new IllegalStateException("Only a table with lazy columns lets go of columns: " + file
+                    + " keeps every column");
+        }
+        int dropped = 0;
+        writer.lock();
+        try {
+            awaitHome();
+            for (String name : columnNames) {
+                if (stored.stream().anyMatch(s -> s.equalsIgnoreCase(name))) {
+                    dropStored(name);
+                    dropped++;
+                }
+            }
+        }
+        finally {
+            writer.unlock();
+        }
+        if (dropped > 0) {
+            columnChanges.incrementAndGet();
+        }
+        return dropped;
+    }
+
     /** As {@link #update(CancelSignal, DoubleConsumer)}, unstoppable and silent. */
     public Updated update() {
         return update(null, null);

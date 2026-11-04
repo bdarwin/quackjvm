@@ -563,4 +563,30 @@ public class FileTableComputedTest {
         checkSums(run(again, "SELECT line, cpu_sum FROM t ORDER BY line").getRows());
         assertTrue("no version: worked out again", again.rowsRead() > read);
     }
+
+    @Test
+    public void unstoreLetsColumnsGoUntilTheyAreReadAgain() throws Exception {
+        FileTable table = open();
+        table.update();
+        assertEquals(2, table.store(List.of("cpu_001", "mem_001"), null, null));
+        assertEquals(1, table.unstore(List.of("cpu_001", "cpu_002")));   // cpu_002 was never stored
+        assertFalse(table.storedColumns().contains("cpu_001"));
+        assertTrue(table.storedColumns().contains("mem_001"));
+        long read = table.rowsRead();
+        assertEquals(ROWS, ((Number) run(table, "SELECT count(cpu_001) + count(*) - count(cpu_001) FROM t").getRows()
+                .get(0)[0]).longValue());
+        assertTrue("stored again when read", table.rowsRead() > read);
+        // added to an empty table, then the first update stopped: let go, nothing left behind
+        FileTable fresh = open(2, 200, folder.newFolder("other").toPath());
+        fresh.store(List.of("host"), null, null);
+        try {
+            fresh.update(CancelSignal.from(() -> true), null);
+            fail("stopped");
+        }
+        catch (QueryCancelled expected) {
+            // nothing stored
+        }
+        assertEquals(1, fresh.unstore(List.of("host")));
+        assertTrue(fresh.storedColumns().isEmpty());
+    }
 }

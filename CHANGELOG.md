@@ -20,6 +20,7 @@
   function, version)`. Added again with the same version and type, the values stored before are used
   as they are; another version, rows stored first, or a replaced file drops them. Without a version
   they're dropped at reopening, as before.
+- `FileTable.unstore(columns)` lets stored lazy columns go; they're stored again when read.
 - **Lazy columns stored ahead, with progress:** `FileTable.store(columns, signal, progress)` stores
   the ones not stored yet in one pass, before a query reads them, telling the share read and stopping
   on the signal (then none is stored). For an application that shows a bar while a big file is read.

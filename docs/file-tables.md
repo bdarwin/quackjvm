@@ -91,6 +91,9 @@ again for just those columns, in one transaction. Only then does it run the quer
 ```java
 int added = wide.store(List.of("host", "cpu_0001"), signal, share -> bar.setValue((int) (share * 100)));
 ```
+- **Let go:** `unstore(columns)` drops stored lazy columns; a query reading one, or `store`, stores it
+  again. For undoing a request that was stopped (columns added to an empty table, then the first
+  `update` stopped), or freeing room.
 
 ## Rows that aren't rows
 
