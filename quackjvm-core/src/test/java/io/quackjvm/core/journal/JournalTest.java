@@ -122,7 +122,8 @@ public class JournalTest {
     @Test
     public void aMessageThatGrowsAsItStreamsInIsSeenWholeByReaders() throws Exception {
         Journal<Message> journal = messages();
-        journal.append(message(7, "s1", ""));
+        // No parts yet: the updates below count them from 1.
+        journal.append(new Message(7L, "s1", 1, "assistant", "model-a", "", null, 10, 0, START));
         AtomicBoolean writing = new AtomicBoolean(true);
         AtomicReference<String> problem = new AtomicReference<>();
         Thread reader = new Thread(() -> {
