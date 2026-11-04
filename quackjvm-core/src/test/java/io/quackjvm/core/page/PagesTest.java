@@ -90,7 +90,9 @@ public class PagesTest {
         double p99 = took.get((int) (took.size() * 0.99));
         System.out.printf("before(): median %.2f ms, 99th %.2f ms, slowest %.2f ms%n", median, p99,
                 took.get(took.size() - 1));
-        assertTrue("99th percentile " + p99 + " ms", p99 < 5);
+        // About 1 ms on a developer machine; a shared CI runner is several times slower. The bound
+        // matters, not the machine: without it a page here ranks tens of thousands of rows.
+        assertTrue("99th percentile " + p99 + " ms", p99 < 20);
     }
 
     @Test

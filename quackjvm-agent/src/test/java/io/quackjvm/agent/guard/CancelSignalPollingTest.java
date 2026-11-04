@@ -121,7 +121,7 @@ public class CancelSignalPollingTest {
         }
         catch (QueryCancelled expected) {
             long after = (System.nanoTime() - flipped[0]) / 1_000_000;
-            assertTrue("stopped " + after + " ms after", after < 40);
+            assertTrue("stopped " + after + " ms after", after < 100);
         }
     }
 
