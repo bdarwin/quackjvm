@@ -253,7 +253,8 @@ of the single-query speed. Leave it alone if you run large analytical queries fr
 ### A large result read prepared: add an `ORDER BY`
 
 DuckDB runs some queries far slower as prepared statements, when the result is large and has no
-`ORDER BY`. `db.query(...)` always prepares: preparing is how it checks that SQL only reads. Measured
+`ORDER BY`. Up to 1.5.0, `db.query(...)` always prepared: preparing is how it checks that SQL only
+reads. Measured
 on DuckDB 2.0.0, an ASOF join of 1M probes against 10M readings from 1,000 devices, reading the 1M
 values it returns:
 
@@ -270,10 +271,13 @@ devices, prepared against not: a filter returning 1M rows 1,114 ms against 977 m
 over 1M rows 1,094 against 983, a `GROUP BY` returning 1,000 rows 186 against 149; scans, hash joins
 and sorts the same either way.
 
-So for a large result of an ASOF join, add an `ORDER BY`: the rows then come back in a known order,
-and fast. `preserve_insertion_order = false` also works, but it applies to every query on the
-database. `GuardedQuery` checks SQL with DuckDB's parser rather than by preparing it, so it runs
-queries unprepared and is not affected.
+Since the release after 1.5.0, `db.query(...)` runs a `SELECT` (or `FROM ...`) with no parameters
+unprepared: it returns rows whatever it says, so there is nothing to check by preparing it. Only a
+query with `?` parameters is still prepared, and for a large result of an ASOF join with parameters,
+add an `ORDER BY`: the rows then come back in a known order, and fast.
+`preserve_insertion_order = false` also works, but it applies to every query on the database.
+`GuardedQuery` checks SQL with DuckDB's parser rather than by preparing it, so it runs queries
+unprepared and is not affected.
 
 ## Storage management
 

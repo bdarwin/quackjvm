@@ -208,6 +208,88 @@ public class RowsTest {
         }
     }
 
+    /** A connection that counts what is prepared on it and what runs as a plain statement. */
+    private static java.sql.Connection counting(java.sql.Connection target, java.util.List<String> prepared,
+                                                java.util.List<String> plain) {
+        return (java.sql.Connection) java.lang.reflect.Proxy.newProxyInstance(
+                RowsTest.class.getClassLoader(), new Class<?>[] {java.sql.Connection.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("prepareStatement")) {
+                        prepared.add((String) args[0]);
+                    }
+                    if (method.getName().equals("createStatement")) {
+                        plain.add("statement");
+                    }
+                    try {
+                        return method.invoke(target, args);
+                    }
+                    catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+    }
+
+    /**
+     * A SELECT with no parameters runs on a plain statement, not a prepared one: DuckDB runs some
+     * queries far slower prepared (an ASOF join returning many rows with no ORDER BY), and a SELECT
+     * needs no preparing to know it returns rows. One with parameters, and anything else, is
+     * prepared - and checked - as before.
+     */
+    @Test
+    public void aSelectWithNoParametersIsNotPrepared() throws Exception {
+        try (DuckDBConnection connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:")) {
+            connection.createStatement().execute("CREATE TABLE car AS SELECT range AS id, 'make' || range AS name FROM range(10)");
+            // count() wraps the query in a count of its own, and is left as it was.
+            List<Consumer<Rows>> reads = READS.stream()
+                    .filter(read -> read != READS.get(5)).toList();
+            for (String sql : List.of("SELECT id, name FROM car ORDER BY id", "FROM car SELECT id, name ORDER BY id",
+                    "  -- leading comment\n select id, name from car order by id")) {
+                for (int i = 0; i < reads.size(); i++) {
+                    List<String> prepared = new java.util.ArrayList<>();
+                    List<String> plain = new java.util.ArrayList<>();
+                    reads.get(i).accept(Rows.of(counting(connection.duplicate(), prepared, plain), sql));
+                    assertEquals("read " + i + " of " + sql + " prepared " + prepared, 0, prepared.size());
+                    assertEquals("read " + i + " of " + sql, 1, plain.size());
+                }
+            }
+            List<String> prepared = new java.util.ArrayList<>();
+            List<String> plain = new java.util.ArrayList<>();
+            assertEquals(List.of("make3"), Rows.of(counting(connection.duplicate(), prepared, plain),
+                    "SELECT name FROM car WHERE id = ?", 3).list(String.class));
+            assertEquals(List.of("make2", "make3"), Rows.of(counting(connection.duplicate(), prepared, plain),
+                    "SELECT name FROM car WHERE id BETWEEN 2 AND 3 ORDER BY id").list(String.class));
+            assertEquals(List.of(new Item(4L, "make4")), Rows.of(counting(connection.duplicate(), prepared, plain),
+                    "SELECT id, name FROM car WHERE id = 4").records(Item.class));
+            assertEquals(Long.valueOf(45), Rows.of(counting(connection.duplicate(), prepared, plain),
+                    "SELECT sum(id) FROM car").scalar(Long.class));
+            assertEquals(2, Rows.of(counting(connection.duplicate(), prepared, plain), "DESCRIBE car").list(String.class).size());
+            assertEquals(List.of("SELECT name FROM car WHERE id = ?", "DESCRIBE car"), prepared);
+            assertEquals(3, plain.size());
+        }
+    }
+
+    /** Through the pool and a transaction alike, and with a timeout. */
+    @Test
+    public void anUnpreparedSelectReadsAsBefore() {
+        assertEquals(List.of(0L, 1L, 2L), db.query("SELECT id FROM car WHERE id < 3 ORDER BY id").list(Long.class));
+        assertEquals(List.of(new Item(1L, "make1")), db.query("SELECT id, name FROM car WHERE id = 1").records(Item.class));
+        List<Object> seen = new java.util.ArrayList<>();
+        db.query("SELECT name, id FROM car WHERE id = 7").timeout(Duration.ofSeconds(30)).forEachRow(row -> {
+            seen.add(row.getString("name"));
+            seen.add(row.getLong(2));
+        });
+        assertEquals(List.of("make7", 7L), seen);
+        db.inTransaction(tx -> {
+            tx.execute("INSERT INTO car VALUES (10, 'make10')");
+            // The plain statement runs on the transaction's own connection, so it sees the insert.
+            assertEquals(Long.valueOf(11), tx.query("SELECT count(*) FROM car").scalar(Long.class));
+        });
+        assertEquals(Long.valueOf(11), db.query("SELECT count(*) FROM car").scalar(Long.class));
+        try (Stream<SqlRow> rows = db.query("SELECT id FROM car ORDER BY id DESC").stream()) {
+            assertEquals(10L, rows.findFirst().orElseThrow().getLong(1));
+        }
+        assertEquals(0.0, inUse(), 0.0);
+    }
+
     @Test
     public void aCallersOwnExceptionComesOutAsItWasThrown() {
         IllegalArgumentException mine = new IllegalArgumentException("mine");

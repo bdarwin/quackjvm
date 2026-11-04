@@ -14,6 +14,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -107,9 +108,9 @@ public final class Rows {
         // A one-row result is not worth an Arrow export: setting up a columnar batch costs more
         // than reading one value.
         Deadline deadline = null;
-        try (PreparedStatement statement = prepare()) {
+        try (Statement statement = open()) {
             deadline = Deadline.start(statement, timeout);
-            try (Deadline running = deadline; ResultSet resultSet = statement.executeQuery()) {
+            try (Deadline running = deadline; ResultSet resultSet = run(statement)) {
                 if (!resultSet.next()) {
                     return Optional.empty();
                 }
@@ -263,10 +264,12 @@ public final class Rows {
     private void readThroughArrow(BatchConsumer consumer) {
         Deadline deadline = null;
         try {
-            PreparedStatement statement = prepare();
+            Statement statement = open();
             deadline = Deadline.start(statement, timeout);
             try (Deadline running = deadline;
-                 ArrowResult result = ArrowResult.of(statement, ArrowResult.DEFAULT_BATCH_SIZE)) {
+                 ArrowResult result = unprepared()
+                         ? ArrowResult.of(statement, sql, ArrowResult.DEFAULT_BATCH_SIZE)
+                         : ArrowResult.of((PreparedStatement) statement, ArrowResult.DEFAULT_BATCH_SIZE)) {
                 for (ArrowBatch batch : result) {
                     consumer.accept(batch);
                 }
@@ -282,9 +285,9 @@ public final class Rows {
 
     private void readThroughJdbc(RowConsumer consumer) {
         Deadline deadline = null;
-        try (PreparedStatement statement = prepare()) {
+        try (Statement statement = open()) {
             deadline = Deadline.start(statement, timeout);
-            try (Deadline running = deadline; ResultSet resultSet = statement.executeQuery()) {
+            try (Deadline running = deadline; ResultSet resultSet = run(statement)) {
                 while (resultSet.next()) {
                     consumer.accept(resultSet);
                 }
@@ -296,6 +299,30 @@ public final class Rows {
         finally {
             Sql.closeQuietly(connection);
         }
+    }
+
+    /**
+     * Whether this runs on a plain statement rather than a prepared one: a {@code SELECT} with no
+     * parameters, which needs no preparing to know it reads. DuckDB runs some queries far slower
+     * prepared - an ASOF join returning many rows with no {@code ORDER BY} - and none measured faster.
+     */
+    private boolean unprepared() {
+        return ReadCheck.runsUnprepared(sql, parameters);
+    }
+
+    /** The statement to run, not yet run - and refused if running it would not just read. */
+    private Statement open() throws SQLException {
+        if (unprepared()) {
+            // One statement, which starts with SELECT: it returns rows, so there is nothing to refuse.
+            ReadCheck.beforePreparing(sql);
+            return connection.createStatement();
+        }
+        return prepare();
+    }
+
+    /** Runs a statement from {@link #open()}. */
+    private ResultSet run(Statement statement) throws SQLException {
+        return unprepared() ? statement.executeQuery(sql) : ((PreparedStatement) statement).executeQuery();
     }
 
     /** The statement, prepared and bound but not run - and refused if running it would not just read. */

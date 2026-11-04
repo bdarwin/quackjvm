@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
@@ -69,12 +70,12 @@ public final class ArrowResult implements Closeable, Iterable<ArrowBatch> {
     }
 
     private final BufferAllocator allocator;
-    private final PreparedStatement statement;
+    private final Statement statement;
     private final DuckDBResultSet resultSet;
     private final ArrowReader reader;
     private boolean closed;
 
-    private ArrowResult(BufferAllocator allocator, PreparedStatement statement,
+    private ArrowResult(BufferAllocator allocator, Statement statement,
                         DuckDBResultSet resultSet, ArrowReader reader) {
         this.allocator = allocator;
         this.statement = statement;
@@ -88,6 +89,19 @@ public final class ArrowResult implements Closeable, Iterable<ArrowBatch> {
      * @param statement an executed-on-demand statement which this result takes ownership of
      */
     public static ArrowResult of(PreparedStatement statement, long batchSize) {
+        return export(statement, null, batchSize);
+    }
+
+    /**
+     * Runs the SQL on a plain statement - not prepared - and exports its result as Arrow.
+     *
+     * @param statement a statement which this result takes ownership of
+     */
+    public static ArrowResult of(Statement statement, String sql, long batchSize) {
+        return export(statement, sql, batchSize);
+    }
+
+    private static ArrowResult export(Statement statement, String sql, long batchSize) {
         if (!ArrowSupport.isAvailable()) {
             throw new IllegalStateException(ArrowSupport.getUnavailableReason());
         }
@@ -95,12 +109,19 @@ public final class ArrowResult implements Closeable, Iterable<ArrowBatch> {
         DuckDBResultSet resultSet = null;
         try {
             allocator = newChildAllocator();
-            resultSet = (DuckDBResultSet) statement.executeQuery();
+            resultSet = (DuckDBResultSet) (sql == null
+                    ? ((PreparedStatement) statement).executeQuery()
+                    : statement.executeQuery(sql));
             ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(allocator, batchSize);
             return new ArrowResult(allocator, statement, resultSet, reader);
         }
         catch (SQLException e) {
             closeQuietly(resultSet, statement, allocator);
+            if (sql != null && resultSet == null) {
+                // Not prepared, so this is where DuckDB first sees the SQL: a wrong column name
+                // fails here, and is reported as a query that failed, naming it.
+                throw new IllegalStateException("Failed to run: " + sql, e);
+            }
             throw new IllegalStateException("Failed to export a DuckDB result as Arrow", e);
         }
         catch (RuntimeException e) {

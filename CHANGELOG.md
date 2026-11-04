@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **`db.query` runs a `SELECT` with no parameters unprepared, and a large ASOF result reads 2x
+  faster without an `ORDER BY`.** DuckDB runs some queries far slower prepared; a `SELECT` (or
+  `FROM ...`) needs no preparing to know it returns rows, so `Rows` and `SqlQuery` now run it on a
+  plain statement. An ASOF join of 100,000 probes against 1M readings, every row read: 119 ms
+  through `forEachRow` against 261 ms in 1.5.0, and 41 ms through `forEachRecord` (Arrow) against
+  187 ms. A query with parameters, and anything that does not start with `SELECT` or `FROM`, is
+  prepared and checked as before. Nothing is planned twice, so a Java function of constants is
+  still called once.
+
 ## 1.5.0 - 2026-11-04
 
 ### Added
