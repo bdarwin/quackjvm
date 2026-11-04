@@ -471,4 +471,15 @@ public class QueryExamplesTest {
         assertTrue("line counts rows: no range of it", catalog.examples("log").stream()
                 .noneMatch(e -> e.title().equals("The range of line")));
     }
+
+    @Test
+    public void tablesThatEachNumberTheirLinesJoinOnWhatTheyShareNotOnTheLineNumber() {
+        db.execute("CREATE TABLE orders (line BIGINT, order_id BIGINT, customer_id BIGINT, amount DOUBLE)");
+        db.execute("CREATE TABLE customers (line BIGINT, customer_id BIGINT, name VARCHAR)");
+        db.execute("CREATE TABLE prices (line BIGINT, sku VARCHAR, price DOUBLE)");
+        List<String> sql = sql("orders");
+        assertTrue(sql.toString(), sql.contains("SELECT * FROM orders JOIN customers USING (customer_id) LIMIT 10"));
+        assertTrue("only line in common: no join", sql.stream().noneMatch(s -> s.contains("USING (line)")
+                || s.contains("JOIN prices")));
+    }
 }

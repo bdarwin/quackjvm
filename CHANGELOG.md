@@ -35,6 +35,9 @@
   - A family of numbered columns gets the rows with its highest value, rather than only the value,
     and each column's mean and highest, highest mean first, rather than the raw `UNPIVOT` rows.
     Text families keep the raw rows.
+  - Two tables that each number their rows (`line`, `row`, `index`...) aren't offered a join on that
+    number: a row's place in its own table says nothing about another's. They still join on what
+    they share, an id say.
 - Loading threads ask the cancel signal at most every millisecond within a block, not only between
   blocks, so a slow parser or computed column stops 3-5 ms after a cancel.
 - `QuerySession.describe` of a file table gives the rows stored, not the source rows read.

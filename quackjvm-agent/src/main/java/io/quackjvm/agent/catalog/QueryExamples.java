@@ -65,6 +65,10 @@ public final class QueryExamples {
             "kind", "type", "category", "service", "source", "region", "zone", "logger", "component", "thread",
             "method", "mode", "unit", "group");
 
+    /** Names of a row's place in its own table: two tables that both have one don't join on it. */
+    private static final Set<String> POSITIONAL = Set.of("line", "lineno", "line_number", "row", "rowid", "row_number",
+            "index", "idx", "offset", "position");
+
     /** Names of a number that counts rows rather than measures anything. */
     private static final Set<String> COUNTERS = Set.of("line", "lineno", "line_number", "id", "row", "rowid",
             "row_number", "seq", "sequence", "index", "idx", "n", "num", "number", "offset", "position");
@@ -321,8 +325,9 @@ public final class QueryExamples {
 
         private ColumnInfo shared(List<ColumnInfo> theirs) {
             for (ColumnInfo column : columns) {
-                if (inFamily.contains(column.name()) || kind(column) == Kind.OTHER) {
-                    continue;
+                if (inFamily.contains(column.name()) || kind(column) == Kind.OTHER
+                        || POSITIONAL.contains(column.name().toLowerCase(Locale.ROOT))) {
+                    continue; // a row's place in its own table says nothing about another's
                 }
                 for (ColumnInfo other : theirs) {
                     if (other.name().equalsIgnoreCase(column.name()) && kind(other) == kind(column)) {
