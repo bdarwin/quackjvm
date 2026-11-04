@@ -279,6 +279,23 @@ add an `ORDER BY`: the rows then come back in a known order, and fast.
 `GuardedQuery` checks SQL with DuckDB's parser rather than by preparing it, so it runs queries
 unprepared and is not affected.
 
+### A large result: read it as records
+
+`forEachRow` and `stream()` read through JDBC, and DuckDB's driver builds every `VARCHAR` value of
+a fetched chunk as a Java string in native code, read or not: about 0.86 µs a value. `records`,
+`forEachRecord` and `forEachValue` read through Arrow when it is on the classpath, and are several
+times faster on a result with text in it. Measured on DuckDB 2.0, 10 million readings:
+
+| | `forEachRow` | `forEachRecord` |
+|---|---|---|
+| an ASOF join, 1M rows of (`VARCHAR`, `TIMESTAMP`, `DOUBLE`) | 1,116 ms | 332 ms |
+| an hourly average, 2.36M rows of (`VARCHAR`, `TIMESTAMP`, `DOUBLE`) | 2,139 ms | 282 ms |
+| an average per device, 98,433 rows of (`VARCHAR`, `DOUBLE`) | 90.8 ms | 13.3 ms |
+| the latest per device, 1,000 rows | 11.2 ms | 10.5 ms |
+
+A small result gains nothing either way. See [Compared with QuestDB](questdb.md#reading-many-rows-where-the-time-goes)
+for where the rest of the time goes.
+
 ## Storage management
 
 ```java

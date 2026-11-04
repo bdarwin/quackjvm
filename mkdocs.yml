@@ -81,6 +81,7 @@ nav:
   - Reference:
       - API reference: api-overview.md
       - Troubleshooting: troubleshooting.md
+      - Compared with QuestDB: questdb.md
       - Buffered writing (proposal): proposals/write-buffer.md
       - Managed materializations: proposals/materializations.md
       - Pre-aggregation vs caching: proposals/result-cache.md
