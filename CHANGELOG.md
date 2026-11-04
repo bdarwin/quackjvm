@@ -18,6 +18,15 @@
   drops them too, until the column is added again. `computedColumns()` lists them.
 
 ### Changed
+- **Query examples, closer to what people ask** (found moving Logsift's own examples onto quackjvm):
+  - Rows per hour (and per minute for a family) leave out rows without a time, which made a group of
+    their own, and show the measure's mean beside the count.
+  - Lines per level leave out lines with no level, such as a stack trace's.
+  - The range is of a number that measures something; a column that counts rows (`line`, `id`...)
+    no longer gets one.
+  - A family of numbered columns gets the rows with its highest value, rather than only the value,
+    and each column's mean and highest, highest mean first, rather than the raw `UNPIVOT` rows.
+    Text families keep the raw rows.
 - Loading threads ask the cancel signal at most every millisecond within a block, not only between
   blocks, so a slow parser or computed column stops 3-5 ms after a cancel.
 - `QuerySession.describe` of a file table gives the rows stored, not the source rows read.
