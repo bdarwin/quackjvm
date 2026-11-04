@@ -93,6 +93,14 @@ public final class CancelSignal {
         return cancelled;
     }
 
+    /**
+     * Asks the supplier now, if there is one, and says whether the signal is cancelled - for work of
+     * one's own that checks between steps, such as loading a file a block at a time.
+     */
+    public boolean poll() {
+        return cancelledNow();
+    }
+
     /** Asks the supplier now, if there is one; true if the signal is, or has just become, cancelled. */
     boolean cancelledNow() {
         if (stop != null && !isCancelled() && asks()) {
@@ -114,7 +122,7 @@ public final class CancelSignal {
             }
             running = statement;
             if (stop != null && watch == null) {
-                watch = POLLER.scheduleWithFixedDelay(this::poll, pollNanos, pollNanos, TimeUnit.NANOSECONDS);
+                watch = POLLER.scheduleWithFixedDelay(this::watch, pollNanos, pollNanos, TimeUnit.NANOSECONDS);
             }
             return true;
         }
@@ -132,7 +140,7 @@ public final class CancelSignal {
         }
     }
 
-    private void poll() {
+    private void watch() {
         if (asks()) {
             cancel();
         }

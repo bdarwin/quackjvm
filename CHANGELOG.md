@@ -13,6 +13,22 @@
   - `run` is safe from several threads, and changes wait for the queries running.
   - `QuerySession.tableName` turns `Readings 2026-Q4.tsv` into `readings_2026_q4`, and never gives out
     `t`, `log` or a name that needs quotes.
+- **`FileTable`** (#13): a big file plus the application's parser, turned into a SQL table that is
+  kept on disk and up to date as the file grows.
+  - `update` appends what was written since. It reloads the file when it was replaced, judged by
+    `identity()`, a shrunk row count, or a fingerprint of the first 64 KB.
+  - Loading runs on parallel Java table functions into staging tables. A 276 MB, 3-million-line log
+    loads in 2.9–3.1 s, and after a restart it opens and answers a query in 24–26 ms with no rows
+    read.
+  - Each batch is stored in one transaction with the row count, so queries see whole batches, and a
+    stopped update resumes from the last one stored.
+  - Lazy columns for wide files store only the columns a query reads, planned with `QueryColumns`:
+    138–148 ms for the first query over 2 of 6,000 columns, then 5 ms.
+  - Cache copies keep a second process or table from getting `DatabaseInUse`. There is a room limit
+    that never removes a cache in use, plus `FileTables.size`/`clear`/`trim`.
+  - `LineSource` reads a text file as rows.
+- **`CancelSignal.poll()`**: asks a signal's supplier now, for work of one's own that checks between
+  steps.
 - **`Pages`** (#15): reads any query a page at a time, for infinite scrolling: `first`, `last`,
   `before(key)`, `after(key)`, `around(key, n)`, `at(position)`, `count`, `position`.
   - Each page is found from the row next to it, so a deep page costs what the first does.

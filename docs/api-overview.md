@@ -311,6 +311,23 @@ QuerySession.tableName(Path.of("Readings 2026-Q4.tsv"), taken);   // "readings_2
 
 See [Query sessions](query-sessions.md).
 
+### `io.quackjvm.agent.file.FileTable` / `FileTables` / `RowSource` / `RowParser` / `LineSource`
+
+A big file and the application's parser turned into a table, kept on disk and up to date as the
+file grows.
+
+```java
+FileTable t = FileTables.builder(path, columns, LineSource.of(path), parser)
+        .cacheDir(dir).roomLimit(5L << 30).version("viewer-3").threads(8).blockSize(8192)
+        .lazyColumns(true).maxNewColumnsPerQuery(64).inMemoryBelow(100L << 20).open();
+t.update(signal, progress);          // appends what was written since; reloads a replaced file
+t.query(sql, policy, signal);        // stores the columns it reads first, when they are lazy
+t.whyNot(sql);   t.rowsLoaded();   t.storedColumns();   t.close();
+FileTables.size(dir);   FileTables.clear(dir, keep);   FileTables.trim(dir, limit);
+```
+
+See [File tables](file-tables.md).
+
 ### `io.quackjvm.agent.catalog.QueryColumns`
 
 Which columns of which tables a query reads, without running it - for filling a lazy column cache
