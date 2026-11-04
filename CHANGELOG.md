@@ -21,6 +21,15 @@
   `delete` taking a `PageKey`. **Numbers within a group**: `sequence("seq").within("chat")` fills
   1, 2, 3... under the writer's turn, and `appendAndGet` returns the record as stored.
   **`newestBy("time")`** sets the order `search` gives.
+- **Java functions in `FileTable` queries** (#18): `Builder.function(...)` and `FileTable.function(...)`
+  for one to three arguments. They are registered on the cache database, its copy or memory, and the
+  lazy-column planner; replacing one leaves a running query with the old one. A cancelled query
+  stops within a few ms even inside a slow function (2.7 s with DuckDB alone); a query stopped
+  beside it is run again.
+- `QueryColumns.register(...)` registers a function on the planning database, so queries calling it
+  can be planned.
+- The UDF and file-table docs show that DuckDB 2.0 asks a filter in `SELECT DISTINCT ...` once per
+  row unless the subquery has `OFFSET 0`.
 - The paging docs say how deleted rows' space is reused, and how to shrink a file by copying the
   database into a new one.
 

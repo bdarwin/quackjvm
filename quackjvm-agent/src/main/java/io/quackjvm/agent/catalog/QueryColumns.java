@@ -108,6 +108,7 @@ public final class QueryColumns implements AutoCloseable {
     private final Connection source;
     private Connection planner;
     private Map<String, List<String>> tableColumns = new LinkedHashMap<>();
+    private final List<java.util.function.Consumer<Connection>> functions = new ArrayList<>();
 
     private QueryColumns(Connection source) {
         this.source = source;
@@ -137,11 +138,25 @@ public final class QueryColumns implements AutoCloseable {
             try (Statement statement = planner.createStatement()) {
                 statement.execute("SET disabled_optimizers = '" + OPTIMIZERS_THAT_HIDE_COLUMNS + "'");
             }
+            for (java.util.function.Consumer<Connection> function : functions) {
+                function.accept(planner);
+            }
         }
         catch (SQLException e) {
             closePlanner();
             throw new IllegalStateException("Failed to make a database to plan queries in", e);
         }
+    }
+
+    /**
+     * Registers a Java function on the database queries are planned in, so that a query calling it
+     * can be planned - {@code planner.register(c -> Udfs.register(c, "label", String.class, Long.class,
+     * fn))}. Kept across {@link #refresh()}. Planning reads no rows, so the function is not called
+     * for any.
+     */
+    public synchronized void register(java.util.function.Consumer<Connection> function) {
+        functions.add(function);
+        function.accept(planner);
     }
 
     /**

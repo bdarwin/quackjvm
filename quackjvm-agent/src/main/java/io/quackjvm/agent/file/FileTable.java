@@ -5,10 +5,12 @@ import io.quackjvm.agent.guard.CancelSignal;
 import io.quackjvm.agent.guard.GuardedQuery;
 import io.quackjvm.agent.guard.GuardedResult;
 import io.quackjvm.agent.guard.QueryCancelled;
+import io.quackjvm.agent.guard.QueryFailed;
 import io.quackjvm.agent.guard.QueryPolicy;
 import io.quackjvm.agent.guard.QueryRejected;
 import io.quackjvm.agent.live.LiveTable;
 import io.quackjvm.agent.live.LiveTables;
+import io.quackjvm.agent.udf.Udfs;
 import io.quackjvm.core.DatabaseInUse;
 import io.quackjvm.core.Quack;
 import io.quackjvm.core.duckdb.ColumnDef;
@@ -84,6 +86,15 @@ import java.util.function.DoubleConsumer;
  * A query that cannot be planned, or would add more columns than {@link
  * Builder#maxNewColumnsPerQuery}, is refused with the reason; {@link #whyNot} says so beforehand.</p>
  *
+ * <h2>Java functions</h2>
+ *
+ * <p>{@link Builder#function} adds a Java function its queries can call - a label for a time in the
+ * application's own time zone, say, or a test made from what the person typed - and {@link #function}
+ * adds or replaces one on an open table. Only the application adds them; SQL cannot. A query running
+ * when one is replaced keeps the one it began with. A cancelled query stops within a millisecond or
+ * so even inside a slow function: DuckDB alone would let the function finish the chunk of 2,048 rows
+ * it was given.</p>
+ *
  * <h2>Hardening</h2>
  *
  * <p>The cache database is opened with no file, network or extension access and its settings
@@ -119,6 +130,7 @@ public final class FileTable implements AutoCloseable {
     private final AtomicLong rowsRead = new AtomicLong();
     private final QueryColumns planner;
     private final Connection plannerSource;
+    private final TableFunctions functions = new TableFunctions();
     private Object identity;
     private volatile long rows;
     private volatile List<String> stored;
@@ -158,6 +170,9 @@ public final class FileTable implements AutoCloseable {
         }
         this.plannerSource = planningSource;
         this.planner = planning;
+        for (java.util.function.Function<TableFunctions, TableFunctions.Registrar> added : b.functions) {
+            register(added.apply(functions));
+        }
     }
 
     // ---------- updating ----------
@@ -244,7 +259,68 @@ public final class FileTable implements AutoCloseable {
             }
         }
         used();
-        return GuardedQuery.on(quack, policy).run(sql, signal);
+        GuardedQuery guard = GuardedQuery.on(quack, policy);
+        if (functions.isEmpty()) {
+            return guard.run(sql, signal);
+        }
+        for (int attempt = 0; ; attempt++) {
+            functions.enter(signal);
+            try {
+                return guard.run(sql, signal);
+            }
+            catch (QueryFailed failed) {
+                // A function stopped for another query's cancel: run again once that one has gone.
+                if (!TableFunctions.stoppedHere(failed) || attempt >= RERUNS) {
+                    throw failed;
+                }
+            }
+            finally {
+                functions.leave(signal);
+            }
+            functions.awaitClear(signal);
+        }
+    }
+
+    /** How many times a query stopped for another query's cancel is run again. */
+    static final int RERUNS = 10;
+
+    // ---------- Java functions ----------
+
+    /**
+     * Adds a Java function the table's queries can call, or replaces the one of that name - as
+     * {@link Udfs#register} does on a database. A query already running keeps the one it started
+     * with; the next ones get this. A row with a null argument is null, without calling it.
+     */
+    public <A, R> void function(String name, Class<R> returns, Class<A> a, java.util.function.Function<A, R> function) {
+        checkOpen();
+        register(functions.add(name, returns, a, function));
+    }
+
+    /** As {@link #function(String, Class, Class, java.util.function.Function)}, of two arguments. */
+    public <A, B, R> void function(String name, Class<R> returns, Class<A> a, Class<B> b,
+                                   java.util.function.BiFunction<A, B, R> function) {
+        checkOpen();
+        register(functions.add(name, returns, a, b, function));
+    }
+
+    /** As {@link #function(String, Class, Class, java.util.function.Function)}, of three arguments. */
+    public <A, B, C, R> void function(String name, Class<R> returns, Class<A> a, Class<B> b, Class<C> c,
+                                      Udfs.Fn3<A, B, C, R> function) {
+        checkOpen();
+        register(functions.add(name, returns, a, b, c, function));
+    }
+
+    /** On the table's database, and on the empty one lazy columns are planned over. */
+    private void register(TableFunctions.Registrar registrar) {
+        try (Connection connection = quack.connection()) {
+            registrar.register(connection);
+        }
+        catch (SQLException e) {
+            throw new IllegalStateException("Failed to register a function on " + name + ": " + e.getMessage(), e);
+        }
+        if (planner != null) {
+            planner.register(registrar::register);
+        }
     }
 
     /**
@@ -803,6 +879,7 @@ public final class FileTable implements AutoCloseable {
         private int maxNewColumns = 64;
         private long inMemoryBelow;
         private String name = "t";
+        private final List<java.util.function.Function<TableFunctions, TableFunctions.Registrar>> functions = new ArrayList<>();
 
         Builder(Path file, List<ColumnDef> columns, RowSource source, RowParser parser) {
             if (columns.isEmpty()) {
@@ -889,6 +966,32 @@ public final class FileTable implements AutoCloseable {
         /** A file smaller than this is kept in memory, with no cache file. */
         public Builder inMemoryBelow(long bytes) {
             this.inMemoryBelow = bytes;
+            return this;
+        }
+
+        /**
+         * A Java function the table's queries can call - {@code SELECT label(time, 3), count(*) FROM t
+         * GROUP BY 1}. It is registered on the cache database, or the copy or memory the table ends up
+         * in, and on the one lazy columns are planned over; SQL cannot add one. A row with a null
+         * argument is null, without calling it. See {@link FileTable#function} to replace one later.
+         */
+        public <A, R> Builder function(String name, Class<R> returns, Class<A> a,
+                                       java.util.function.Function<A, R> function) {
+            functions.add(f -> f.add(name, returns, a, function));
+            return this;
+        }
+
+        /** As {@link #function(String, Class, Class, java.util.function.Function)}, of two arguments. */
+        public <A, B, R> Builder function(String name, Class<R> returns, Class<A> a, Class<B> b,
+                                          java.util.function.BiFunction<A, B, R> function) {
+            functions.add(f -> f.add(name, returns, a, b, function));
+            return this;
+        }
+
+        /** As {@link #function(String, Class, Class, java.util.function.Function)}, of three arguments. */
+        public <A, B, C, R> Builder function(String name, Class<R> returns, Class<A> a, Class<B> b, Class<C> c,
+                                             Udfs.Fn3<A, B, C, R> function) {
+            functions.add(f -> f.add(name, returns, a, b, c, function));
             return this;
         }
 

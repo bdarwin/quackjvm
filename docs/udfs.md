@@ -68,6 +68,14 @@ Udfs.registerInt(connection, "twice", value -> value * 2);
 Udfs.registerLong(connection, "half", value -> value / 2);
 ```
 
+## Asking once per distinct value
+
+A filter like `WHERE host IN (SELECT v FROM (SELECT DISTINCT host AS v FROM t) WHERE my_test(v))`
+looks as if it asks `my_test` once per distinct host. On DuckDB 2.0 it doesn't: the optimizer moves
+the test below the `DISTINCT`, so it is asked once per row. Over a million rows with seven hosts
+that was 1,000,000 calls and 96 ms. Adding `OFFSET 0` to the inner query keeps the test where it is
+written: 7 calls and 7.5 ms. Marking the function volatile doesn't help.
+
 ## Taking one away
 
 There is nothing to close: DuckDB (1.5.5 and 2.0) has no way to unregister a function. Registering the same name

@@ -110,6 +110,62 @@ tests for this include one that holds a cache open in a second JVM.
 On macOS and Linux, DuckDB reads a backslash in a database's path as a separator, so a cache
 folder whose path contains one is refused with that reason. The source file itself may be anywhere.
 
+## Java functions
+
+The application can give a file table's queries Java functions of its own: a time put in a group
+and labelled in the person's time zone, say, or a filter made from what they typed.
+
+```java
+FileTable table = FileTables.builder(csv, columns, LineSource.of(csv).skip(1), parser)
+        .cacheDir(cache).lazyColumns(true)
+        .function("label_time", String.class, Long.class, Integer.class, (ms, group) -> labels.of(ms, group, zone))
+        .function("keep_value", Boolean.class, Long.class, String.class, (id, v) -> tests.get(id).test(v))
+        .open();
+
+table.query("SELECT label_time(time, 1) AS hour, count(*) FROM t GROUP BY 1", policy, signal);
+table.function("label_time", String.class, Long.class, Integer.class, newFunction);   // the zone changed
+```
+
+They take one, two or three arguments, as [`Udfs.register`](udfs.md) does, and a row with a null
+argument is null without calling them.
+
+- **Only the application adds them.** SQL can't: `CREATE MACRO` and `CREATE FUNCTION` are refused,
+  and a query calling one still reads no file, URL or other cache. A test checks this before and
+  after the file is rotated and the table rebuilt.
+- **Lazy columns plan with them.** The functions are registered on the empty database lazy columns
+  are planned in, too (`QueryColumns.register`). So over a 6,000-column table,
+  `SELECT label_time(time, 1), count(*) FROM t GROUP BY 1` stores only `time`, and a later query
+  that also reads `v_0042` stores that one more. The test checks the labels against Java's, over a
+  change to summer time.
+- **Copies and memory.** They are registered on whichever database the table opens, so a copy
+  (`.2`...), a table in memory, and a cache opened again all have them.
+- **Replacing one** while a query runs: that query keeps the one it started with, and the next
+  queries get the new one. Measured with a query mid-way through 5,000 rows.
+- **Speed:** registering took a median of 0.10 ms on a 6,000-column table (0.4 ms the slowest of
+  50). The first registration in a JVM took about 32 ms, loading classes. A call costs what a
+  [`Udfs.register`](udfs.md#what-it-costs) function costs: the check the wrapper adds (below)
+  measured 17.5–17.6 ns a row against 17.5–19.0 without it, over 2 million rows on one thread.
+- **Cancelling.** DuckDB checks for a cancel between the chunks of 2,048 rows it hands a function.
+  So a query in a function taking 1 ms a row went on for 2.7 s after its cancel. Each function is
+  therefore wrapped: before each call it reads a flag that a watcher sets within a millisecond of a
+  running query's signal being cancelled. The same query stopped 1–3 ms after its cancel, and with
+  a signal polled every 20 ms, 10–19 ms after the flag was set.
+  - DuckDB can't say which query a call belongs to, so another query running the functions at that
+    moment stops too. `query` runs it again once the cancelled one has gone. A test runs one beside
+    a cancelled one and gets its full answer.
+
+**Calling a test once per distinct value.** To filter on a Java test that is expensive, ask it once
+per distinct value, and write `OFFSET 0`:
+
+```sql
+SELECT * FROM t WHERE host IN (SELECT v FROM (SELECT DISTINCT host AS v FROM t OFFSET 0) WHERE keep_value(7, v))
+```
+
+Without `OFFSET 0`, DuckDB 2.0 moves the test below the `DISTINCT` and asks it once per row. Over a
+million rows with seven distinct values, that was 1,000,000 calls and 96 ms, against 7 calls and
+7.5 ms. Marking the function volatile doesn't stop it. A `SEMI JOIN` over a `GROUP BY` subquery, or
+`list_filter` over `list(DISTINCT host)`, also gave 7 calls.
+
 ## Hardening
 
 The cache database is opened with no file, network or extension access, and its settings are

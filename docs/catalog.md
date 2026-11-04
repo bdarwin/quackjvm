@@ -160,6 +160,10 @@ try (QueryColumns planner = QueryColumns.of(quack)) {
 }
 ```
 
+A query that calls a Java function can be planned once the function is registered on the planner's
+database too: `planner.register(c -> Udfs.register(c, "label_time", String.class, Long.class, fn))`.
+It is kept across `refresh()`, and is not called, since planning reads no rows.
+
 The plan's table scans say what they read. Planning happens in a database of its own - in memory,
 with no file access, holding empty copies of the source's tables and views - so the data is never
 touched and the query never runs. Three of DuckDB's optimizers are off there, because each hides a

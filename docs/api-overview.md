@@ -324,10 +324,12 @@ file grows.
 ```java
 FileTable t = FileTables.builder(path, columns, LineSource.of(path), parser)
         .cacheDir(dir).roomLimit(5L << 30).version("viewer-3").threads(8).blockSize(8192)
-        .lazyColumns(true).maxNewColumnsPerQuery(64).inMemoryBelow(100L << 20).open();
+        .lazyColumns(true).maxNewColumnsPerQuery(64).inMemoryBelow(100L << 20)
+        .function("label_time", String.class, Long.class, Integer.class, (ms, g) -> label(ms, g)).open();
 t.update(signal, progress);          // appends what was written since; reloads a replaced file
 t.query(sql, policy, signal);        // stores the columns it reads first, when they are lazy
 t.whyNot(sql);   t.rowsLoaded();   t.storedColumns();   t.close();
+t.function("label_time", String.class, Long.class, Integer.class, fn);   // adds or replaces one
 FileTables.size(dir);   FileTables.clear(dir, keep);   FileTables.trim(dir, limit);
 ```
 
