@@ -68,6 +68,7 @@ nav:
   - CQEngine plugin:
       - Querying: querying.md
       - Guarding queries: guarding-queries.md
+      - Query sessions: query-sessions.md
       - Catalog: catalog.md
       - Live tables: live-tables.md
       - Java functions in SQL: udfs.md

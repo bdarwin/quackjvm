@@ -102,6 +102,9 @@ public final class GuardedQuery {
      * @throws QueryCancelled if the signal was cancelled before or while it ran
      */
     public GuardedResult run(String sql, CancelSignal signal) {
+        if (signal != null && signal.cancelledNow()) {
+            throw new QueryCancelled(null);
+        }
         String statement = check(sql);
         return execute(statement, isExplain(statement), signal);
     }

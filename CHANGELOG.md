@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added
+- **`QuerySession`** (#14): one hardened, in-memory database where an application registers
+  tables under names and drops them at runtime. A table can be a file (with the reader chosen by
+  extension), any SQL, or live Java objects.
+  - `alias("t", name)` gives the table on screen a fixed name.
+  - A file from a folder SQL can't read yet reopens the session with that folder allowed, keeping
+    every table and alias (32–37 ms with 50 files). If a table can't be remade, the session stays as
+    it was.
+  - `run` is safe from several threads, and changes wait for the queries running.
+  - `QuerySession.tableName` turns `Readings 2026-Q4.tsv` into `readings_2026_q4`, and never gives out
+    `t`, `log` or a name that needs quotes.
+- **`CancelSignal.from(BooleanSupplier)`** and `CancelSignal.polling(stop, interval)` (#14): stop a
+  guarded query from a flag the application already has.
+  - A flag that is already set stops the run before anything is parsed.
+  - While the query runs, a daemon thread polls the flag every 50 ms. Measured: the query stopped
+    0–59 ms after the flag turned.
+- **`Catalog.examples(table)`** and `QuerySession.examples(name)` (#14): ready-made queries written
+  from a table's columns. Families of numbered columns are queried with `COLUMNS('^cpu_[0-9]+$')`,
+  and there are joins to tables that share a column. Every example runs as written.
+
 ### Fixed
 - **`Hardening.Options.properties()` lets in folders whose path holds a backslash** (#12). DuckDB
   turns the `allowed_directories` property into a list with its string cast, which reads a backslash

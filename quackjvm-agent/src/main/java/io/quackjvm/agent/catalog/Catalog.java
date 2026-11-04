@@ -102,6 +102,14 @@ public final class Catalog {
         return new TableInfo(table, description, rowsOf(rows.get(0)[2]), columnsOf(table, layout));
     }
 
+    /**
+     * Ready-made queries for a table, from its columns - and joins to the other tables that share a
+     * column with it. See {@link QueryExamples}.
+     */
+    public List<QueryExamples.Example> examples(String table) {
+        return QueryExamples.of(describe(table), tables());
+    }
+
     /** The names of the tables and views, for an error message or a prompt. */
     public List<String> tableNames() {
         List<String> names = new ArrayList<>();

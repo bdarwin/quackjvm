@@ -218,6 +218,7 @@ GuardedQuery guard = GuardedQuery.on(quack, QueryPolicy.readOnly()      // or on
 GuardedResult result = guard.run(sql);   // QueryRejected (QueryFailed if DuckDB could not run it) / QueryTimedOut / ResultTruncated
 String why = guard.whyRejected(sql);     // null when it would be allowed
 guard.run(sql, cancelSignal);            // QueryCancelled once cancelSignal.cancel() is called
+guard.run(sql, CancelSignal.from(stop::get));   // or once a flag you have turns true, polled every 50 ms
 ```
 
 - `QueryPolicy.readOnly()` - five seconds, ten thousand rows, eight megabytes, EXPLAIN allowed;
@@ -258,7 +259,29 @@ catalog.apply("car", layout);                      // writes everything the layo
 - `describe` reads metadata only: 2 ms whatever the table holds. `profile` is a full scan: 279 ms at
   ten million rows.
 
+`catalog.examples(table)` writes ready-made queries from a table's columns. Each `QueryExamples.Example`
+has a title and SQL, covering a count, a range, counts by a text column, rows over time, a search,
+families of numbered columns with `COLUMNS('^cpu_[0-9]+$')`, and joins to tables that share a column.
+
 See [Catalog](catalog.md).
+
+### `io.quackjvm.agent.session.QuerySession`
+
+Named tables in one hardened, in-memory database, added and dropped at runtime.
+
+```java
+QuerySession session = QuerySession.open(Hardening.options().tempFolder(temp), QueryPolicy.readOnly());
+String name = session.register(Path.of("/data/readings-2026.csv"));   // "readings_2026"; lets its folder in
+session.register("recent", "SELECT * FROM readings_2026 WHERE id > 100");
+session.register("note", () -> notes, ColumnarLayout.ofRecord(Note.class));   // live objects
+session.alias("t", name);
+session.run(sql, CancelSignal.from(stop::get));      // or run(sql), or run(sql, signal, policy)
+session.allowFolders(List.of(folder));               // reopens if needed, keeping every table
+session.names(); session.aliases(); session.examples("t"); session.unregister("recent");
+QuerySession.tableName(Path.of("Readings 2026-Q4.tsv"), taken);   // "readings_2026_q4"
+```
+
+See [Query sessions](query-sessions.md).
 
 ### `io.quackjvm.agent.catalog.QueryColumns`
 

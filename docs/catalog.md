@@ -85,6 +85,36 @@ Profile profile = catalog.profile("car", 5);   // 5 example rows
 `SUMMARIZE` does the work - min, max, approximate distinct count, mean, standard deviation, null
 percentage per column - plus an exact row count and a few rows to look at.
 
+## Example queries
+
+```java
+for (QueryExamples.Example example : catalog.examples("log")) {
+    System.out.println("-- " + example.title() + "\n" + example.sql());
+}
+```
+
+These are written from the columns alone, so nothing is read from the table. For a log with
+columns `line`, `time`, `level`, `thread` and `message`, the examples are:
+
+```sql
+SELECT count(*) AS rows FROM log
+SELECT * FROM log LIMIT 10
+SELECT min(line) AS lowest, max(line) AS highest, avg(line) AS mean FROM log
+SELECT level, count(*) AS rows, avg(line) AS mean_line FROM log GROUP BY 1 ORDER BY 2 DESC LIMIT 20
+SELECT date_trunc('hour', time) AS hour, count(*) AS rows FROM log GROUP BY 1 ORDER BY 1
+SELECT * FROM log WHERE message ILIKE '%error%' LIMIT 50
+```
+
+- **Families of numbered columns.** Three or more numbered columns of the same name and kind, like
+  `cpu_0001` to `cpu_1500`, are queried all at once with
+  `SELECT avg(COLUMNS('^cpu_[0-9]+$')) FROM wide`. They are left out of the other examples. A
+  table wider than 20 columns shows only its first 10 in "the first rows".
+- **Joins.** When another table has a column with the same name and kind, there is a join over it,
+  up to three of them.
+- **Quoting.** Names that need quotes get them, and every example runs as written. The tests run
+  each one, on a log, a 1,504-column table, quoted and reserved names, and a dotted family name
+  (escaped in the pattern, so it doesn't catch a similar column).
+
 ## Which columns a query reads
 
 A column cache filled on demand - one table per column of a file too wide to load whole - has to know
