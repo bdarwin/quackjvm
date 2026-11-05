@@ -5,7 +5,7 @@ folder has its own `pom.xml` and a script that runs it.
 
 ## `questdb/`: the time-series comparison
 
-The harness behind [docs/questdb.md](../docs/questdb.md). It puts quackjvm (DuckDB) next to
+The harness behind [docs/questdb.md](../docs/questdb.md). It puts quackjvm next to
 QuestDB, CQEngine on the heap and hand-written Java arrays, on the same seeded data: 10 million
 readings, 1 million probes, at 10, 1,000 and 100,000 devices. The questions are the as-of join
 (totals, and every row back to Java), the hourly average, the latest reading per device and the

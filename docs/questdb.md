@@ -3,25 +3,25 @@
 Time-series work comes down to a few questions: what was each device's last value at a given
 moment, what did it average per hour, what is its latest value, what happened in the last hour.
 The first of those is the **as-of join**, and it is the one most engines find hard. This page puts
-quackjvm (DuckDB, in-process) next to QuestDB 10.1.0, a database built for time series, and next to
+quackjvm (in-process, built on DuckDB) next to QuestDB 10.1.0, a database built for time series, and next to
 the two things a Java program would otherwise use: CQEngine on the heap, and arrays written by hand.
 
 QuestDB was picked because it is a time-series database whose benchmarks may be published. kdb+'s
 licence forbids that.
 
-Measured on 2026-11-05 with quackjvm 1.5.0 from Maven Central and with the change that follows
-it (unreleased, commit `80762c1`), both on DuckDB 2.0 (`duckdb_jdbc` 2.0.0.0). The harness is in
+Measured on 2026-11-05 with quackjvm 1.5.0 and 1.6.1, both on DuckDB 2.0 (`duckdb_jdbc`
+2.0.0.0). The harness is in
 this repository and is rerun before each release; see [How to reproduce](#how-to-reproduce).
 
 ## The short answer
 
-- **On the as-of join itself, DuckDB and a hinted QuestDB are level.** 202 ms against 173 at 10
+- **On the as-of join itself, quackjvm and a hinted QuestDB are level.** 202 ms against 173 at 10
   devices, 258 against 214 at 1,000, 295 against 350 at 100,000.
-- **Returning a million rows to Java, DuckDB is now the faster of the two**, when the rows are read
+- **Returning a million rows to Java, quackjvm 1.6.1 is now the faster of the two**, when the rows are read
   as records: 281-368 ms against QuestDB's 495-823. Read value by value through `forEachRow`, it is
   1.4-2.2x slower than QuestDB; see [Reading many rows](#reading-many-rows-where-the-time-goes).
-- **Most of what looked like DuckDB being slow was the JDBC driver turning text into Java
-  strings.** At 100,000 devices the hourly average takes DuckDB 98 ms and reading its 2.36 million
+- **Most of what looked like quackjvm being slow was the JDBC driver turning text into Java
+  strings.** At 100,000 devices the hourly average takes DuckDB itself 98 ms and reading its 2.36 million
   rows through JDBC another two seconds; read as records through Arrow, the whole question takes
   282 ms against QuestDB's 1,396. "Last hour" is 13 ms against 45.
 - **"Latest per device" is QuestDB's**: 0.5 ms against 9 at 10 devices, 1.7 against 10.5 at 1,000.
@@ -30,10 +30,10 @@ this repository and is rerun before each release; see [How to reproduce](#how-to
 - **QuestDB's default as-of join falls over with many distinct keys.** 8.8 s at 1,000 devices, more
   than its 60 s query limit at 100,000. One hint fixes it, `/*+ asof_dense(p r) */` or
   `asof_linear`. You have to know to add it.
-- **DuckDB needs no tuning for this, runs inside the JVM, and keeps the data in a third to a tenth
+- **quackjvm needs no tuning for this, runs inside the JVM, and keeps the data in a third to a tenth
   of the disk.** No server to run, no hint to know.
 - **CQEngine is not built for this.** At 1,000 devices its as-of join is about 900x slower than
-  DuckDB's (extrapolated, see below), on 4 GB of heap against a 44 MB file, and it gets worse with
+  quackjvm's (extrapolated, see below), on 4 GB of heap against a 44 MB file, and it gets worse with
   more devices.
 - **Hand-written arrays are the floor**, about 2-4x faster than either database on the as-of join.
   They also have no query language, no persistence and no concurrency.
@@ -59,7 +59,7 @@ Every engine returned the same row count and the same sum for every question.
 
 The engines:
 
-- **DuckDB through quackjvm** 1.5.0: a file opened with `Quack.open`, loaded with DuckDB's
+- **quackjvm** 1.5.0 and 1.6.1: a file opened with `Quack.open`, loaded with DuckDB's
   appender, then `CHECKPOINT`. `device` is `VARCHAR`. Queried with `db.query(sql)`, rows read with
   `forEachRow`, and a second time with `forEachRecord` into a record, which quackjvm reads through
   Arrow (Arrow 18.1.0 on the classpath, `--add-opens=java.base/java.nio=ALL-UNNAMED`).
@@ -72,7 +72,7 @@ The engines:
   ordered newest first, using index ordering, taking the first.
 - **Java arrays**: a sorted array of times and values per device, and a binary search.
 
-Times are the median of warm runs, in milliseconds: 9 runs for DuckDB and the arrays, 5 for
+Times are the median of warm runs, in milliseconds: 9 runs for quackjvm and the arrays, 5 for
 QuestDB, 3 for CQEngine. Each engine ran alone, in a JVM of its own: QuestDB was started for its
 own run and stopped afterwards. Before each engine the harness waited until the 1-minute load
 average was below 5; it was 4.2-4.9. One machine: Apple M1 Max, 10 cores, 32 GB, macOS, Java 25.
@@ -83,9 +83,9 @@ average was below 5; it was 4.2-4.9. One machine: Apple M1 Max, 10 cores, 32 GB,
 |---|---|---|---|---|---|---|---|---|
 | _CQEngine on heap_ | _2,287 per 10,000 probes_ | – | – | _1,953_ | _240_ | _56.7_ | _9.2 s_ | _3,991 MB heap_ |
 | Java arrays | 61.8 | – | – | 13.1 | 0.0 | 1.0 | 0.1 s | 153 MB heap |
-| DuckDB via quackjvm 1.5.0, `forEachRow` | 258 | 2,574 | 1,154 | 60.9 | 11.5 | 2.7 | 5.5 s | 44 MB file |
-| DuckDB, next release, `forEachRow` | 254 | 1,116 | 1,128 | 53.8 | 11.2 | 2.4 | 4.4 s | 44 MB file |
-| DuckDB, next release, `forEachRecord` | | 332 | 341 | 36.0 | 10.5 | 1.7 | | |
+| quackjvm 1.5.0, `forEachRow` | 258 | 2,574 | 1,154 | 60.9 | 11.5 | 2.7 | 5.5 s | 44 MB file |
+| quackjvm 1.6.1, `forEachRow` | 254 | 1,116 | 1,128 | 53.8 | 11.2 | 2.4 | 4.4 s | 44 MB file |
+| quackjvm 1.6.1, `forEachRecord` | | 332 | 341 | 36.0 | 10.5 | 1.7 | | |
 | QuestDB, `asof_linear` hint | 214 (`asof_dense` 234) | 567 | 556 | 112 | 1.7 | 1.9 | 6.0 s | 414 MB server RSS, 319 MB disk |
 | QuestDB, no hint | 8,801 | | | | | | | |
 
@@ -100,28 +100,28 @@ The rows-back columns for QuestDB use `asof_dense`, the hint this page started w
 
 The as-of totals, 10 million readings and 1 million probes:
 
-| devices | _CQEngine on heap_ | Java arrays | DuckDB | QuestDB, best hint | QuestDB, no hint |
+| devices | _CQEngine on heap_ | Java arrays | quackjvm | QuestDB, best hint | QuestDB, no hint |
 |---|---|---|---|---|---|
 | 10 | _39.6 per 10,000 probes_ | 75.6 | 202 | 173 (`asof_linear`; `asof_dense` 191) | 275 |
 | 1,000 | _2,287 per 10,000 probes_ | 61.8 | 258 | 214 (`asof_linear`; `asof_dense` 234) | 8,801 |
 | 100,000 | _1,206 per 1,000 probes_ | 77.5 | 295 | 350 (`asof_dense`; `asof_linear` 372) | over 60 s: stopped by QuestDB's query limit |
 
-DuckDB's time stays between 202 and 295 ms whatever the number of devices. So does QuestDB's with
+quackjvm's time stays between 202 and 295 ms whatever the number of devices. So does QuestDB's with
 a hint. Without it, QuestDB goes from 275 ms to more than a minute as the devices go from 10 to
 100,000. Which hint is faster changes with the data: `asof_linear` at 10 and 1,000 devices,
 `asof_dense` at 100,000.
 
 CQEngine goes the other way. With index ordering it walks the time index back from each probe,
-passing other devices' readings, so the cost grows with the number of devices: about 20x DuckDB at
+passing other devices' readings, so the cost grows with the number of devices: about 20x quackjvm at
 10 devices, about 900x at 1,000 (both extrapolated from the probes measured). Its 100,000-device
 figure flatters it: the first 1,000 probes all fall in the first two minutes of the day, and only
 50 of them have an earlier reading, so most of the walks are short. Its "latest per device" at
 100,000 devices had not finished after ten minutes when first tried, and is not run.
 
-The other questions at the two ends. DuckDB's columns are the next release; 1.5.0 is in brackets
+The other questions at the two ends. The quackjvm columns are 1.6.1; 1.5.0 is in brackets
 where it differs by more than 10%:
 
-| | 10 devices: _CQEngine_ | 10: DuckDB, `forEachRow` | 10: DuckDB, `forEachRecord` | 10: QuestDB | 100,000 devices: _CQEngine_ | 100,000: DuckDB, `forEachRow` | 100,000: DuckDB, `forEachRecord` | 100,000: QuestDB |
+| | 10 devices: _CQEngine_ | 10: quackjvm, `forEachRow` | 10: quackjvm, `forEachRecord` | 10: QuestDB | 100,000 devices: _CQEngine_ | 100,000: quackjvm, `forEachRow` | 100,000: quackjvm, `forEachRecord` | 100,000: QuestDB |
 |---|---|---|---|---|---|---|---|---|
 | as-of rows back | – | 1,076 (1,940) | 281 (1,200) | 495 | – | 1,162 (2,538) | 368 (1,788) | 823 |
 | rows back, `ORDER BY p.ts` | – | 1,075 | 285 (326) | 495 | – | 1,169 | 383 | 798 |
@@ -135,17 +135,17 @@ At 100,000 devices the hourly average returns 2.36 million groups. The Java arra
 0.0 and 1.1 ms for the hourly average, latest and last hour at 10 devices; 39.2, 0.8 and 7.2 at
 100,000.
 
-**Disk.** DuckDB's file is 31 MB at 10 devices, 44 MB at 1,000 and 82 MB at 100,000. QuestDB's two
+**Disk.** quackjvm's file is 31 MB at 10 devices, 44 MB at 1,000 and 82 MB at 100,000. QuestDB's two
 tables took 317-334 MB just after the load, WAL included. On the first run, a few minutes after the
 load, once QuestDB had cleaned up its WAL, they took 224-257 MB. That is between a tenth and a
 third of the disk.
 
 ## Reading many rows: where the time goes
 
-Returning rows to Java is where most of DuckDB's time went, and almost none of it is DuckDB's. The
+Returning rows to Java is where most of quackjvm's time went, and almost none of it is the query. The
 as-of join returning 100,000 rows (1 million readings, 1,000 devices), with each read path:
 
-| How the rows are read | quackjvm 1.5.0 | next release |
+| How the rows are read | quackjvm 1.5.0 | quackjvm 1.6.1 |
 |---|---|---|
 | DuckDB alone: the count and sum of the result, inside DuckDB | 35 | |
 | plain JDBC `Statement`, every column read | 124 | |
@@ -166,8 +166,8 @@ Two costs, neither in quackjvm's own code:
   not. Arrow hands over the column's bytes, and the strings are made in Java: 40 ms for all three
   columns.
 - **DuckDB runs some queries far slower prepared**: an ASOF join returning many rows with no
-  `ORDER BY`. 1.5.0 prepared every query, which is how it checks that SQL only reads. The next
-  release runs a `SELECT` with no parameters unprepared: it returns rows whatever it says, so there
+  `ORDER BY`. 1.5.0 prepared every query, which is how it checks that SQL only reads. 1.6.1
+  runs a `SELECT` with no parameters unprepared: it returns rows whatever it says, so there
   is nothing to check. A query with `?` parameters is still prepared; for a large ASOF result with
   parameters, add an `ORDER BY` (see
   [Tuning](tuning.md#a-large-result-read-prepared-add-an-order-by)).
@@ -185,8 +185,8 @@ Skipping the prepare also helps small queries: `db.query("SELECT 1")` took 76 µ
 
 `LATEST ON` is QuestDB's clearest lead. QuestDB keeps each table in time order and reads it from
 the newest end; DuckDB's query aggregates over every row. Other forms of the query, timed inside
-DuckDB (the count and sum of the result, no rows returned), and read with `forEachRecord`, on the
-next release, 10 million readings:
+DuckDB (the count and sum of the result, no rows returned), and read with `forEachRecord`, on
+quackjvm 1.6.1, 10 million readings:
 
 | | 1,000 devices: in DuckDB | 1,000: read as records | 100,000: in DuckDB | 100,000: read as records |
 |---|---|---|---|---|
@@ -221,7 +221,7 @@ within a millisecond), except:
 |---|---|---|---|
 | _CQEngine, as-of totals per 10,000 probes, 1,000 devices_ | _2,662_ | _2,287_ | _-14%_ |
 | _CQEngine, last hour, 10 devices_ | _431_ | _58.4_ | _the first run had a 7.5 s outlier_ |
-| DuckDB, hourly average, 1,000 devices | 56 | 60.9 | +9%, 1.5.0 |
+| quackjvm, hourly average, 1,000 devices | 56 | 60.9 | +9%, 1.5.0 |
 | QuestDB, no hint, 1,000 devices | 11,098 | 8,801 | -21% |
 | QuestDB, hourly average, 1,000 devices | 83 | 112 | +35% |
 | QuestDB, latest per device, 1,000 devices | 1.0 | 1.7 | |
@@ -236,7 +236,7 @@ within a millisecond), except:
 Nothing changed in QuestDB, CQEngine, their configuration or the data, so those differences are
 run to run: this run started QuestDB on a fresh data folder for each size and waited for a quiet machine
 before each engine; the first was run in separate sessions with the load average at 3-7. What did
-change is quackjvm after 1.5.0: running a `SELECT` with no parameters unprepared halved "rows back"
+change is quackjvm, in 1.6.1: running a `SELECT` with no parameters unprepared halved "rows back"
 through `forEachRow` (2,574 to 1,116 ms at 1,000 devices) and made it a fifth through
 `forEachRecord` (1,776 to 332), and took "latest" at 100,000 devices from 220 to 160 ms.
 
@@ -248,7 +248,7 @@ The queries differ in spelling, not in what they ask.
 nulls where there is no earlier reading. DuckDB names the inequality, and needs `ASOF LEFT JOIN` to
 keep the probes with no match. `count(r.value)` counts only the matches, so the totals agree.
 
-=== "DuckDB"
+=== "quackjvm"
 
     ```sql
     -- as-of totals
@@ -275,7 +275,7 @@ keep the probes with no match. `count(r.value)` counts only the matches, so the 
 
 **Hourly average, latest per device, last hour.**
 
-=== "DuckDB"
+=== "quackjvm"
 
     ```sql
     SELECT device, time_bucket(INTERVAL 1 HOUR, ts) b, avg(value) a FROM readings GROUP BY ALL
@@ -313,7 +313,7 @@ comes with it: window functions, joins across tables, Parquet, the [measures](me
 library adds.
 
 **Do not use CQEngine for as-of joins.** It answers one probe at a time through two indexes, and
-keeps every reading as an object: 4 GB of heap for what DuckDB keeps in a 44 MB file.
+keeps every reading as an object: 4 GB of heap for what quackjvm keeps in a 44 MB file.
 
 **Write the arrays yourself** only when this one question is the whole program and it must be as
 fast as the machine allows.
@@ -323,20 +323,21 @@ fast as the machine allows.
 - **One machine.** Apple M1 Max, 10 cores, 32 GB, macOS, not otherwise idle: the harness waited for
   a load average below 5, and other programs ran between and during the runs. Other hardware will
   move the numbers.
-- **Server against in-process.** QuestDB answers over PG wire on localhost; DuckDB answers inside
+- **Server against in-process.** QuestDB answers over PG wire on localhost; quackjvm answers inside
   the JVM. That is the real difference between deploying the two, not a flaw in the test. QuestDB's
   times include the wire.
-- **Memory is not like for like.** QuestDB's figure is the server's resident memory. DuckDB's is
-  its file (its buffer pool held as much). The heap figures are the JVM's.
-- **Reading rows is not like for like.** DuckDB's rows come back through quackjvm, value by value
+- **Memory is not like for like.** QuestDB's figure is the server's resident memory. quackjvm's
+  is its file (DuckDB's buffer pool held as much). The heap figures are the JVM's.
+- **Reading rows is not like for like.** quackjvm's rows come back value by value
   through `forEachRow` or as records through Arrow; QuestDB's through PostgreSQL JDBC's
   `ResultSet`, one column read per row.
 - **Default configurations.** Neither database was tuned beyond the join hint.
 - **Synthetic, uniform data.** Readings evenly spaced, devices uniform at random. Skewed keys or
   late, out-of-order readings may change the picture, and favour different hints.
 - **Warm runs.** Each figure is the median after a first run. Cold reads from disk were not measured.
-- **The next release is not released.** Its figures are from this repository at commit `80762c1`,
-  built locally; 1.5.0's are from the jar on Maven Central.
+- **1.6.1 was measured just before its release**, built from commit `80762c1`; nothing in
+  `quackjvm-core` changed between that commit and the release. 1.5.0's figures are from the jar on
+  Maven Central.
 
 ## How to reproduce
 
@@ -360,7 +361,7 @@ check that every engine agreed. The figures on this page are from `1.5.0-2026-11
   `round(random.nextDouble() * 10,000) / 100`. Then `probes`: M times `start + random.nextDouble() * day`,
   sorted, each with device `random.nextInt(D)`. Start is 2026-01-01T00:00:00Z; devices are named
   `d00000`, `d00001`, ...
-- DuckDB: `Quack.open(file)`, create the tables, append with `DuckDBAppender`, `CHECKPOINT`, then
+- quackjvm: `Quack.open(file)`, create the tables, append with `DuckDBAppender`, `CHECKPOINT`, then
   the queries above through `db.query(sql)`.
 - QuestDB: start it with its defaults, create the tables over PG wire, send rows with
   `Sender.fromConfig("http::addr=localhost:9000;auto_flush_rows=100000;")`, wait until
@@ -374,7 +375,7 @@ CREATE TABLE readings (device SYMBOL CAPACITY 1024, value DOUBLE, ts TIMESTAMP)
 CREATE TABLE probes (device SYMBOL CAPACITY 1024, ts TIMESTAMP)
     TIMESTAMP(ts) PARTITION BY DAY WAL;
 
--- DuckDB tables
+-- quackjvm tables
 CREATE TABLE readings (device VARCHAR, ts TIMESTAMP, value DOUBLE);
 CREATE TABLE probes (device VARCHAR, ts TIMESTAMP);
 ```

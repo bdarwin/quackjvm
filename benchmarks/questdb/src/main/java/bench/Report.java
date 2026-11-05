@@ -131,7 +131,7 @@ public final class Report {
                     memory(java.get("memory")));
         }
         if (!duck.isEmpty()) {
-            System.out.printf("| DuckDB via quackjvm | %s | %s | %s | %s | %s | %s | %s | %s |%n", ms(duck.get("asof")),
+            System.out.printf("| quackjvm | %s | %s | %s | %s | %s | %s | %s | %s |%n", ms(duck.get("asof")),
                     ms(duck.get("asofRows")), ms(duck.get("asofRows+ord")), ms(duck.get("bucket")),
                     ms(duck.get("latest")), ms(duck.get("recent")), load(duck.get("load")), memory(duck.get("memory")));
         }
@@ -148,7 +148,7 @@ public final class Report {
     static void byDevices() {
         System.out.println("### The as-of totals by number of devices");
         System.out.println();
-        System.out.println("| devices | _CQEngine on heap_ | Java arrays | DuckDB | QuestDB, best hint | QuestDB, no hint |");
+        System.out.println("| devices | _CQEngine on heap_ | Java arrays | quackjvm | QuestDB, best hint | QuestDB, no hint |");
         System.out.println("|---|---|---|---|---|---|");
         for (int d : results.keySet()) {
             String[] best = questBest(of(d, "quest"));
@@ -159,7 +159,7 @@ public final class Report {
         System.out.println();
     }
 
-    /** Any DuckDB question beyond the standard ones: other read paths, other query forms. */
+    /** Any quackjvm question beyond the standard ones: other read paths, other query forms. */
     static void otherForms() {
         List<String> standard = List.of("load", "memory", "asof", "asofRows", "asofRows+ord", "bucket", "latest", "recent");
         Map<String, Map<Integer, Result>> extra = new LinkedHashMap<>();
@@ -169,7 +169,7 @@ public final class Report {
             });
         }
         if (extra.isEmpty()) return;
-        System.out.println("### Other DuckDB forms");
+        System.out.println("### Other quackjvm forms");
         System.out.println();
         StringBuilder head = new StringBuilder("| question |");
         StringBuilder rule = new StringBuilder("|---|");
