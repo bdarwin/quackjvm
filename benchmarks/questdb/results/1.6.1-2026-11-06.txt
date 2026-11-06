@@ -1,0 +1,229 @@
+# quackjvm 1.6.1 (from Maven Central, sha1 e215bfc2796f566df7f9227bfb8c04cf74b99733), duckdb_jdbc 2.0.0.0
+# 2026-11-06 08:42 +08; Apple M1 Max, 10 cores, 32 GB; openjdk version "25.0.5.0.3" 2026-10-24
+# readings 10000000, probes 1000000, devices 10 1000 100000, runs 9
+LOADAVG	duck 10	4.45
+
+duck n=10,000,000 m=1,000,000 d=10 load 5305 ms (2.07 M rows/s)
+RESULT	duck	10000000	1000000	10	load	5304.91	5304.91	5304.91	
+  asof           median     201.4 ms  (min    195.8, max    225.8)  -> rows=1000000 sum=49992723.75
+RESULT	duck	10000000	1000000	10	asof	201.42	195.84	225.82	rows=1000000 sum=49992723.75
+  asofRows       median    1065.6 ms  (min   1063.4, max   1086.6)  -> rows=1000000 sum=49992723.75
+RESULT	duck	10000000	1000000	10	asofRows	1065.58	1063.44	1086.62	rows=1000000 sum=49992723.75
+  asofRows+ord   median    1082.7 ms  (min   1069.0, max   1240.1)  -> rows=1000000 sum=49992723.75
+RESULT	duck	10000000	1000000	10	asofRows+ord	1082.65	1068.99	1240.10	rows=1000000 sum=49992723.75
+  bucket         median      29.6 ms  (min     28.9, max     57.1)  -> rows=240 sum=12001.71
+RESULT	duck	10000000	1000000	10	bucket	29.57	28.94	57.08	rows=240 sum=12001.71
+  latest         median       9.0 ms  (min      8.8, max      9.4)  -> rows=10 sum=497.79
+RESULT	duck	10000000	1000000	10	latest	8.99	8.76	9.39	rows=10 sum=497.79
+  recent         median       1.3 ms  (min      1.3, max      1.5)  -> rows=10 sum=500.60
+RESULT	duck	10000000	1000000	10	recent	1.33	1.25	1.50	rows=10 sum=500.60
+  asofRows/records median     278.8 ms  (min    275.7, max    286.2)  -> rows=1000000 sum=49992723.75
+RESULT	duck	10000000	1000000	10	asofRows/records	278.78	275.75	286.23	rows=1000000 sum=49992723.75
+  asofRows+ord/records median     286.0 ms  (min    280.7, max    290.4)  -> rows=1000000 sum=49992723.75
+RESULT	duck	10000000	1000000	10	asofRows+ord/records	286.00	280.72	290.37	rows=1000000 sum=49992723.75
+  bucket/records median      29.3 ms  (min     28.4, max     29.7)  -> rows=240 sum=12001.71
+RESULT	duck	10000000	1000000	10	bucket/records	29.33	28.44	29.68	rows=240 sum=12001.71
+  latest/records median       9.0 ms  (min      8.8, max      9.4)  -> rows=10 sum=497.79
+RESULT	duck	10000000	1000000	10	latest/records	9.00	8.84	9.38	rows=10 sum=497.79
+  recent/records median       1.4 ms  (min      1.4, max      1.6)  -> rows=10 sum=500.60
+RESULT	duck	10000000	1000000	10	recent/records	1.45	1.42	1.59	rows=10 sum=500.60
+  memory  duckdb buffers 31 MB, file 31 MB
+RESULT	duck	10000000	1000000	10	memory				duckdb buffers 31 MB, file 31 MB
+LOADAVG	java 10	4.58
+java n=10,000,000 m=1,000,000 d=10 load 118 ms (92.98 M rows/s)
+RESULT	java	10000000	1000000	10	load	118.31	118.31	118.31	
+  asof           median      72.4 ms  (min     71.9, max     73.5)  -> rows=1000000 sum=49992723.75
+RESULT	java	10000000	1000000	10	asof	72.38	71.89	73.47	rows=1000000 sum=49992723.75
+  bucket         median       9.5 ms  (min      9.4, max      9.6)  -> rows=240 sum=12001.71
+RESULT	java	10000000	1000000	10	bucket	9.47	9.40	9.64	rows=240 sum=12001.71
+  latest         median       0.0 ms  (min      0.0, max      0.0)  -> rows=10 sum=497.79
+RESULT	java	10000000	1000000	10	latest	0.02	0.02	0.03	rows=10 sum=497.79
+  recent         median       0.5 ms  (min      0.4, max      0.9)  -> rows=10 sum=500.60
+RESULT	java	10000000	1000000	10	recent	0.46	0.44	0.94	rows=10 sum=500.60
+  memory  heap 159 MB
+RESULT	java	10000000	1000000	10	memory				heap 159 MB
+LOADAVG	cq 10	4.54
+cq n=10,000,000 m=1,000,000 d=10 load 8870 ms (1.24 M rows/s)
+RESULT	cq	10000000	1000000	10	load	8869.85	8869.85	8869.85	
+  asof/10000     median      40.1 ms  (min     36.8, max     44.5)  -> rows=10000 sum=496683.57
+RESULT	cq	10000000	1000000	10	asof/10000	40.14	36.77	44.53	rows=10000 sum=496683.57
+  bucket         median    1846.6 ms  (min   1784.6, max   2291.6)  -> rows=240 sum=12001.71
+RESULT	cq	10000000	1000000	10	bucket	1846.58	1784.63	2291.59	rows=240 sum=12001.71
+  latest         median       0.2 ms  (min      0.1, max      0.2)  -> rows=10 sum=497.79
+RESULT	cq	10000000	1000000	10	latest	0.19	0.15	0.24	rows=10 sum=497.79
+  recent         median      65.6 ms  (min     60.9, max    135.1)  -> rows=10 sum=500.60
+RESULT	cq	10000000	1000000	10	recent	65.59	60.90	135.14	rows=10 sum=500.60
+  memory  heap 4,086 MB
+RESULT	cq	10000000	1000000	10	memory				heap 4,086 MB
+LOADAVG	quest 10	4.26
+
+quest n=10,000,000 m=1,000,000 d=10 load 5164 ms (2.13 M rows/s)
+RESULT	quest	10000000	1000000	10	load	5163.87	5163.87	5163.87	
+  asof           median     270.9 ms  (min    270.1, max    276.3)  -> rows=1000000 sum=49992723.75
+RESULT	quest	10000000	1000000	10	asof	270.86	270.09	276.34	rows=1000000 sum=49992723.75
+  asof+dense     median     197.1 ms  (min    189.4, max    198.0)  -> rows=1000000 sum=49992723.75
+RESULT	quest	10000000	1000000	10	asof+dense	197.07	189.44	197.95	rows=1000000 sum=49992723.75
+  asof+linear    median     173.4 ms  (min    172.1, max    178.6)  -> rows=1000000 sum=49992723.75
+RESULT	quest	10000000	1000000	10	asof+linear	173.42	172.12	178.63	rows=1000000 sum=49992723.75
+  asofRows+dense median     492.0 ms  (min    461.9, max    630.0)  -> rows=1000000 sum=49992723.75
+RESULT	quest	10000000	1000000	10	asofRows+dense	491.97	461.90	629.96	rows=1000000 sum=49992723.75
+  asofRows+dense+ord median     487.5 ms  (min    481.7, max    501.3)  -> rows=1000000 sum=49992723.75
+RESULT	quest	10000000	1000000	10	asofRows+dense+ord	487.47	481.74	501.30	rows=1000000 sum=49992723.75
+  bucket         median      35.3 ms  (min     29.4, max     38.8)  -> rows=240 sum=12001.71
+RESULT	quest	10000000	1000000	10	bucket	35.32	29.42	38.84	rows=240 sum=12001.71
+  latest         median       0.5 ms  (min      0.5, max      0.5)  -> rows=10 sum=497.79
+RESULT	quest	10000000	1000000	10	latest	0.49	0.46	0.54	rows=10 sum=497.79
+  recent         median       1.4 ms  (min      1.3, max      1.7)  -> rows=10 sum=500.60
+RESULT	quest	10000000	1000000	10	recent	1.43	1.30	1.68	rows=10 sum=500.60
+  memory  server RSS 416 MB, tables on disk 317 MB
+RESULT	quest	10000000	1000000	10	memory				server RSS 416 MB, tables on disk 317 MB
+LOADAVG	duck 1000	4.48
+
+duck n=10,000,000 m=1,000,000 d=1,000 load 4820 ms (2.28 M rows/s)
+RESULT	duck	10000000	1000000	1000	load	4820.13	4820.13	4820.13	
+  asof           median     252.5 ms  (min    247.4, max    266.5)  -> rows=999893 sum=49964548.97
+RESULT	duck	10000000	1000000	1000	asof	252.49	247.38	266.55	rows=999893 sum=49964548.97
+  asofRows       median    1118.1 ms  (min   1112.9, max   1124.6)  -> rows=1000000 sum=49964548.97
+RESULT	duck	10000000	1000000	1000	asofRows	1118.09	1112.94	1124.61	rows=1000000 sum=49964548.97
+  asofRows+ord   median    1128.3 ms  (min   1121.5, max   1217.6)  -> rows=1000000 sum=49964548.97
+RESULT	duck	10000000	1000000	1000	asofRows+ord	1128.33	1121.54	1217.60	rows=1000000 sum=49964548.97
+  bucket         median      53.8 ms  (min     53.0, max     61.2)  -> rows=24000 sum=1199969.41
+RESULT	duck	10000000	1000000	1000	bucket	53.78	52.95	61.21	rows=24000 sum=1199969.41
+  latest         median      11.1 ms  (min     10.9, max     11.6)  -> rows=1000 sum=50432.90
+RESULT	duck	10000000	1000000	1000	latest	11.15	10.88	11.61	rows=1000 sum=50432.90
+  recent         median       2.4 ms  (min      2.3, max      2.6)  -> rows=1000 sum=49992.60
+RESULT	duck	10000000	1000000	1000	recent	2.40	2.29	2.64	rows=1000 sum=49992.60
+  asofRows/records median     325.6 ms  (min    321.8, max    329.4)  -> rows=1000000 sum=49964548.97
+RESULT	duck	10000000	1000000	1000	asofRows/records	325.59	321.75	329.36	rows=1000000 sum=49964548.97
+  asofRows+ord/records median     341.2 ms  (min    335.1, max    360.0)  -> rows=1000000 sum=49964548.97
+RESULT	duck	10000000	1000000	1000	asofRows+ord/records	341.16	335.13	360.01	rows=1000000 sum=49964548.97
+  bucket/records median      34.9 ms  (min     34.3, max     37.3)  -> rows=24000 sum=1199969.41
+RESULT	duck	10000000	1000000	1000	bucket/records	34.89	34.34	37.26	rows=24000 sum=1199969.41
+  latest/records median      10.6 ms  (min     10.4, max     11.4)  -> rows=1000 sum=50432.90
+RESULT	duck	10000000	1000000	1000	latest/records	10.60	10.44	11.40	rows=1000 sum=50432.90
+  recent/records median       1.8 ms  (min      1.7, max      1.9)  -> rows=1000 sum=49992.60
+RESULT	duck	10000000	1000000	1000	recent/records	1.76	1.66	1.85	rows=1000 sum=49992.60
+  memory  duckdb buffers 44 MB, file 44 MB
+RESULT	duck	10000000	1000000	1000	memory				duckdb buffers 44 MB, file 44 MB
+LOADAVG	java 1000	4.82
+java n=10,000,000 m=1,000,000 d=1,000 load 125 ms (87.84 M rows/s)
+RESULT	java	10000000	1000000	1000	load	125.23	125.23	125.23	
+  asof           median      61.1 ms  (min     61.0, max     61.3)  -> rows=999893 sum=49964548.97
+RESULT	java	10000000	1000000	1000	asof	61.12	61.03	61.25	rows=999893 sum=49964548.97
+  bucket         median      13.0 ms  (min      9.3, max     13.7)  -> rows=24000 sum=1199969.41
+RESULT	java	10000000	1000000	1000	bucket	13.03	9.26	13.73	rows=24000 sum=1199969.41
+  latest         median       0.0 ms  (min      0.0, max      0.0)  -> rows=1000 sum=50432.90
+RESULT	java	10000000	1000000	1000	latest	0.03	0.03	0.04	rows=1000 sum=50432.90
+  recent         median       1.1 ms  (min      0.4, max      1.1)  -> rows=1000 sum=49992.60
+RESULT	java	10000000	1000000	1000	recent	1.09	0.42	1.12	rows=1000 sum=49992.60
+  memory  heap 153 MB
+RESULT	java	10000000	1000000	1000	memory				heap 153 MB
+LOADAVG	cq 1000	4.52
+cq n=10,000,000 m=1,000,000 d=1,000 load 9639 ms (1.14 M rows/s)
+RESULT	cq	10000000	1000000	1000	load	9638.53	9638.53	9638.53	
+  asof/10000     median    2649.7 ms  (min   2152.5, max   2922.6)  -> rows=9893 sum=493076.01
+RESULT	cq	10000000	1000000	1000	asof/10000	2649.71	2152.45	2922.58	rows=9893 sum=493076.01
+  bucket         median    2052.3 ms  (min   1936.3, max   2297.3)  -> rows=24000 sum=1199969.41
+RESULT	cq	10000000	1000000	1000	bucket	2052.25	1936.33	2297.35	rows=24000 sum=1199969.41
+  latest         median     269.0 ms  (min    267.0, max    282.3)  -> rows=1000 sum=50432.90
+RESULT	cq	10000000	1000000	1000	latest	268.99	266.99	282.28	rows=1000 sum=50432.90
+  recent         median      71.1 ms  (min     66.7, max     72.7)  -> rows=1000 sum=49992.60
+RESULT	cq	10000000	1000000	1000	recent	71.07	66.67	72.66	rows=1000 sum=49992.60
+  memory  heap 3,990 MB
+RESULT	cq	10000000	1000000	1000	memory				heap 3,990 MB
+LOADAVG	quest 1000	4.33
+
+quest n=10,000,000 m=1,000,000 d=1,000 load 5359 ms (2.05 M rows/s)
+RESULT	quest	10000000	1000000	1000	load	5358.61	5358.61	5358.61	
+  asof           median    8400.3 ms  (min   8369.5, max   8409.9)  -> rows=999893 sum=49964548.97
+RESULT	quest	10000000	1000000	1000	asof	8400.34	8369.55	8409.88	rows=999893 sum=49964548.97
+  asof+dense     median     219.4 ms  (min    218.8, max    228.3)  -> rows=999893 sum=49964548.97
+RESULT	quest	10000000	1000000	1000	asof+dense	219.44	218.83	228.32	rows=999893 sum=49964548.97
+  asof+linear    median     198.1 ms  (min    197.9, max    198.8)  -> rows=999893 sum=49964548.97
+RESULT	quest	10000000	1000000	1000	asof+linear	198.09	197.88	198.76	rows=999893 sum=49964548.97
+  asofRows+dense median     523.9 ms  (min    496.3, max    620.4)  -> rows=1000000 sum=49964548.97
+RESULT	quest	10000000	1000000	1000	asofRows+dense	523.89	496.32	620.41	rows=1000000 sum=49964548.97
+  asofRows+dense+ord median     536.6 ms  (min    528.3, max    561.6)  -> rows=1000000 sum=49964548.97
+RESULT	quest	10000000	1000000	1000	asofRows+dense+ord	536.61	528.29	561.59	rows=1000000 sum=49964548.97
+  bucket         median      88.7 ms  (min     85.3, max    167.0)  -> rows=24000 sum=1199969.41
+RESULT	quest	10000000	1000000	1000	bucket	88.65	85.27	167.03	rows=24000 sum=1199969.41
+  latest         median       1.6 ms  (min      1.6, max      1.8)  -> rows=1000 sum=50432.90
+RESULT	quest	10000000	1000000	1000	latest	1.64	1.61	1.78	rows=1000 sum=50432.90
+  recent         median       1.8 ms  (min      1.8, max      1.9)  -> rows=1000 sum=49992.60
+RESULT	quest	10000000	1000000	1000	recent	1.84	1.78	1.93	rows=1000 sum=49992.60
+  memory  server RSS 477 MB, tables on disk 319 MB
+RESULT	quest	10000000	1000000	1000	memory				server RSS 477 MB, tables on disk 319 MB
+LOADAVG	duck 100000	4.66
+
+duck n=10,000,000 m=1,000,000 d=100,000 load 5320 ms (2.07 M rows/s)
+RESULT	duck	10000000	1000000	100000	load	5319.95	5319.95	5319.95	
+  asof           median     285.2 ms  (min    279.6, max    301.6)  -> rows=989933 sum=49478206.86
+RESULT	duck	10000000	1000000	100000	asof	285.23	279.64	301.60	rows=989933 sum=49478206.86
+  asofRows       median    1179.3 ms  (min   1168.6, max   1216.9)  -> rows=1000000 sum=49478206.86
+RESULT	duck	10000000	1000000	100000	asofRows	1179.30	1168.61	1216.93	rows=1000000 sum=49478206.86
+  asofRows+ord   median    1186.8 ms  (min   1181.7, max   1197.4)  -> rows=1000000 sum=49478206.86
+RESULT	duck	10000000	1000000	100000	asofRows+ord	1186.78	1181.66	1197.38	rows=1000000 sum=49478206.86
+  bucket         median    2155.7 ms  (min   2146.1, max   2208.5)  -> rows=2362423 sum=118131996.01
+RESULT	duck	10000000	1000000	100000	bucket	2155.74	2146.08	2208.51	rows=2362423 sum=118131996.01
+  latest         median     167.3 ms  (min    163.4, max    169.4)  -> rows=100000 sum=4993715.63
+RESULT	duck	10000000	1000000	100000	latest	167.32	163.40	169.36	rows=100000 sum=4993715.63
+  recent         median      92.6 ms  (min     91.6, max     98.9)  -> rows=98433 sum=4923210.62
+RESULT	duck	10000000	1000000	100000	recent	92.55	91.63	98.94	rows=98433 sum=4923210.62
+  asofRows/records median     361.6 ms  (min    358.0, max    369.5)  -> rows=1000000 sum=49478206.86
+RESULT	duck	10000000	1000000	100000	asofRows/records	361.60	357.96	369.46	rows=1000000 sum=49478206.86
+  asofRows+ord/records median     371.5 ms  (min    368.4, max    386.1)  -> rows=1000000 sum=49478206.86
+RESULT	duck	10000000	1000000	100000	asofRows+ord/records	371.49	368.45	386.12	rows=1000000 sum=49478206.86
+  bucket/records median     285.1 ms  (min    281.0, max    307.7)  -> rows=2362423 sum=118131996.01
+RESULT	duck	10000000	1000000	100000	bucket/records	285.10	281.01	307.72	rows=2362423 sum=118131996.01
+  latest/records median      81.9 ms  (min     81.3, max     86.5)  -> rows=100000 sum=4993715.63
+RESULT	duck	10000000	1000000	100000	latest/records	81.92	81.30	86.49	rows=100000 sum=4993715.63
+  recent/records median      12.5 ms  (min     12.4, max     13.0)  -> rows=98433 sum=4923210.62
+RESULT	duck	10000000	1000000	100000	recent/records	12.50	12.38	13.00	rows=98433 sum=4923210.62
+  memory  duckdb buffers 82 MB, file 82 MB
+RESULT	duck	10000000	1000000	100000	memory				duckdb buffers 82 MB, file 82 MB
+LOADAVG	java 100000	4.48
+java n=10,000,000 m=1,000,000 d=100,000 load 224 ms (49.19 M rows/s)
+RESULT	java	10000000	1000000	100000	load	223.60	223.60	223.60	
+  asof           median      77.9 ms  (min     76.4, max     86.3)  -> rows=989933 sum=49478206.86
+RESULT	java	10000000	1000000	100000	asof	77.86	76.37	86.28	rows=989933 sum=49478206.86
+  bucket         median      38.8 ms  (min     38.8, max     45.9)  -> rows=2362423 sum=118131996.01
+RESULT	java	10000000	1000000	100000	bucket	38.85	38.78	45.95	rows=2362423 sum=118131996.01
+  latest         median       0.8 ms  (min      0.6, max      1.6)  -> rows=100000 sum=4993715.63
+RESULT	java	10000000	1000000	100000	latest	0.76	0.62	1.65	rows=100000 sum=4993715.63
+  recent         median       7.6 ms  (min      7.0, max      7.9)  -> rows=98433 sum=4923210.62
+RESULT	java	10000000	1000000	100000	recent	7.64	7.02	7.86	rows=98433 sum=4923210.62
+  memory  heap 155 MB
+RESULT	java	10000000	1000000	100000	memory				heap 155 MB
+LOADAVG	cq 100000	4.52
+cq n=10,000,000 m=1,000,000 d=100,000 load 11620 ms (0.95 M rows/s)
+RESULT	cq	10000000	1000000	100000	load	11619.76	11619.76	11619.76	
+  asof/1000      median    1224.0 ms  (min   1146.9, max   1266.5)  -> rows=50 sum=2462.13
+RESULT	cq	10000000	1000000	100000	asof/1000	1223.96	1146.91	1266.52	rows=50 sum=2462.13
+  bucket         median    5025.5 ms  (min   4509.6, max   5175.4)  -> rows=2362423 sum=118131996.01
+RESULT	cq	10000000	1000000	100000	bucket	5025.49	4509.56	5175.43	rows=2362423 sum=118131996.01
+  recent         median     200.8 ms  (min    187.0, max    350.3)  -> rows=98433 sum=4923210.62
+RESULT	cq	10000000	1000000	100000	recent	200.81	187.02	350.34	rows=98433 sum=4923210.62
+  memory  heap 4,028 MB
+RESULT	cq	10000000	1000000	100000	memory				heap 4,028 MB
+LOADAVG	quest 100000	4.33
+
+quest n=10,000,000 m=1,000,000 d=100,000 load 8944 ms (1.23 M rows/s)
+RESULT	quest	10000000	1000000	100000	load	8943.63	8943.63	8943.63	
+  asof           FAILED: ERROR: timeout, query aborted [fd=126701535715, runtime=60005ms, timeout=60000ms]
+RESULT	quest	10000000	1000000	100000	asof	FAILED			ERROR: timeout, query aborted [fd=126701535715, runtime=60005ms, timeout=60000ms]
+  asof+dense     median     345.9 ms  (min    337.8, max    370.6)  -> rows=989933 sum=49478206.86
+RESULT	quest	10000000	1000000	100000	asof+dense	345.95	337.83	370.62	rows=989933 sum=49478206.86
+  asof+linear    median     355.5 ms  (min    350.2, max    385.6)  -> rows=989933 sum=49478206.86
+RESULT	quest	10000000	1000000	100000	asof+linear	355.52	350.23	385.60	rows=989933 sum=49478206.86
+  asofRows+dense median     781.1 ms  (min    748.8, max    819.4)  -> rows=1000000 sum=49478206.86
+RESULT	quest	10000000	1000000	100000	asofRows+dense	781.13	748.83	819.43	rows=1000000 sum=49478206.86
+  asofRows+dense+ord median     792.8 ms  (min    768.1, max    843.6)  -> rows=1000000 sum=49478206.86
+RESULT	quest	10000000	1000000	100000	asofRows+dense+ord	792.77	768.15	843.59	rows=1000000 sum=49478206.86
+  bucket         median    1389.8 ms  (min   1350.6, max   1915.9)  -> rows=2362423 sum=118131996.01
+RESULT	quest	10000000	1000000	100000	bucket	1389.77	1350.64	1915.88	rows=2362423 sum=118131996.01
+  latest         median      43.4 ms  (min     42.9, max     56.3)  -> rows=100000 sum=4993715.63
+RESULT	quest	10000000	1000000	100000	latest	43.44	42.92	56.31	rows=100000 sum=4993715.63
+  recent         median      45.6 ms  (min     45.0, max     46.0)  -> rows=98433 sum=4923210.62
+RESULT	quest	10000000	1000000	100000	recent	45.58	44.97	46.03	rows=98433 sum=4923210.62
+  memory  server RSS 766 MB, tables on disk 334 MB
+RESULT	quest	10000000	1000000	100000	memory				server RSS 766 MB, tables on disk 334 MB

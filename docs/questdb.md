@@ -335,9 +335,10 @@ fast as the machine allows.
 - **Synthetic, uniform data.** Readings evenly spaced, devices uniform at random. Skewed keys or
   late, out-of-order readings may change the picture, and favour different hints.
 - **Warm runs.** Each figure is the median after a first run. Cold reads from disk were not measured.
-- **1.6.1 was measured just before its release**, built from commit `80762c1`; nothing in
-  `quackjvm-core` changed between that commit and the release. 1.5.0's figures are from the jar on
-  Maven Central.
+- **1.6.1's figures were taken just before its release**, from a build of commit `80762c1`.
+  Rerun on 2026-11-06 with the 1.6.1 jar from Maven Central, every quackjvm figure came within 5%
+  of them, and the "last hour" times (1-13 ms) within 1 ms. QuestDB's moved by up to 21% between
+  the two runs, mostly faster. 1.5.0's figures are from the jar on Maven Central.
 
 ## How to reproduce
 
@@ -355,7 +356,7 @@ benchmarks/questdb/run.sh -v 1.5.0      # a released version, from Maven Central
 The script starts and stops QuestDB, waits for a quiet machine before each engine, and writes
 `benchmarks/questdb/results/<version>-<date>.txt` and `.md`; the `.md` has the tables above and the
 check that every engine agreed. The figures on this page are from `1.5.0-2026-11-05` and
-`1.5.0-local-80762c1-2026-11-05` there. See `benchmarks/README.md`.
+`1.5.0-local-80762c1-2026-11-05` there; `1.6.1-2026-11-06` is the same run on the released 1.6.1. See `benchmarks/README.md`.
 
 - Generate `readings`: row `i` at `start + i * day / N`, device `random.nextInt(D)`, value
   `round(random.nextDouble() * 10,000) / 100`. Then `probes`: M times `start + random.nextDouble() * day`,
