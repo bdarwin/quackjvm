@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **`count()` that fails says why in its message**, as the other reads do since 1.7.0.
+
+### Docs
+- **Object stores: what the `..` escape reaches.** DuckDB signs the path as written and sends the
+  collapsed one, so a server that checks signatures (cairn, measured) refuses it; one that does not,
+  or a store with no keys, serves it.
+
 ## 1.7.0 - 2026-11-08
 
 ### Added

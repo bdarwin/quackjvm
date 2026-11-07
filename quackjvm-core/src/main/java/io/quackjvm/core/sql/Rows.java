@@ -234,7 +234,7 @@ public final class Rows {
             if (deadline != null && deadline.hasExpired()) {
                 throw new QueryTimedOut(timeout, e);
             }
-            throw new IllegalStateException("Failed to count the rows of: " + sql, e);
+            throw new IllegalStateException("Failed to count the rows of: " + sql + "\n" + reason(e), e);
         }
         finally {
             Sql.closeQuietly(connection);

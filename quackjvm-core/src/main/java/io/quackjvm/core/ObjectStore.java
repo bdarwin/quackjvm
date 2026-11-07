@@ -31,9 +31,11 @@ import java.util.List;
  * <p><b>An allowed {@code s3://} folder is not a boundary on its own.</b> Measured on DuckDB 2.0.0:
  * with {@code allowed_directories} set to {@code ['s3://items/']}, reading
  * {@code s3://items/../other/a.csv} is let through - the URL is checked as written - and DuckDB then
- * fetches {@code /other/a.csv}. SQL can build such a string at run time, so no check of the text
- * can stop it. The boundary is the keys: give a database that runs SQL it did not write keys that
- * the server lets read only what it should.</p>
+ * requests {@code /other/a.csv}. It signs the path as written, so a server that checks signatures
+ * (cairn, measured) refuses the request; one that does not, or a store with no keys, serves it. SQL
+ * can build such a string at run time, so no check of the text can stop it. The boundary is the
+ * keys and the server: give a database that runs SQL it did not write keys that the server lets
+ * read only what it should.</p>
  */
 public final class ObjectStore {
 

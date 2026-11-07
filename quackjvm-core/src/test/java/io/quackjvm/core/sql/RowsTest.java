@@ -391,7 +391,7 @@ public class RowsTest {
     @Test
     public void aFailedQuerySaysWhyInItsMessage() {
         for (Consumer<Rows> read : List.<Consumer<Rows>>of(rows -> rows.list(Long.class),
-                rows -> rows.scalar(Long.class), rows -> rows.forEachRow(row -> { }))) {
+                rows -> rows.scalar(Long.class), rows -> rows.forEachRow(row -> { }), Rows::count)) {
             try {
                 read.accept(db.query("SELECT missing_column FROM range(3)"));
                 fail("Ran a query of a column that is not there");

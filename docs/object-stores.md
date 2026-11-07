@@ -73,13 +73,18 @@ files.
 !!! warning "An allowed `s3://` folder is not a boundary on its own"
     DuckDB 2.0.0 checks a location against the allowed folders **as written**, then collapses
     `..` before sending the request. With `s3://items/` allowed, `s3://items/../notes/item.parquet`
-    is let through, and fetches `/notes/item.parquet`. A test checks this, so the page will be
-    corrected when DuckDB changes. SQL can build such a string as it runs, so no check of the
+    is let through, and DuckDB requests `/notes/item.parquet`. A test checks this, so the page will
+    be corrected when DuckDB changes. SQL can build such a string as it runs, so no check of the
     statement's text can stop it.
 
-    **The boundary is the keys.** A database that runs SQL it did not write - a query session, an
-    agent's queries - should get keys that the server lets read only what that SQL may read. Encoded
-    forms (`%2e%2e`) are sent encoded, and S3 servers take them as part of the key.
+    What happens next depends on the server. DuckDB signs the path as written, not the one it
+    sends, so a server that checks signatures refuses the request: measured against
+    [cairn](https://github.com/bdarwin/cairn), which answered 403 `SignatureDoesNotMatch`. A server
+    that does not check them, and a store with no keys (a public bucket), serve the other bucket.
+
+    **The boundary is the keys and the server.** A database that runs SQL it did not write - a query
+    session, an agent's queries - should get keys that the server lets read only what that SQL may
+    read. Encoded forms (`%2e%2e`) are sent encoded, and S3 servers take them as part of the key.
 
 ## Errors
 
