@@ -46,14 +46,14 @@ db.query("PIVOT car ON colour USING count(*) GROUP BY make").forEachRow(System.o
     <dependency>
         <groupId>io.github.bdarwin</groupId>
         <artifactId>quackjvm-core</artifactId>
-        <version>1.6.1</version>
+        <version>1.7.0</version>
     </dependency>
     ```
 
 === "Gradle"
 
     ```groovy
-    implementation 'io.github.bdarwin:quackjvm-core:1.6.1'
+    implementation 'io.github.bdarwin:quackjvm-core:1.7.0'
     ```
 
 Add `quackjvm-cqengine` instead if you use CQEngine; it brings the core with it. Java 17 or later.

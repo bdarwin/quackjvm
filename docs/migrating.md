@@ -152,7 +152,7 @@ any DuckDB connection:
 <dependency>
     <groupId>io.github.bdarwin</groupId>
     <artifactId>quackjvm-core</artifactId>
-    <version>1.6.1</version>
+    <version>1.7.0</version>
 </dependency>
 ```
 
