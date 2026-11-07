@@ -656,7 +656,7 @@ public final class QuerySession implements AutoCloseable {
 
     private boolean isAllowed(Path folder) {
         for (String allowed : options.getAllowedFolders()) {
-            if (folder.startsWith(Path.of(allowed))) {
+            if (!allowed.contains("://") && folder.startsWith(Path.of(allowed))) {
                 return true;
             }
         }
@@ -1067,7 +1067,9 @@ public final class QuerySession implements AutoCloseable {
 
 
     private static Quack openDatabase(Hardening.Options options) {
-        return Quack.builder(null).settings(options.properties()).open();
+        Quack.Builder builder = Quack.builder(null).settings(options.properties());
+        options.getObjectStores().forEach(builder::objectStore);
+        return builder.open();
     }
 
     private static void makeAlias(Quack database, String alias, String name) {

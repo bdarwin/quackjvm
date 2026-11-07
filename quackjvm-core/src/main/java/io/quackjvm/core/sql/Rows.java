@@ -94,17 +94,29 @@ public final class Rows {
     }
 
     /**
-     * The single value of a one-row, one-column result - a count, a sum, an average.
+     * The single value of a one-row, one-column result - a count, a sum, an average. Null when that
+     * value is NULL, such as the sum of no rows.
      *
      * @throws IllegalStateException if the query returned no rows
      */
+    @SuppressWarnings("unchecked")
     public <T> T scalar(Class<T> type) {
-        return scalarOptional(type).orElseThrow(() ->
-                new IllegalStateException("Query returned no rows, so it has no scalar value: " + sql));
+        Object[] value = firstValue(type);
+        if (value == null) {
+            throw new IllegalStateException("Query returned no rows, so it has no scalar value: " + sql);
+        }
+        return (T) value[0];
     }
 
-    /** The single value of a one-row result, or empty if the query matched nothing. */
+    /** The single value of a one-row result, or empty if the query matched nothing or the value is NULL. */
+    @SuppressWarnings("unchecked")
     public <T> Optional<T> scalarOptional(Class<T> type) {
+        Object[] value = firstValue(type);
+        return value == null ? Optional.empty() : Optional.ofNullable((T) value[0]);
+    }
+
+    /** The first row's first value, in an array of one so a NULL can be told from no row; null for no row. */
+    private Object[] firstValue(Class<?> type) {
         // A one-row result is not worth an Arrow export: setting up a columnar batch costs more
         // than reading one value.
         Deadline deadline = null;
@@ -112,11 +124,11 @@ public final class Rows {
             deadline = Deadline.start(statement, timeout);
             try (Deadline running = deadline; ResultSet resultSet = run(statement)) {
                 if (!resultSet.next()) {
-                    return Optional.empty();
+                    return null;
                 }
-                T value = DuckDBTypes.read(resultSet, 1, type);
+                Object value = DuckDBTypes.read(resultSet, 1, type);
                 Sql.finishReading(resultSet);
-                return Optional.ofNullable(value);
+                return new Object[] {value};
             }
         }
         catch (SQLException | RuntimeException e) {
@@ -351,7 +363,7 @@ public final class Rows {
         if (e instanceof RuntimeException runtime) {
             return runtime;
         }
-        return new IllegalStateException("Failed to run: " + sql, e);
+        return new IllegalStateException("Failed to run: " + sql + "\n" + reason(e), e);
     }
 
     private static Object convert(Object value, Class<?> type) {
@@ -359,5 +371,11 @@ public final class Rows {
             return value;
         }
         return DuckDBTypes.fromSqlValue(value, type);
+    }
+
+    /** DuckDB's first line of why, which is what says what went wrong. */
+    static String reason(Exception e) {
+        String message = e.getMessage();
+        return message == null ? e.getClass().getSimpleName() : message.split("\n")[0];
     }
 }

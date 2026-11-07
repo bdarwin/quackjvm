@@ -18,6 +18,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
@@ -107,6 +108,7 @@ public final class Quack implements AutoCloseable {
     public static final class Builder {
         private final String path;
         private final Properties settings = new Properties();
+        private final List<ObjectStore> stores = new ArrayList<>();
         private String historyLocation;
         private QuackMetrics metrics;
         private int connections = defaultConnections();
@@ -121,6 +123,18 @@ public final class Quack implements AutoCloseable {
          */
         public Builder settings(Properties settings) {
             this.settings.putAll(settings);
+            return this;
+        }
+
+        /**
+         * An S3-compatible store that SQL may read and write {@code s3://} locations in. Called
+         * again, adds another - each for the {@link ObjectStore#scope scope} it was given.
+         */
+        public Builder objectStore(ObjectStore store) {
+            if (store == null) {
+                throw new IllegalArgumentException("No object store given");
+            }
+            stores.add(store);
             return this;
         }
 
@@ -167,9 +181,15 @@ public final class Quack implements AutoCloseable {
          */
         public Quack open() {
             DuckDBConnection root;
+            Properties opening = new Properties();
+            opening.putAll(settings);
+            // DuckDB loads no extension once external access is off, and changes nothing once the
+            // configuration is locked: with a store to set up, both wait until it is.
+            Object externalAccess = stores.isEmpty() ? null : opening.remove("enable_external_access");
+            Object lock = stores.isEmpty() ? null : opening.remove("lock_configuration");
             try {
                 root = (DuckDBConnection) DriverManager.getConnection(
-                        path == null ? "jdbc:duckdb:" : "jdbc:duckdb:" + path, settings);
+                        path == null ? "jdbc:duckdb:" : "jdbc:duckdb:" + path, opening);
             }
             catch (SQLException e) {
                 DatabaseInUse inUse = path == null ? null : DatabaseInUse.from(path, e);
@@ -179,6 +199,15 @@ public final class Quack implements AutoCloseable {
                 throw new IllegalStateException("Failed to open " + (path == null ? "an in-memory database" : path), e);
             }
             try {
+                if (!stores.isEmpty()) {
+                    ObjectStore.prepare(root, stores);
+                    if (externalAccess != null && !Boolean.parseBoolean(externalAccess.toString())) {
+                        Sql.execute(root, "SET enable_external_access = false");
+                    }
+                    if (lock != null && Boolean.parseBoolean(lock.toString())) {
+                        Sql.execute(root, "SET lock_configuration = true");
+                    }
+                }
                 MeasureHistory measureHistory = historyLocation == null ? null : MeasureHistory.at(historyLocation);
                 return new Quack(root, measureHistory, metrics, connections);
             }
@@ -208,6 +237,20 @@ public final class Quack implements AutoCloseable {
     /** A statement that changes something, with {@code ?} parameters; how many rows it changed. */
     public int execute(String sql, Object... parameters) {
         return withConnection(connection -> Sql.executeUpdate(connection, sql, Arrays.asList(parameters)));
+    }
+
+    /**
+     * Writes a table to a Parquet file at a location: a path, or an {@code s3://} location in an
+     * {@link Builder#objectStore object store}. Replaces a file already there.
+     *
+     * @return how many rows were written
+     */
+    public long exportTable(String table, String location) {
+        if (location == null || location.isEmpty()) {
+            throw new IllegalArgumentException("No location to export " + table + " to");
+        }
+        return withConnection(connection -> (long) Sql.executeUpdate(connection, "COPY " + Sql.quote(table)
+                + " TO '" + location.replace("'", "''") + "' (FORMAT parquet)", List.of()));
     }
 
     /** Creates a table with a column per field of the layout, keyed on the first. Safe to call again. */

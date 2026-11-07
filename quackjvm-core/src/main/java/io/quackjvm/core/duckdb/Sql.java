@@ -37,7 +37,7 @@ public final class Sql {
             statement.execute(sql);
         }
         catch (SQLException e) {
-            throw new IllegalStateException("Failed to execute: " + sql, e);
+            throw new IllegalStateException("Failed to execute: " + sql + "\n" + firstLine(e), e);
         }
     }
 
@@ -55,7 +55,7 @@ public final class Sql {
             return (int) Math.max(0, statement.getLargeUpdateCount());
         }
         catch (SQLException e) {
-            throw new IllegalStateException("Failed to execute: " + sql, e);
+            throw new IllegalStateException("Failed to execute: " + sql + "\n" + firstLine(e), e);
         }
     }
 
@@ -85,7 +85,7 @@ public final class Sql {
             }
         }
         catch (SQLException e) {
-            throw new IllegalStateException("Failed to execute: " + sql, e);
+            throw new IllegalStateException("Failed to execute: " + sql + "\n" + firstLine(e), e);
         }
     }
 
@@ -117,5 +117,10 @@ public final class Sql {
                 // Intentionally ignored.
             }
         }
+    }
+
+    /** The first line of an exception's message: DuckDB's reason, without the stack it appends. */
+    private static String firstLine(Exception e) {
+        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage().split("\n")[0];
     }
 }

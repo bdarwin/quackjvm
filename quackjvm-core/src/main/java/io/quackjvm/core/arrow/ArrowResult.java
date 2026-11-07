@@ -120,7 +120,8 @@ public final class ArrowResult implements Closeable, Iterable<ArrowBatch> {
             if (sql != null && resultSet == null) {
                 // Not prepared, so this is where DuckDB first sees the SQL: a wrong column name
                 // fails here, and is reported as a query that failed, naming it.
-                throw new IllegalStateException("Failed to run: " + sql, e);
+                throw new IllegalStateException("Failed to run: " + sql + "\n"
+                        + (e.getMessage() == null ? "" : e.getMessage().split("\n")[0]), e);
             }
             throw new IllegalStateException("Failed to export a DuckDB result as Arrow", e);
         }

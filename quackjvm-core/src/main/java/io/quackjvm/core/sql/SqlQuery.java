@@ -129,7 +129,8 @@ public final class SqlQuery {
             if (e instanceof ReadCheck.Refused refused) {
                 throw refused;
             }
-            throw new IllegalStateException("Failed to run SQL: " + sql, e);
+            throw new IllegalStateException("Failed to run SQL: " + sql + "\n"
+                    + (e.getMessage() == null ? "" : e.getMessage().split("\n")[0]), e);
         }
     }
 }

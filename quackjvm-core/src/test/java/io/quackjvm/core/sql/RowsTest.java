@@ -373,4 +373,33 @@ public class RowsTest {
             assertEquals(Long.valueOf(1), Rows.of(connection.duplicate(), "SELECT 1").scalar(Long.class));
         }
     }
+
+    @Test
+    public void aScalarThatIsNullIsNullNotMissing() {
+        assertEquals(null, db.query("SELECT NULL::VARCHAR").scalar(String.class));
+        assertEquals(null, db.query("SELECT sum(range) FROM range(0)").scalar(Long.class));
+        assertFalse(db.query("SELECT NULL::VARCHAR").scalarOptional(String.class).isPresent());
+        try {
+            db.query("SELECT 1 WHERE false").scalar(Long.class);
+            fail("A scalar of no rows");
+        }
+        catch (IllegalStateException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("no rows"));
+        }
+    }
+
+    @Test
+    public void aFailedQuerySaysWhyInItsMessage() {
+        for (Consumer<Rows> read : List.<Consumer<Rows>>of(rows -> rows.list(Long.class),
+                rows -> rows.scalar(Long.class), rows -> rows.forEachRow(row -> { }))) {
+            try {
+                read.accept(db.query("SELECT missing_column FROM range(3)"));
+                fail("Ran a query of a column that is not there");
+            }
+            catch (IllegalStateException e) {
+                assertTrue(e.getMessage(), e.getMessage().contains("missing_column"));
+                assertTrue(e.getMessage(), e.getMessage().contains("Binder Error"));
+            }
+        }
+    }
 }

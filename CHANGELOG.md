@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Object stores: `ObjectStore` and `Quack.Builder.objectStore(...)`.** SQL reads and writes
+  `s3://` locations on AWS S3 or any server that speaks its API (MinIO, R2, cairn). At open, DuckDB's
+  httpfs is loaded and each store becomes a secret, created on the database's own connection so the
+  key is in no SQL that quackjvm keeps or reports; `toString()` and errors leave it out. Several
+  stores each answer for their own `scope`.
+- **`Quack.exportTable(table, location)`**: a table to one Parquet file, on disk or in a store.
+- **Hardening with object stores.** `Hardening.Options.allowedFolders` and `allowedFiles` keep a
+  URL such as `s3://items/` as written instead of making it a local path, and
+  `Hardening.Options.objectStore(...)` gives a `QuerySession` a store. A database opened with a
+  store and locked-down settings gets `enable_external_access = false` and `lock_configuration`
+  after the store is set up, since DuckDB loads no extension once external access is off.
+  Measured on DuckDB 2.0.0, and documented: an allowed `s3://` folder is not a boundary on its own,
+  because DuckDB checks the location as written and then collapses `..`; the keys are.
+
+### Fixed
+- **`scalar` of a NULL value returns null**, such as the sum of no rows. It threw "Query returned no
+  rows". It still throws when there is no row.
+- **A failed query or statement says why in its message**: `Failed to run: <sql>` is followed by
+  DuckDB's first line, such as `Binder Error: ...` or `Permission Error: ...`. It was only in the
+  cause.
+
 ## 1.6.1 - 2026-11-05
 
 ### Changed

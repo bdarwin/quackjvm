@@ -1,5 +1,6 @@
 package io.quackjvm.agent.guard;
 
+import io.quackjvm.core.ObjectStore;
 import io.quackjvm.core.Quack;
 import io.quackjvm.core.duckdb.Sql;
 
@@ -112,7 +113,7 @@ public enum Hardening {
 
     /** Hardening that lets in folders of its own, with a temp folder and limits: see {@link Options}. */
     public static Options options() {
-        return new Options(List.of(), List.of(), null, null, 0);
+        return new Options(List.of(), List.of(), null, null, 0, List.of());
     }
 
     /**
@@ -174,23 +175,30 @@ public enum Hardening {
         private final String tempFolder;
         private final String memoryLimit;
         private final int threads;
+        private final List<ObjectStore> objectStores;
 
         private Options(List<String> allowedFolders, List<String> allowedFiles, String tempFolder, String memoryLimit,
-                        int threads) {
+                        int threads, List<ObjectStore> objectStores) {
             this.allowedFolders = List.copyOf(allowedFolders);
             this.allowedFiles = List.copyOf(allowedFiles);
             this.tempFolder = tempFolder;
             this.memoryLimit = memoryLimit;
             this.threads = threads;
+            this.objectStores = List.copyOf(objectStores);
         }
 
-        /** Folders whose files - and those of the folders below them - SQL may use. */
+        /**
+         * Folders whose files - and those of the folders below them - SQL may use. A URL, such as
+         * {@code s3://items/}, is kept as it is written: a location in an {@link #objectStore object
+         * store}. See {@link ObjectStore} for why an allowed {@code s3://} folder is not a boundary on
+         * its own.
+         */
         public Options allowedFolders(String... folders) {
             List<String> all = new ArrayList<>(allowedFolders);
             for (String folder : folders) {
-                all.add(Path.of(folder).toAbsolutePath().normalize().toString());
+                all.add(location(folder));
             }
-            return new Options(all, allowedFiles, tempFolder, memoryLimit, threads);
+            return new Options(all, allowedFiles, tempFolder, memoryLimit, threads, objectStores);
         }
 
         /**
@@ -201,14 +209,43 @@ public enum Hardening {
         public Options allowedFiles(String... files) {
             List<String> all = new ArrayList<>(allowedFiles);
             for (String file : files) {
-                all.add(Path.of(file).toAbsolutePath().normalize().toString());
+                all.add(location(file));
             }
-            return new Options(allowedFolders, all, tempFolder, memoryLimit, threads);
+            return new Options(allowedFolders, all, tempFolder, memoryLimit, threads, objectStores);
+        }
+
+        /**
+         * An S3-compatible store SQL may reach, set up before the database is locked - which is
+         * the only time DuckDB allows it. {@link #properties()} cannot carry it: open the database
+         * with {@code Quack.builder(path).settings(options.properties())} and add each of
+         * {@link #getObjectStores()} with {@code objectStore(...)}, as a
+         * {@link io.quackjvm.agent.session.QuerySession} does. Allow its locations with
+         * {@link #allowedFolders}.
+         */
+        public Options objectStore(ObjectStore store) {
+            if (store == null) {
+                throw new IllegalArgumentException("No object store given");
+            }
+            List<ObjectStore> all = new ArrayList<>(objectStores);
+            all.add(store);
+            return new Options(allowedFolders, allowedFiles, tempFolder, memoryLimit, threads, all);
+        }
+
+        public List<ObjectStore> getObjectStores() {
+            return objectStores;
+        }
+
+        /** A URL as it is written; a path made absolute and normal, as DuckDB compares it. */
+        private static String location(String place) {
+            if (place.matches("[A-Za-z][A-Za-z0-9+.-]*://.*")) {
+                return place;
+            }
+            return Path.of(place).toAbsolutePath().normalize().toString();
         }
 
         /** These options with these files in place of the ones given before. */
         public Options withAllowedFiles(List<String> files) {
-            return new Options(allowedFolders, List.of(), tempFolder, memoryLimit, threads)
+            return new Options(allowedFolders, List.of(), tempFolder, memoryLimit, threads, objectStores)
                     .allowedFiles(files.toArray(new String[0]));
         }
 
@@ -218,12 +255,12 @@ public enum Hardening {
          */
         public Options tempFolder(String folder) {
             return new Options(allowedFolders, allowedFiles, Path.of(folder).toAbsolutePath().normalize().toString(),
-                    memoryLimit, threads);
+                    memoryLimit, threads, objectStores);
         }
 
         /** DuckDB's {@code memory_limit}, such as {@code "4GB"}. */
         public Options memoryLimit(String limit) {
-            return new Options(allowedFolders, allowedFiles, tempFolder, limit, threads);
+            return new Options(allowedFolders, allowedFiles, tempFolder, limit, threads, objectStores);
         }
 
         /** How many threads DuckDB may use. */
@@ -231,7 +268,7 @@ public enum Hardening {
             if (count < 1) {
                 throw new IllegalArgumentException("At least one thread: " + count);
             }
-            return new Options(allowedFolders, allowedFiles, tempFolder, memoryLimit, count);
+            return new Options(allowedFolders, allowedFiles, tempFolder, memoryLimit, count, objectStores);
         }
 
         public List<String> getAllowedFolders() {
@@ -358,7 +395,8 @@ public enum Hardening {
         @Override
         public String toString() {
             return "Hardening.Options[folders=" + allowedFolders + (allowedFiles.isEmpty() ? "" : ", files=" + allowedFiles)
-                    + ", temp=" + tempFolder + ", memory=" + memoryLimit + ", threads=" + threads + "]";
+                    + ", temp=" + tempFolder + ", memory=" + memoryLimit + ", threads=" + threads
+                    + (objectStores.isEmpty() ? "" : ", stores=" + objectStores) + "]";
         }
     }
 
