@@ -88,6 +88,7 @@ nav:
       - Pre-aggregation vs caching: proposals/result-cache.md
       - "Measures: refreshes and archiving (design)": proposals/sparse-measures.md
       - One entry point (design): proposals/one-entry-point.md
+      - A distributed system (design): proposals/distributed.md
 
 markdown_extensions:
   - abbr
