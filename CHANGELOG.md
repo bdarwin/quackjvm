@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.0 - 2026-11-14
 
 ### Added
 - **Iceberg tables: `IcebergCatalog` and `Quack.Builder.catalog(name, ...)`.** Attaches an Iceberg
