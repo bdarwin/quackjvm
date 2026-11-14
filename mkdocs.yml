@@ -63,6 +63,7 @@ nav:
       - Measures: measures.md
       - Writing data: writing.md
       - Object stores: object-stores.md
+      - Iceberg tables: iceberg.md
       - Paging and journals: paging.md
       - Tuning: tuning.md
       - Metrics and diagnosis: metrics.md

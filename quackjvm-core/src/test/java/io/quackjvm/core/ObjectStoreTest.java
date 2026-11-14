@@ -165,4 +165,72 @@ public class ObjectStoreTest {
     private static String setting(Quack quack, String name) {
         return quack.query("SELECT value FROM duckdb_settings() WHERE name = ?", name).scalar(String.class);
     }
+
+    // ---------- deleting, signed as S3 expects ----------
+
+    @Test
+    public void theSignatureIsAwsOwnExample() {
+        // "Example: GET Object" in AWS's Signature Version 4 documentation for S3.
+        java.util.Map<String, String> headers = new java.util.TreeMap<>();
+        headers.put("host", "examplebucket.s3.amazonaws.com");
+        headers.put("range", "bytes=0-9");
+        headers.put("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        headers.put("x-amz-date", "20130524T000000Z");
+
+        String authorization = ObjectStore.authorization("GET", "/test.txt", headers,
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "us-east-1", "20130524T000000Z");
+
+        assertEquals("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,"
+                + "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,"
+                + "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41", authorization);
+    }
+
+    @Test
+    public void anObjectIsFoundWhereEachKindOfStoreKeepsIt() {
+        assertEquals("http://localhost:9000/items/data/day%3D2026-01-01/a%20b.parquet",
+                ObjectStore.s3("http://localhost:9000").url("s3://items/data/day=2026-01-01/a b.parquet").toString());
+        assertEquals("https://items.storage.example.net/a.csv",
+                ObjectStore.s3("https://storage.example.net").pathStyle(false).url("s3://items/a.csv").toString());
+        assertEquals("https://items.s3.eu-west-1.amazonaws.com/a.csv",
+                ObjectStore.aws("eu-west-1").url("s3://items/a.csv").toString());
+        assertEquals("https://s3.eu-west-1.amazonaws.com/items/a.csv",
+                ObjectStore.aws("eu-west-1").pathStyle(true).url("s3://items/a.csv").toString());
+        for (String bad : new String[]{"s3://items", "s3://items/", "https://items/a.csv"}) {
+            try {
+                ObjectStore.s3("http://localhost:9000").url(bad);
+                fail(bad);
+            }
+            catch (IllegalArgumentException expected) {
+                // not an object
+            }
+        }
+    }
+
+    @Test
+    public void theStoreWithTheLongestScopeDeletes() {
+        ObjectStore any = ObjectStore.s3(server.endpoint()).keys("any", "a");
+        ObjectStore items = ObjectStore.s3(server.endpoint()).keys("items", "b").scope("s3://items/");
+        ObjectStore deep = ObjectStore.s3(server.endpoint()).keys("deep", "c").scope("s3://items/deep/");
+        List<ObjectStore> stores = List.of(any, items, deep);
+
+        assertEquals(deep, ObjectStore.forLocation(stores, "s3://items/deep/a"));
+        assertEquals(items, ObjectStore.forLocation(stores, "s3://items/a"));
+        assertEquals(any, ObjectStore.forLocation(stores, "s3://notes/a"));
+        assertEquals(null, ObjectStore.forLocation(List.of(items), "s3://notes/a"));
+    }
+
+    @Test
+    public void deletingSignsWithTheStoresKeyAndAMissingObjectIsNoFailure() throws Exception {
+        server.objects.put("items/a.csv", new byte[]{1});
+        ObjectStore store = ObjectStore.s3(server.endpoint()).keys("deleter", "d");
+        java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+
+        store.delete(http, "s3://items/a.csv");
+        store.delete(http, "s3://items/a.csv");
+
+        assertFalse(server.objects.containsKey("items/a.csv"));
+        assertEquals(List.of("items/a.csv", "items/a.csv"), server.deleted);
+        assertEquals("deleter", server.accessKeys.get("items/a.csv"));
+    }
 }

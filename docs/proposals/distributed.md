@@ -1,7 +1,8 @@
 # A distributed data system: quackjvm, Iceberg and cairn (design)
 
-> **Design, 2026-11-08. Nothing here is built yet** except what the tables of measurements show.
-> Where a sentence says *measured*, it was run; everything else is the plan.
+> **Design, 2026-11-08.** Part 1, quackjvm's tables in a catalog, is **built** (2026-11-14): see
+> [Iceberg tables](../iceberg.md), and where it differs from what follows, *As built* in part 1.
+> Nothing else is built yet. Where a sentence says *measured*, it was run; everything else is the plan.
 
 The aim: a data system that scales by adding machines, and runs the same way in the cloud or on
 machines you own. It is built from three parts, each replaceable, joined only by open protocols:
@@ -98,6 +99,18 @@ try (Quack db = Quack.builder(null).objectStore(store).catalog("lake", tables).o
 - The name is `IcebergCatalog`, since `io.quackjvm.agent.catalog.Catalog` already exists and
   describes tables to agents.
 
+**As built.** Two changes from the above:
+
+- **Only statements are retried on their own.** `inTransaction` already promised never to rerun its
+  work, since the work may do things outside the database; it keeps the promise and throws
+  `CommitConflict`. `db.retrying(work)` reruns it, for work that only touches the database.
+- **DuckDB retries too.** It applies an append on top of other appends, and resends an insert or a
+  delete up to 5 times when the catalog answers 409. quackjvm's retries come on top of those.
+
+Measured with four writers updating one table nonstop: nothing lost or applied twice, but a writer
+can lose 20 times in a row and give up (1 update in 100), and an update can wait 15 s. A table takes
+one commit at a time; the [page](../iceberg.md#when-two-writers-meet) has the numbers.
+
 ### 2. Doors: optional jars
 
 Each door is a module of its own, so the core jar gains no dependency:
@@ -188,7 +201,7 @@ reading node's key cannot write, whatever SQL it is sent.
 
 Each step is usable on its own, and is measured before the next starts.
 
-1. **quackjvm `IcebergCatalog`, with retry on conflict and `tidy`.** Tested against Lakekeeper on
+1. **Built: quackjvm `IcebergCatalog`, with retry on conflict and `tidy`.** Tested against Lakekeeper on
    cairn, in Docker. Makes the system usable from Java at once, with AWS S3 or single-node cairn.
 2. **cairn: limited keys, timeouts, TLS.** Needed before anything faces a network.
 3. **The Postgres door,** then HTTP, then Flight SQL.

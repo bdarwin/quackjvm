@@ -2,10 +2,26 @@
 
 ## Unreleased
 
+### Added
+- **Iceberg tables: `IcebergCatalog` and `Quack.Builder.catalog(name, ...)`.** Attaches an Iceberg
+  REST catalog (Lakekeeper, Polaris, Nessie, ...) so SQL reads and writes `name.schema.table`, the
+  files in an object store. Bearer tokens and OAuth2 client credentials, kept out of `toString()`
+  and errors. A hardened database is let reach the catalog's URL.
+- **Commits that meet another writer's.** `Quack.execute` runs such a statement again, up to the
+  catalog's `retries` (4). `inTransaction` throws the new `CommitConflict` and does not rerun the
+  work; the new `Quack.retrying(work)` does.
+- **`Quack.tidy(table, keepFor)`** merges a table's small files, removes snapshots older than
+  `keepFor` through the catalog's REST API, and deletes the files nothing refers to any more, older
+  than `keepFor`, with a signed S3 `DELETE`. Returns a `Tidied`. Measured against Lakekeeper and
+  cairn: 101 files into 1, 101 snapshots and 304 files removed, in 2.5 s.
+
 ### Fixed
 - **`count()` that fails says why in its message**, as the other reads do since 1.7.0.
 
 ### Docs
+- **Iceberg tables**, with Lakekeeper and cairn measured: writes, conflicts between four writers,
+  tidying.
+- **A distributed system (design)**, with its open questions measured.
 - **Object stores: what the `..` escape reaches.** DuckDB signs the path as written and sends the
   collapsed one, so a server that checks signatures (cairn, measured) refuses it; one that does not,
   or a store with no keys, serves it.

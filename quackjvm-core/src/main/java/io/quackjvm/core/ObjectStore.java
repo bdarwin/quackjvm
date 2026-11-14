@@ -2,11 +2,27 @@ package io.quackjvm.core;
 
 import io.quackjvm.core.duckdb.Sql;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Where an S3-compatible object store is and the keys for it, so that SQL can read and write
@@ -177,6 +193,134 @@ public final class ObjectStore {
 
     private static String literal(String value) {
         return "'" + value.replace("'", "''") + "'";
+    }
+
+    // ---------- deleting, which DuckDB cannot ----------
+
+    /**
+     * The store among these that answers for an {@code s3://} location: the one with the longest
+     * scope it starts with, else one with no scope - as DuckDB picks a secret. Null if none does.
+     */
+    static ObjectStore forLocation(List<ObjectStore> stores, String location) {
+        ObjectStore best = null;
+        int bestLength = -1;
+        for (ObjectStore store : stores) {
+            int length = store.scope == null ? 0 : location.startsWith(store.scope) ? store.scope.length() : -1;
+            if (length > bestLength) {
+                best = store;
+                bestLength = length;
+            }
+        }
+        return best;
+    }
+
+    /** Deletes the object at an {@code s3://bucket/key} location; one already gone counts as deleted. */
+    void delete(HttpClient client, String location) throws IOException, InterruptedException {
+        URI uri = url(location);
+        HttpRequest.Builder request = HttpRequest.newBuilder(uri).DELETE().timeout(Duration.ofSeconds(30));
+        if (keyId != null) {
+            String amzDate = ZonedDateTime.now(ZoneOffset.UTC).format(AMZ_DATE);
+            String payload = EMPTY_SHA256;
+            Map<String, String> headers = new TreeMap<>();
+            headers.put("host", uri.getHost() + (uri.getPort() < 0 ? "" : ":" + uri.getPort()));
+            headers.put("x-amz-content-sha256", payload);
+            headers.put("x-amz-date", amzDate);
+            request.header("x-amz-content-sha256", payload).header("x-amz-date", amzDate)
+                    .header("Authorization", authorization("DELETE", uri.getRawPath(), headers, payload, keyId, secret,
+                            region == null ? "us-east-1" : region, amzDate));
+        }
+        HttpResponse<String> response = client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+        int status = response.statusCode();
+        if (status / 100 != 2 && status != 404) {
+            String body = response.body() == null ? "" : response.body();
+            throw new IOException("Could not delete " + location + " from " + this + ": HTTP " + status + " "
+                    + body.substring(0, Math.min(200, body.length())).replace('\n', ' '));
+        }
+    }
+
+    /** Where an {@code s3://bucket/key} location is, over HTTP, for this store. */
+    URI url(String location) {
+        if (!location.startsWith("s3://")) {
+            throw new IllegalArgumentException("Not an s3:// location: " + location);
+        }
+        String rest = location.substring("s3://".length());
+        int slash = rest.indexOf('/');
+        if (slash <= 0 || slash == rest.length() - 1) {
+            throw new IllegalArgumentException("Not an object's location: " + location);
+        }
+        String bucket = rest.substring(0, slash);
+        String key = encodePath(rest.substring(slash + 1));
+        String scheme = ssl ? "https://" : "http://";
+        String host = endpoint != null ? endpoint : "s3." + (region == null ? "us-east-1" : region) + ".amazonaws.com";
+        boolean byPath = pathStyle != null ? pathStyle : endpoint != null;
+        return URI.create(byPath ? scheme + host + "/" + bucket + "/" + key : scheme + bucket + "." + host + "/" + key);
+    }
+
+    private static final DateTimeFormatter AMZ_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'");
+    private static final String EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    /**
+     * An AWS Signature Version 4 {@code Authorization} header for S3, for a request with no query
+     * string. {@code headers} holds every header signed, by lower-case name.
+     */
+    static String authorization(String method, String rawPath, Map<String, String> headers, String payloadHash,
+                                String keyId, String secret, String region, String amzDate) {
+        StringBuilder canonicalHeaders = new StringBuilder();
+        StringBuilder signedHeaders = new StringBuilder();
+        for (Map.Entry<String, String> header : new TreeMap<>(headers).entrySet()) {
+            canonicalHeaders.append(header.getKey()).append(':').append(header.getValue().trim()).append('\n');
+            signedHeaders.append(signedHeaders.length() == 0 ? "" : ";").append(header.getKey());
+        }
+        String canonicalRequest = method + "\n" + rawPath + "\n\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash;
+        String day = amzDate.substring(0, 8);
+        String scope = day + "/" + region + "/s3/aws4_request";
+        String toSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + hex(sha256(canonicalRequest));
+        byte[] key = hmac(("AWS4" + secret).getBytes(StandardCharsets.UTF_8), day);
+        key = hmac(key, region);
+        key = hmac(key, "s3");
+        key = hmac(key, "aws4_request");
+        return "AWS4-HMAC-SHA256 Credential=" + keyId + "/" + scope + ",SignedHeaders=" + signedHeaders
+                + ",Signature=" + hex(hmac(key, toSign));
+    }
+
+    /** Each segment of a key percent-encoded as S3 expects, slashes kept. */
+    static String encodePath(String key) {
+        StringBuilder out = new StringBuilder();
+        for (byte b : key.getBytes(StandardCharsets.UTF_8)) {
+            char c = (char) (b & 0xff);
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                    || c == '-' || c == '_' || c == '.' || c == '~' || c == '/') {
+                out.append(c);
+            }
+            else {
+                out.append('%').append(String.format("%02X", b & 0xff));
+            }
+        }
+        return out.toString();
+    }
+
+    private static byte[] sha256(String text) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));
+        }
+        catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static byte[] hmac(byte[] key, String text) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key, "HmacSHA256"));
+            return mac.doFinal(text.getBytes(StandardCharsets.UTF_8));
+        }
+        catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String hex(byte[] bytes) {
+        return HexFormat.of().formatHex(bytes);
     }
 
     @Override

@@ -15,26 +15,36 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HexFormat;
+import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Just enough of S3 for DuckDB's httpfs, in memory, for tests: PUT, multipart upload, HEAD, GET with
  * a range, DELETE and ListObjectsV2, path style. It checks no signatures, but records the
- * authorization header's access key, so a test can see which secret DuckDB used.
+ * authorization header's access key, so a test can see which secret DuckDB used. Each object keeps
+ * the time it was written, as its last-modified time.
  */
 final class FakeObjectStore implements AutoCloseable {
 
     private static final DateTimeFormatter HTTP_DATE = DateTimeFormatter.RFC_1123_DATE_TIME;
-    private static final String LAST_MODIFIED = HTTP_DATE.format(ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+    private static final ZonedDateTime NEW_YEAR = ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+    private static final String LAST_MODIFIED = HTTP_DATE.format(NEW_YEAR);
+    private static final long LAST_MODIFIED_MS = NEW_YEAR.toInstant().toEpochMilli();
 
     /** "bucket/key" to bytes. */
     final Map<String, byte[]> objects = new ConcurrentHashMap<>();
     final Map<String, String> accessKeys = new ConcurrentHashMap<>();
+    /** "bucket/key" to when it was written, in epoch milliseconds. */
+    final Map<String, Long> written = new ConcurrentHashMap<>();
+    /** "bucket/key" of each DELETE, in order. */
+    final List<String> deleted = new CopyOnWriteArrayList<>();
     final AtomicInteger requests = new AtomicInteger();
     private final Map<String, Map<Integer, byte[]>> uploads = new ConcurrentHashMap<>();
     /** How many multipart uploads were started. */
@@ -70,7 +80,9 @@ final class FakeObjectStore implements AutoCloseable {
                 case "HEAD" -> head(exchange, path);
                 case "GET" -> get(exchange, path, query);
                 case "DELETE" -> {
+                    deleted.add(path);
                     objects.remove(path);
+                    written.remove(path);
                     exchange.sendResponseHeaders(204, -1);
                 }
                 default -> exchange.sendResponseHeaders(405, -1);
@@ -84,6 +96,7 @@ final class FakeObjectStore implements AutoCloseable {
         }
         else {
             objects.put(path, body);
+            written.put(path, System.currentTimeMillis());
         }
         exchange.getResponseHeaders().set("ETag", etag(body));
         exchange.sendResponseHeaders(200, -1);
@@ -105,6 +118,7 @@ final class FakeObjectStore implements AutoCloseable {
             whole.write(part);
         }
         objects.put(path, whole.toByteArray());
+        written.put(path, System.currentTimeMillis());
         xml(exchange, 200, "<CompleteMultipartUploadResult><Bucket>" + bucket + "</Bucket><Key>" + escape(key)
                 + "</Key><ETag>" + etag(whole.toByteArray()) + "</ETag></CompleteMultipartUploadResult>");
     }
@@ -115,7 +129,7 @@ final class FakeObjectStore implements AutoCloseable {
             exchange.sendResponseHeaders(404, -1);
             return;
         }
-        headers(exchange, object);
+        headers(exchange, object, written.get(path));
         exchange.getResponseHeaders().set("Content-Length", Long.toString(object.length));
         exchange.sendResponseHeaders(200, -1);
     }
@@ -130,7 +144,7 @@ final class FakeObjectStore implements AutoCloseable {
             xml(exchange, 404, "<Error><Code>NoSuchKey</Code><Message>No such key</Message></Error>");
             return;
         }
-        headers(exchange, object);
+        headers(exchange, object, written.get(path));
         String range = exchange.getRequestHeaders().getFirst("Range");
         int from = 0;
         int to = object.length - 1;
@@ -158,7 +172,8 @@ final class FakeObjectStore implements AutoCloseable {
             String name = entry.getKey();
             if (name.startsWith(bucket + "/") && name.substring(bucket.length() + 1).startsWith(prefix)) {
                 xml.append("<Contents><Key>").append(escape(name.substring(bucket.length() + 1)))
-                        .append("</Key><LastModified>2026-01-01T00:00:00.000Z</LastModified><ETag>")
+                        .append("</Key><LastModified>").append(Instant.ofEpochMilli(written.getOrDefault(name, LAST_MODIFIED_MS)))
+                        .append("</LastModified><ETag>")
                         .append(etag(entry.getValue())).append("</ETag><Size>").append(entry.getValue().length)
                         .append("</Size><StorageClass>STANDARD</StorageClass></Contents>");
                 count++;
@@ -168,9 +183,10 @@ final class FakeObjectStore implements AutoCloseable {
         xml(exchange, 200, xml.toString());
     }
 
-    private static void headers(HttpExchange exchange, byte[] object) {
+    private static void headers(HttpExchange exchange, byte[] object, Long written) {
         exchange.getResponseHeaders().set("ETag", etag(object));
-        exchange.getResponseHeaders().set("Last-Modified", LAST_MODIFIED);
+        exchange.getResponseHeaders().set("Last-Modified", written == null ? LAST_MODIFIED
+                : HTTP_DATE.format(Instant.ofEpochMilli(written).atZone(ZoneOffset.UTC)));
         exchange.getResponseHeaders().set("Accept-Ranges", "bytes");
         exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
     }

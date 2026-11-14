@@ -14,15 +14,20 @@ import io.quackjvm.core.sparse.SparseTable;
 import io.quackjvm.core.sql.Rows;
 import org.duckdb.DuckDBConnection;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
 
 /**
@@ -58,11 +63,18 @@ public final class Quack implements AutoCloseable {
     private final Connection lending;
     private final MeasureHistory history;
     private final List<AutoCloseable> registered = new CopyOnWriteArrayList<>();
+    private final Map<String, IcebergCatalog> catalogs;
+    private final List<ObjectStore> stores;
+    private final int retries;
     private volatile boolean closed;
 
-    private Quack(DuckDBConnection root, MeasureHistory history, QuackMetrics metrics, int connections) {
+    private Quack(DuckDBConnection root, MeasureHistory history, QuackMetrics metrics, int connections,
+                  Map<String, IcebergCatalog> catalogs, List<ObjectStore> stores) {
         this.root = root;
         this.history = history;
+        this.catalogs = Map.copyOf(catalogs);
+        this.stores = List.copyOf(stores);
+        this.retries = catalogs.values().stream().mapToInt(IcebergCatalog::retries).max().orElse(0);
         this.pool = new ConnectionPool(root, connections, metrics);
         this.lending = LendingConnection.lending(pool, () -> closed);
         if (history != null) {
@@ -88,7 +100,7 @@ public final class Quack implements AutoCloseable {
      */
     public static Quack on(DuckDBConnection existing) {
         try {
-            return new Quack((DuckDBConnection) existing.duplicate(), null, null, defaultConnections());
+            return new Quack((DuckDBConnection) existing.duplicate(), null, null, defaultConnections(), Map.of(), List.of());
         }
         catch (SQLException e) {
             throw new IllegalStateException("Failed to open a connection to the given database", e);
@@ -109,6 +121,7 @@ public final class Quack implements AutoCloseable {
         private final String path;
         private final Properties settings = new Properties();
         private final List<ObjectStore> stores = new ArrayList<>();
+        private final Map<String, IcebergCatalog> catalogs = new LinkedHashMap<>();
         private String historyLocation;
         private QuackMetrics metrics;
         private int connections = defaultConnections();
@@ -135,6 +148,21 @@ public final class Quack implements AutoCloseable {
                 throw new IllegalArgumentException("No object store given");
             }
             stores.add(store);
+            return this;
+        }
+
+        /**
+         * An Iceberg catalog, attached under a name: its tables are then {@code name.schema.table}
+         * in SQL. A hardened database - external access off - is let reach the catalog's URL; the
+         * {@code s3://} folders its tables are in must be allowed as for any other.
+         */
+        public Builder catalog(String name, IcebergCatalog catalog) {
+            if (name == null || name.isEmpty() || catalog == null) {
+                throw new IllegalArgumentException("A catalog needs a name and the catalog");
+            }
+            if (catalogs.putIfAbsent(name, catalog) != null) {
+                throw new IllegalArgumentException("A catalog is already attached as " + name);
+            }
             return this;
         }
 
@@ -184,9 +212,13 @@ public final class Quack implements AutoCloseable {
             Properties opening = new Properties();
             opening.putAll(settings);
             // DuckDB loads no extension once external access is off, and changes nothing once the
-            // configuration is locked: with a store to set up, both wait until it is.
-            Object externalAccess = stores.isEmpty() ? null : opening.remove("enable_external_access");
-            Object lock = stores.isEmpty() ? null : opening.remove("lock_configuration");
+            // configuration is locked: with a store or a catalog to set up, both wait until it is.
+            boolean preparing = !stores.isEmpty() || !catalogs.isEmpty();
+            Object externalAccess = preparing ? opening.remove("enable_external_access") : null;
+            Object lock = preparing ? opening.remove("lock_configuration") : null;
+            if (externalAccess != null && !Boolean.parseBoolean(externalAccess.toString()) && !catalogs.isEmpty()) {
+                allowCatalogs(opening);
+            }
             try {
                 root = (DuckDBConnection) DriverManager.getConnection(
                         path == null ? "jdbc:duckdb:" : "jdbc:duckdb:" + path, opening);
@@ -199,8 +231,14 @@ public final class Quack implements AutoCloseable {
                 throw new IllegalStateException("Failed to open " + (path == null ? "an in-memory database" : path), e);
             }
             try {
-                if (!stores.isEmpty()) {
-                    ObjectStore.prepare(root, stores);
+                if (preparing) {
+                    if (!stores.isEmpty()) {
+                        ObjectStore.prepare(root, stores);
+                    }
+                    int index = 0;
+                    for (Map.Entry<String, IcebergCatalog> catalog : catalogs.entrySet()) {
+                        IcebergCatalog.attach(root, catalog.getKey(), catalog.getValue(), !stores.isEmpty(), ++index);
+                    }
                     if (externalAccess != null && !Boolean.parseBoolean(externalAccess.toString())) {
                         Sql.execute(root, "SET enable_external_access = false");
                     }
@@ -209,12 +247,23 @@ public final class Quack implements AutoCloseable {
                     }
                 }
                 MeasureHistory measureHistory = historyLocation == null ? null : MeasureHistory.at(historyLocation);
-                return new Quack(root, measureHistory, metrics, connections);
+                return new Quack(root, measureHistory, metrics, connections, catalogs, stores);
             }
             catch (RuntimeException e) {
                 Sql.closeQuietly(root);
                 throw e;
             }
+        }
+
+        /** Adds each catalog's URL to {@code allowed_directories}, as a DuckDB list literal. */
+        private void allowCatalogs(Properties opening) {
+            String list = opening.getProperty("allowed_directories", "[]").trim();
+            StringBuilder more = new StringBuilder();
+            for (IcebergCatalog catalog : catalogs.values()) {
+                more.append(", '").append(catalog.allowedFolder().replace("\\", "\\\\").replace("'", "\\'")).append('\'');
+            }
+            String body = list.substring(1, list.length() - 1).trim();
+            opening.setProperty("allowed_directories", "[" + (body.isEmpty() ? more.substring(2) : body + more) + "]");
         }
     }
 
@@ -234,9 +283,24 @@ public final class Quack implements AutoCloseable {
 
     // ---------- writing ----------
 
-    /** A statement that changes something, with {@code ?} parameters; how many rows it changed. */
+    /**
+     * A statement that changes something, with {@code ?} parameters; how many rows it changed. One
+     * that writes to an {@link IcebergCatalog}'s table and conflicts with another writer's commit is
+     * run again, up to the catalog's {@link IcebergCatalog#retries retries}: a statement fails or
+     * commits as a whole, so running it again is safe.
+     */
     public int execute(String sql, Object... parameters) {
-        return withConnection(connection -> Sql.executeUpdate(connection, sql, Arrays.asList(parameters)));
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return withConnection(connection -> Sql.executeUpdate(connection, sql, Arrays.asList(parameters)));
+            }
+            catch (IllegalStateException e) {
+                if (attempt >= retries || !IcebergCatalog.isConflict(e)) {
+                    throw e;
+                }
+                pause(attempt);
+            }
+        }
     }
 
     /**
@@ -354,8 +418,9 @@ public final class Quack implements AutoCloseable {
 
     /**
      * Runs the work in one transaction on one connection: committed when it returns, rolled back
-     * when it throws. A conflict with another writer surfaces as the exception the commit threw;
-     * the work is not retried, since it may have done things outside the database.
+     * when it throws. A conflict with another writer surfaces as the exception the commit threw -
+     * {@link CommitConflict} for an {@link IcebergCatalog}'s table. The work is not run again, since
+     * it may have done things outside the database: {@link #retrying} does, for work that does not.
      */
     public void inTransaction(Tx.Work work) {
         fromTransaction(tx -> {
@@ -388,6 +453,10 @@ public final class Quack implements AutoCloseable {
             catch (SQLException e) {
                 // The driver cannot be trusted with a connection whose commit failed.
                 broken = true;
+                if (IcebergCatalog.isConflict(e)) {
+                    throw new CommitConflict("The transaction could not be committed, as another writer"
+                            + " committed first: " + e.getMessage(), e);
+                }
                 throw new IllegalStateException("The transaction could not be committed: " + e.getMessage(), e);
             }
             committed = true;
@@ -412,6 +481,91 @@ public final class Quack implements AutoCloseable {
                 }
             }
             pool.release(connection, !broken, broken);
+        }
+    }
+
+    /**
+     * As {@link #inTransaction}, but run again from the start when the commit meets another writer's
+     * ({@link CommitConflict}), up to the catalog's {@link IcebergCatalog#retries retries}, after a
+     * short random wait. The work may therefore run more than once: it should do nothing but read
+     * and write the database.
+     */
+    public void retrying(Tx.Work work) {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                inTransaction(work);
+                return;
+            }
+            catch (CommitConflict e) {
+                if (attempt >= retries) {
+                    throw e;
+                }
+                pause(attempt);
+            }
+        }
+    }
+
+    // ---------- Iceberg tables' upkeep ----------
+
+    /**
+     * Tidies an {@link IcebergCatalog}'s table, {@code catalog.schema.table}:
+     * <ol>
+     *     <li>merges its small files into larger ones;</li>
+     *     <li>removes the snapshots taken more than {@code keepFor} ago, but the current one and any a
+     *     branch or tag points to - the table can no longer be read as it stood then;</li>
+     *     <li>deletes from storage the files in the table's folders that no remaining snapshot refers
+     *     to and that are older than {@code keepFor}.</li>
+     * </ol>
+     * Every insert adds a file and a snapshot, and both stay until removed: measured, 200 one-row
+     * inserts took a fresh query from 34 ms to as much as 273 ms, and the merge brought it back to 29.
+     *
+     * <p>{@code keepFor} is also what keeps another writer's work safe: a file it has written but
+     * not yet committed is referred to by no snapshot, and only its age protects it. Keep it longer
+     * than any write takes - hours, not seconds.</p>
+     *
+     * <p>Files are deleted through this database's {@link ObjectStore}s, or from the local disk; files
+     * elsewhere are counted in {@link Tidied#filesKept}. A table whose properties put files outside its
+     * own folders has nothing deleted.</p>
+     */
+    public Tidied tidy(String table, Duration keepFor) {
+        if (keepFor == null || keepFor.isNegative()) {
+            throw new IllegalArgumentException("How long to keep snapshots for cannot be negative: " + keepFor);
+        }
+        String[] parts = table == null ? new String[0] : table.split("\\.");
+        if (parts.length != 3) {
+            throw new IllegalArgumentException("A table is catalog.schema.table: " + table);
+        }
+        IcebergCatalog catalog = catalogs.get(parts[0]);
+        if (catalog == null) {
+            throw new IllegalArgumentException("No catalog is attached as " + parts[0] + ": " + catalogs.keySet());
+        }
+        return withConnection(connection -> {
+            try {
+                return new IcebergTidy(connection, catalog, stores, parts[0], parts[1], parts[2]).tidy(keepFor);
+            }
+            catch (IOException e) {
+                throw new IllegalStateException("Could not tidy " + table + ": " + catalog.scrub(e.getMessage()), e);
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while tidying " + table, e);
+            }
+        });
+    }
+
+    /** How long to wait before attempt {@code attempt + 1}: random, so writers that met do not meet again. */
+    static long backoff(int attempt) {
+        long ceiling = Math.min(1_000, 20L << Math.min(attempt, 10));
+        return 5 + ThreadLocalRandom.current().nextLong(ceiling);
+    }
+
+    private static void pause(int attempt) {
+        try {
+            Thread.sleep(backoff(attempt));
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting to retry a commit", e);
         }
     }
 
